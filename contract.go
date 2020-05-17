@@ -21,6 +21,7 @@ type Aggregater interface {
 	GetVersion() int
 	SetVersion(int)
 	GetEvents() []interface{}
+	ClearEvents()
 	ApplyChangeFromHistory(event Event) error
 }
 

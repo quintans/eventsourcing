@@ -9,6 +9,8 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
+	"github.com/segmentio/ksuid"
+	log "github.com/sirupsen/logrus"
 )
 
 const uniqueViolation = "23505"
@@ -77,14 +79,20 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 	version := aggregate.GetVersion()
 	oldVersion := version
 
+	snapshots := []interface{}{}
 	tx := es.db.MustBegin()
 	defer func() {
 		if err != nil {
 			tx.Rollback()
 			aggregate.SetVersion(oldVersion)
+			return
+		}
+		for _, s := range snapshots {
+			go es.saveSnapshot(s)
 		}
 	}()
 	for _, e := range aggregate.GetEvents() {
+		eventID := ksuid.New().String()
 		version++
 		aggregate.SetVersion(version)
 		body, err := json.Marshal(e)
@@ -92,6 +100,7 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 			return err
 		}
 		evt := PgEvent{
+			ID:               eventID,
 			AggregateID:      aggregate.GetID(),
 			AggregateVersion: version,
 			AggregateType:    tName,
@@ -101,8 +110,8 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 		}
 
 		_, err = tx.NamedExec(`
-			INSERT INTO events (aggregate_id, aggregate_version, aggregate_type, kind, body, created_at)
-			VALUES (:aggregate_id, :aggregate_version, :aggregate_type, :kind, :body, :created_at)
+			INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, created_at)
+			VALUES (:id, :aggregate_id, :aggregate_version, :aggregate_type, :kind, :body, :created_at)
 		`, &evt)
 		if pgerr, ok := err.(*pq.Error); ok {
 			if pgerr.Code == uniqueViolation {
@@ -112,11 +121,13 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 
 		if version > es.snapshotThreshold-1 &&
 			version%es.snapshotThreshold == 0 {
-			if err = saveSnapshot(tx, aggregate); err != nil {
-				return err
+			snap, err := buildSnapshot(aggregate, eventID)
+			if err == nil {
+				snapshots = append(snapshots, snap)
 			}
 		}
 	}
+	aggregate.ClearEvents()
 	return tx.Commit()
 }
 
@@ -138,54 +149,64 @@ func (es *ESPostgreSQL) GetEventsStartingAtFor(eventId string, agregateTypes ...
 
 func (es *ESPostgreSQL) getSnapshot(aggregateID string) (*PgSnapshot, error) {
 	snap := &PgSnapshot{}
-	if err := es.db.Get(snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY created_at DESC LIMIT 1", aggregateID); err != nil {
+	if err := es.db.Get(snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err != sql.ErrNoRows {
-			return nil, err
+			return nil, fmt.Errorf("Unable to get snapshot for aggregate %q: %w", aggregateID, err)
 		}
 	}
 	return snap, nil
 }
 
-func saveSnapshot(tx *sqlx.Tx, agg Aggregater) error {
+func (es *ESPostgreSQL) saveSnapshot(snap interface{}) {
+	_, err := es.db.NamedExec(`
+	INSERT INTO snapshots (id, aggregate_id, aggregate_version, body, created_at)
+	VALUES (:id, :aggregate_id, :aggregate_version, :body, :created_at)
+	`, snap)
+
+	if err != nil {
+		log.WithField("snapshot", snap).
+			WithError(err).
+			Error("Failed to save snapshot")
+	}
+}
+
+func buildSnapshot(agg Aggregater, eventID string) (interface{}, error) {
 	body, err := json.Marshal(agg)
 	if err != nil {
-		return err
+		log.WithField("aggregate", agg).
+			WithError(err).
+			Error("Failed to serialize aggregate")
+		return nil, err
 	}
 
-	snap := &PgSnapshot{
+	return &PgSnapshot{
+		ID:               eventID,
 		AggregateID:      agg.GetID(),
 		AggregateVersion: agg.GetVersion(),
 		Body:             body,
 		CreatedAt:        time.Now(),
-	}
-
-	_, err = tx.NamedExec(`
-	INSERT INTO snapshots (aggregate_id, aggregate_version, body, created_at)
-	VALUES (:aggregate_id, :aggregate_version, :body, :created_at)
-	`, snap)
-
-	return err
+	}, nil
 }
 
 func (es *ESPostgreSQL) getEvents(aggregateID string, snapVersion int) ([]PgEvent, error) {
 	query := "SELECT * FROM events e WHERE e.aggregate_id = $1"
 	args := []interface{}{aggregateID}
 	if snapVersion > -1 {
-		query += " AND e.version >= $2"
+		query += " AND e.aggregate_version >= $2"
 		args = append(args, snapVersion)
 	}
-	query += " ORDER BY e.version ASC"
 	events := []PgEvent{}
-	if err := es.db.Select(events, query, args...); err != nil {
+	if err := es.db.Select(&events, query, args...); err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("Aggregate with Id: %s was not found: %w", aggregateID, err)
+			return nil, fmt.Errorf("Aggregate %q was not found: %w", aggregateID, err)
 		}
-		return nil, err
+		return nil, fmt.Errorf("Unable to get events for Aggregate %q: %w", aggregateID, err)
 	}
 	return events, nil
 }
 
 type PgEvent struct {
+	ID               string          `db:"id"`
 	AggregateID      string          `db:"aggregate_id"`
 	AggregateVersion int             `db:"aggregate_version"`
 	AggregateType    string          `db:"aggregate_type"`
@@ -195,6 +216,7 @@ type PgEvent struct {
 }
 
 type PgSnapshot struct {
+	ID               string          `db:"id"`
 	AggregateID      string          `db:"aggregate_id"`
 	AggregateVersion int             `db:"aggregate_version"`
 	Body             json.RawMessage `db:"body"`

@@ -26,6 +26,10 @@ func (a RootAggregate) GetEvents() []interface{} {
 	return a.events
 }
 
+func (a *RootAggregate) ClearEvents() {
+	a.events = []interface{}{}
+}
+
 type Status string
 
 const (
@@ -47,7 +51,7 @@ type MoneyDeposited struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func NewAccount(id string, money int64) *Account {
+func CreateAccount(id string, money int64) *Account {
 	a := &Account{
 		RootAggregate: RootAggregate{
 			ID: id,
@@ -59,6 +63,15 @@ func NewAccount(id string, money int64) *Account {
 		AccountCreated{
 			ID:    id,
 			Money: money,
+		},
+	}
+	return a
+}
+
+func NewAccount() *Account {
+	a := &Account{
+		RootAggregate: RootAggregate{
+			events: []interface{}{},
 		},
 	}
 	return a
