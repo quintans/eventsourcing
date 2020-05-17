@@ -26,13 +26,13 @@ var (
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
-	container, err := bootstrapContainer(ctx)
+	dbContainer, err := bootstrapDbContainer(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	defer container.Terminate(ctx)
-	err = dbmigrate()
+	defer dbContainer.Terminate(ctx)
+	err = dbSchema()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -41,12 +41,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func bootstrapContainer(ctx context.Context) (testcontainers.Container, error) {
+func bootstrapDbContainer(ctx context.Context) (testcontainers.Container, error) {
 	tcpPort := "5432"
 	natPort := nat.Port(tcpPort)
 
 	req := testcontainers.ContainerRequest{
-		Image:        "postgres:9.6",
+		Image:        "postgres:12.3",
 		ExposedPorts: []string{tcpPort + "/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "postgres",
@@ -78,7 +78,7 @@ func bootstrapContainer(ctx context.Context) (testcontainers.Container, error) {
 	return container, nil
 }
 
-func dbmigrate() error {
+func dbSchema() error {
 	db, err := sqlx.Connect("postgres", dbURL)
 	if err != nil {
 		return err
@@ -86,17 +86,18 @@ func dbmigrate() error {
 
 	db.MustExec(`
 	CREATE TABLE IF NOT EXISTS events(
-		id VARCHAR (50) PRIMARY KEY,
+		id BIGSERIAL PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_version INTEGER NOT NULL,
 		aggregate_type VARCHAR (50) NOT NULL,
 		kind VARCHAR (50) NOT NULL,
 		body JSONB NOT NULL,
-		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP
+		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
+		UNIQUE (aggregate_id, aggregate_version)
 	);
 		
 	CREATE TABLE IF NOT EXISTS snapshots(
-		id VARCHAR (50) PRIMARY KEY,
+		id BIGINT PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_version INTEGER NOT NULL,
 		body JSONB NOT NULL,

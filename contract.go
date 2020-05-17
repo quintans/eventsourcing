@@ -26,6 +26,7 @@ type Aggregater interface {
 }
 
 type Event struct {
+	ID               int64
 	AggregateID      string
 	AggregateVersion int
 	AggregateType    string
