@@ -1,13 +1,65 @@
 package eventstore
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"reflect"
+	"strings"
+)
+
+var methodHandlerPrefix = "Handle"
+
+type Handler struct {
+	eventType reflect.Type
+	handle    func(event interface{})
+}
+
+// HandlersCache is a map of types to functions that will be used to route event sourcing events
+type HandlersCache map[string]Handler
+
+func NewRootAggregate(aggregate interface{}, id string, version int) RootAggregate {
+	return RootAggregate{
+		ID:       id,
+		Version:  version,
+		events:   []interface{}{},
+		handlers: createHandlersCache(aggregate),
+	}
+}
+
+func createHandlersCache(source interface{}) HandlersCache {
+	sourceType := reflect.TypeOf(source)
+	sourceValue := reflect.ValueOf(source)
+	handlers := make(HandlersCache)
+
+	methodCount := sourceType.NumMethod()
+	for i := 0; i < methodCount; i++ {
+		method := sourceType.Method(i)
+
+		if strings.HasPrefix(method.Name, methodHandlerPrefix) {
+			//   func (source *MySource) HandleMyEvent(e MyEvent).
+			if method.Type.NumIn() == 2 {
+				eventType := method.Type.In(1)
+				handler := func(event interface{}) {
+					eventValue := reflect.ValueOf(event)
+					method.Func.Call([]reflect.Value{sourceValue, eventValue})
+				}
+
+				handlers[eventType.Name()] = Handler{
+					eventType: eventType,
+					handle:    handler,
+				}
+			}
+		}
+	}
+
+	return handlers
+}
 
 type RootAggregate struct {
 	ID      string `json:"id,omitempty"`
 	Version int    `json:"version,omitempty"`
 
-	events       []interface{}
-	eventVersion int
+	events   []interface{}
+	handlers HandlersCache
 }
 
 func (a RootAggregate) GetID() string {
@@ -28,6 +80,27 @@ func (a RootAggregate) GetEvents() []interface{} {
 
 func (a *RootAggregate) ClearEvents() {
 	a.events = []interface{}{}
+}
+
+func (a *RootAggregate) ApplyChangeFromHistory(event Event) error {
+	h, ok := a.handlers[event.Kind]
+	if ok {
+		evtPtr := reflect.New(h.eventType)
+		if err := json.Unmarshal(event.Body, evtPtr.Interface()); err != nil {
+			return err
+		}
+		h.handle(evtPtr.Elem().Interface())
+	}
+	a.Version = event.AggregateVersion
+	return nil
+}
+
+func (a *RootAggregate) ApplyChange(event interface{}) {
+	h, ok := a.handlers[nameFor(event)]
+	if ok {
+		h.handle(event)
+	}
+	a.events = append(a.events, event)
 }
 
 type Status string
@@ -53,12 +126,10 @@ type MoneyDeposited struct {
 
 func CreateAccount(id string, money int64) *Account {
 	a := &Account{
-		RootAggregate: RootAggregate{
-			ID: id,
-		},
 		Status:  OPEN,
 		Balance: money,
 	}
+	a.RootAggregate = NewRootAggregate(a, id, 0)
 	a.events = []interface{}{
 		AccountCreated{
 			ID:    id,
@@ -69,11 +140,8 @@ func CreateAccount(id string, money int64) *Account {
 }
 
 func NewAccount() *Account {
-	a := &Account{
-		RootAggregate: RootAggregate{
-			events: []interface{}{},
-		},
-	}
+	a := &Account{}
+	a.RootAggregate = NewRootAggregate(a, "", 0)
 	return a
 }
 
@@ -81,41 +149,6 @@ type Account struct {
 	RootAggregate
 	Status  Status `json:"status,omitempty"`
 	Balance int64  `json:"balance,omitempty"`
-}
-
-func (a *Account) ApplyChangeFromHistory(event Event) error {
-	var evt interface{}
-	switch event.Kind {
-	case "AccountCreated":
-		evt = AccountCreated{}
-	case "MoneyDeposited":
-		evt = MoneyDeposited{}
-	case "MoneyWithdrawn":
-		evt = MoneyWithdrawn{}
-	}
-	if err := json.Unmarshal(event.Body, &evt); err != nil {
-		return err
-	}
-
-	a.applyChange(evt, false)
-	a.Version = event.AggregateVersion
-	a.eventVersion = a.Version
-	return nil
-}
-
-func (a *Account) applyChange(event interface{}, isNew bool) {
-	switch t := event.(type) {
-	case AccountCreated:
-		a.HandleAccountCreated(t)
-	case MoneyDeposited:
-		a.HandleMoneyDeposited(t)
-	case MoneyWithdrawn:
-		a.HandleMoneyWithdrawn(t)
-	}
-
-	if isNew {
-		a.events = append(a.events, event)
-	}
 }
 
 func (a *Account) HandleAccountCreated(event AccountCreated) {
@@ -135,12 +168,12 @@ func (a *Account) HandleMoneyWithdrawn(event MoneyWithdrawn) {
 
 func (a *Account) Withdraw(money int64) bool {
 	if a.Balance >= money {
-		a.applyChange(MoneyWithdrawn{Money: money}, true)
+		a.ApplyChange(MoneyWithdrawn{Money: money})
 		return true
 	}
 	return false
 }
 
 func (a *Account) Deposit(money int64) {
-	a.applyChange(MoneyDeposited{Money: money}, true)
+	a.ApplyChange(MoneyDeposited{Money: money})
 }
