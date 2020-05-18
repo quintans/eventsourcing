@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
+	"github.com/rs/xid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -77,7 +78,7 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 	version := aggregate.GetVersion()
 	oldVersion := version
 
-	var eventID int64
+	var eventID string
 	var takeSnapshot bool
 	tx := es.db.MustBegin()
 	defer func() {
@@ -89,7 +90,6 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 		if takeSnapshot {
 			snap, err := buildSnapshot(aggregate, eventID)
 			if err != nil {
-				fmt.Println("SAVE ===>", string(snap.Body))
 				go es.saveSnapshot(snap)
 			}
 		}
@@ -103,10 +103,11 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 			return err
 		}
 
-		err = tx.Get(&eventID,
-			`INSERT INTO events (aggregate_id, aggregate_version, aggregate_type, kind, body)
-			VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-			aggregate.GetID(), version, tName, nameFor(e), body)
+		eventID := xid.New().String()
+		_, err = tx.Exec(
+			`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			eventID, aggregate.GetID(), version, tName, nameFor(e), body)
 		if err != nil {
 			if pgerr, ok := err.(*pq.Error); ok {
 				if pgerr.Code == uniqueViolation {
@@ -116,8 +117,7 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 			return fmt.Errorf("Unable to retrieve event ID: %w", err)
 		}
 
-		if eventID != 0 &&
-			version > es.snapshotThreshold-1 &&
+		if version > es.snapshotThreshold-1 &&
 			version%es.snapshotThreshold == 0 {
 			takeSnapshot = true
 		}
@@ -151,7 +151,6 @@ func (es *ESPostgreSQL) getSnapshot(aggregateID string) (*PgSnapshot, error) {
 		}
 		return nil, fmt.Errorf("Unable to get snapshot for aggregate %q: %w", aggregateID, err)
 	}
-	fmt.Println("GET ===>", string(snap.Body))
 	return snap, nil
 }
 
@@ -168,7 +167,7 @@ func (es *ESPostgreSQL) saveSnapshot(snap interface{}) {
 	}
 }
 
-func buildSnapshot(agg Aggregater, eventID int64) (*PgSnapshot, error) {
+func buildSnapshot(agg Aggregater, eventID string) (*PgSnapshot, error) {
 	body, err := json.Marshal(agg)
 	if err != nil {
 		log.WithField("aggregate", agg).
@@ -204,7 +203,7 @@ func (es *ESPostgreSQL) getEvents(aggregateID string, snapVersion int) ([]PgEven
 }
 
 type PgEvent struct {
-	ID               int64           `db:"id"`
+	ID               string          `db:"id"`
 	AggregateID      string          `db:"aggregate_id"`
 	AggregateVersion int             `db:"aggregate_version"`
 	AggregateType    string          `db:"aggregate_type"`
@@ -214,7 +213,7 @@ type PgEvent struct {
 }
 
 type PgSnapshot struct {
-	ID               int64           `db:"id"`
+	ID               string          `db:"id"`
 	AggregateID      string          `db:"aggregate_id"`
 	AggregateVersion int             `db:"aggregate_version"`
 	Body             json.RawMessage `db:"body"`

@@ -86,7 +86,7 @@ func dbSchema() error {
 
 	db.MustExec(`
 	CREATE TABLE IF NOT EXISTS events(
-		id BIGSERIAL PRIMARY KEY,
+		id VARCHAR (50) PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_version INTEGER NOT NULL,
 		aggregate_type VARCHAR (50) NOT NULL,
@@ -97,7 +97,7 @@ func dbSchema() error {
 	);
 		
 	CREATE TABLE IF NOT EXISTS snapshots(
-		id BIGINT PRIMARY KEY,
+		id VARCHAR (50) PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_version INTEGER NOT NULL,
 		body JSONB NOT NULL,
@@ -139,17 +139,6 @@ func TestSave(t *testing.T) {
 	assert.Equal(t, 4, acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, OPEN, acc2.Status)
-}
-
-func BenchmarkDepositAndSave(b *testing.B) {
-	es, _ := NewESPostgreSQL(dbURL, 3)
-	id := uuid.New().String()
-	acc := CreateAccount(id, 0)
-
-	for i := 0; i < b.N; i++ {
-		acc.Deposit(10)
-		_ = es.Save(acc)
-	}
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
