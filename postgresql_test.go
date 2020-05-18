@@ -140,3 +140,27 @@ func TestSave(t *testing.T) {
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, OPEN, acc2.Status)
 }
+
+func BenchmarkDepositAndSave(b *testing.B) {
+	es, _ := NewESPostgreSQL(dbURL, 3)
+	id := uuid.New().String()
+	acc := CreateAccount(id, 0)
+
+	for i := 0; i < b.N; i++ {
+		acc.Deposit(10)
+		_ = es.Save(acc)
+	}
+}
+
+func BenchmarkDepositAndSave2(b *testing.B) {
+	es, _ := NewESPostgreSQL(dbURL, 3)
+	b.RunParallel(func(pb *testing.PB) {
+		id := uuid.New().String()
+		acc := CreateAccount(id, 0)
+
+		for pb.Next() {
+			acc.Deposit(10)
+			_ = es.Save(acc)
+		}
+	})
+}
