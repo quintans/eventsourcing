@@ -1,6 +1,7 @@
 package eventstore
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -39,8 +40,8 @@ type ESPostgreSQL struct {
 	snapshotThreshold int
 }
 
-func (es *ESPostgreSQL) GetByID(aggregateID string, aggregate Aggregater) error {
-	snap, err := es.getSnapshot(aggregateID)
+func (es *ESPostgreSQL) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
+	snap, err := es.getSnapshot(ctx, aggregateID)
 	if err != nil {
 		return err
 	}
@@ -51,9 +52,9 @@ func (es *ESPostgreSQL) GetByID(aggregateID string, aggregate Aggregater) error 
 		if err != nil {
 			return err
 		}
-		events, err = es.getEvents(aggregateID, snap.AggregateVersion)
+		events, err = es.getEvents(ctx, aggregateID, snap.AggregateVersion)
 	} else {
-		events, err = es.getEvents(aggregateID, -1)
+		events, err = es.getEvents(ctx, aggregateID, -1)
 	}
 	if err != nil {
 		return err
@@ -73,14 +74,18 @@ func (es *ESPostgreSQL) GetByID(aggregateID string, aggregate Aggregater) error 
 	return nil
 }
 
-func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
+func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater) (err error) {
 	tName := nameFor(aggregate)
 	version := aggregate.GetVersion()
 	oldVersion := version
 
 	var eventID string
 	var takeSnapshot bool
-	tx := es.db.MustBegin()
+	tx, err := es.db.Begin()
+	if err != nil {
+		return err
+	}
+
 	defer func() {
 		if err != nil {
 			tx.Rollback()
@@ -90,7 +95,7 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 		if takeSnapshot {
 			snap, err := buildSnapshot(aggregate, eventID)
 			if err != nil {
-				go es.saveSnapshot(snap)
+				go es.saveSnapshot(ctx, snap)
 			}
 		}
 	}()
@@ -104,7 +109,7 @@ func (es *ESPostgreSQL) Save(aggregate Aggregater) (err error) {
 		}
 
 		eventID := xid.New().String()
-		_, err = tx.Exec(
+		_, err = tx.ExecContext(ctx,
 			`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body)
 			VALUES ($1, $2, $3, $4, $5, $6)`,
 			eventID, aggregate.GetID(), version, tName, nameFor(e), body)
@@ -135,17 +140,17 @@ func nameFor(x interface{}) string {
 	return t.Name()
 }
 
-func (es *ESPostgreSQL) GetEventsStartingAt(eventId string) ([]Event, error) {
+func (es *ESPostgreSQL) GetEventsStartingAt(ctx context.Context, eventId string) ([]Event, error) {
 	return nil, nil
 }
 
-func (es *ESPostgreSQL) GetEventsStartingAtFor(eventId string, agregateTypes ...string) ([]Event, error) {
+func (es *ESPostgreSQL) GetEventsStartingAtFor(ctx context.Context, eventId string, agregateTypes ...string) ([]Event, error) {
 	return nil, nil
 }
 
-func (es *ESPostgreSQL) getSnapshot(aggregateID string) (*PgSnapshot, error) {
+func (es *ESPostgreSQL) getSnapshot(ctx context.Context, aggregateID string) (*PgSnapshot, error) {
 	snap := &PgSnapshot{}
-	if err := es.db.Get(snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
+	if err := es.db.GetContext(ctx, snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -154,11 +159,10 @@ func (es *ESPostgreSQL) getSnapshot(aggregateID string) (*PgSnapshot, error) {
 	return snap, nil
 }
 
-func (es *ESPostgreSQL) saveSnapshot(snap interface{}) {
-	_, err := es.db.NamedExec(`
-	INSERT INTO snapshots (id, aggregate_id, aggregate_version, body, created_at)
-	VALUES (:id, :aggregate_id, :aggregate_version, :body, :created_at)
-	`, snap)
+func (es *ESPostgreSQL) saveSnapshot(ctx context.Context, snap interface{}) {
+	_, err := es.db.NamedExecContext(ctx,
+		`INSERT INTO snapshots (id, aggregate_id, aggregate_version, body, created_at)
+	     VALUES (:id, :aggregate_id, :aggregate_version, :body, :created_at)`, snap)
 
 	if err != nil {
 		log.WithField("snapshot", snap).
@@ -185,7 +189,7 @@ func buildSnapshot(agg Aggregater, eventID string) (*PgSnapshot, error) {
 	}, nil
 }
 
-func (es *ESPostgreSQL) getEvents(aggregateID string, snapVersion int) ([]PgEvent, error) {
+func (es *ESPostgreSQL) getEvents(ctx context.Context, aggregateID string, snapVersion int) ([]PgEvent, error) {
 	query := "SELECT * FROM events e WHERE e.aggregate_id = $1"
 	args := []interface{}{aggregateID}
 	if snapVersion > -1 {
@@ -193,7 +197,7 @@ func (es *ESPostgreSQL) getEvents(aggregateID string, snapVersion int) ([]PgEven
 		args = append(args, snapVersion)
 	}
 	events := []PgEvent{}
-	if err := es.db.Select(&events, query, args...); err != nil {
+	if err := es.db.SelectContext(ctx, &events, query, args...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("Aggregate %q was not found: %w", aggregateID, err)
 		}

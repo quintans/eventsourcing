@@ -110,6 +110,7 @@ func dbSchema() error {
 }
 
 func TestSave(t *testing.T) {
+	ctx := context.Background()
 	es, err := NewESPostgreSQL(dbURL, 3)
 	require.NoError(t, err)
 
@@ -117,9 +118,9 @@ func TestSave(t *testing.T) {
 	acc := CreateAccount(id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(acc)
+	err = es.Save(ctx, acc)
 	acc.Deposit(5)
-	err = es.Save(acc)
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -133,7 +134,7 @@ func TestSave(t *testing.T) {
 	assert.Equal(t, 1, evts[0].AggregateVersion)
 
 	acc2 := NewAccount()
-	err = es.GetByID(id, acc2)
+	err = es.GetByID(ctx, id, acc2)
 	require.NoError(t, err)
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, 4, acc2.Version)
@@ -144,12 +145,13 @@ func TestSave(t *testing.T) {
 func BenchmarkDepositAndSave2(b *testing.B) {
 	es, _ := NewESPostgreSQL(dbURL, 3)
 	b.RunParallel(func(pb *testing.PB) {
+		ctx := context.Background()
 		id := uuid.New().String()
 		acc := CreateAccount(id, 0)
 
 		for pb.Next() {
 			acc.Deposit(10)
-			_ = es.Save(acc)
+			_ = es.Save(ctx, acc)
 		}
 	})
 }

@@ -1,6 +1,7 @@
 package eventstore
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -10,10 +11,10 @@ var (
 )
 
 type EventStore interface {
-	GetByID(aggregateID string, aggregate Aggregater) error
-	Save(aggregate Aggregater) error
-	GetEventsStartingAt(eventId string) ([]Event, error)
-	GetEventsStartingAtFor(eventId string, agregateTypes ...string) ([]Event, error)
+	GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error
+	Save(ctx context.Context, aggregate Aggregater) error
+	GetEventsStartingAt(ctx context.Context, eventId string) ([]Event, error)
+	GetEventsStartingAtFor(ctx context.Context, eventId string, agregateTypes ...string) ([]Event, error)
 }
 
 type Aggregater interface {
