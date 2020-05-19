@@ -17,8 +17,8 @@ But there is a solution. We can introduce a latency in the que tracking queries,
 ```sql
 SELECT *
 FROM events 
-WHERE id >= $1 AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds')
-ORDER BY id asc
+WHERE id >= $1 AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
+ORDER BY id ASC
 LIMIT 100
 ```
 

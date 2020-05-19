@@ -17,6 +17,7 @@ import (
 const uniqueViolation = "23505"
 
 var _ EventStore = (*ESPostgreSQL)(nil)
+var _ Tracker = (*ESPostgreSQL)(nil)
 
 // NewESPostgreSQL creates a new instance of ESPostgreSQL
 func NewESPostgreSQL(dburl string, snapshotThreshold int) (*ESPostgreSQL, error) {
@@ -140,12 +141,74 @@ func nameFor(x interface{}) string {
 	return t.Name()
 }
 
-func (es *ESPostgreSQL) GetEventsStartingAt(ctx context.Context, eventId string) ([]Event, error) {
-	return nil, nil
+func (es *ESPostgreSQL) GetLastEventID(ctx context.Context) (string, error) {
+	var eventID string
+	if err := es.db.GetContext(ctx, &eventID, `
+	SELECT * FROM events
+	WHERE id > $1 AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
+	ORDER BY id DESC LIMIT 1
+	`); err != nil {
+		if err != sql.ErrNoRows {
+			return "", fmt.Errorf("Unable to get the last event ID: %w", err)
+		}
+	}
+	return eventID, nil
 }
 
-func (es *ESPostgreSQL) GetEventsStartingAtFor(ctx context.Context, eventId string, agregateTypes ...string) ([]Event, error) {
-	return nil, nil
+func (es *ESPostgreSQL) GetEventsForAggregate(ctx context.Context, afterEventID string, aggregateID string, limit int) ([]Event, error) {
+	events := []Event{}
+	if err := es.db.SelectContext(ctx, &events, `
+	SELECT * FROM events
+	WHERE id > $1
+	AND aggregate_id = $2
+	AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
+	ORDER BY id ASC LIMIT $3
+	`, afterEventID, aggregateID, limit); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, fmt.Errorf("Unable to get events after %q: %w", afterEventID, err)
+		}
+	}
+	return events, nil
+
+}
+
+func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, limit int, aggregateTypes ...string) ([]Event, error) {
+	args := []interface{}{afterEventID}
+	query := `SELECT * FROM events
+	WHERE id > $1
+	AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'`
+	if len(aggregateTypes) > 0 {
+		query += " AND aggregate_type IN ($2)"
+		args = append(args, aggregateTypes)
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY id ASC LIMIT $%d", len(args))
+	log.Println("===>", query)
+
+	rows, err := es.db.QueryxContext(ctx, query, args...)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			return nil, fmt.Errorf("Unable to get events after %q for %s: %w", afterEventID, aggregateTypes, err)
+		}
+	}
+	events := []Event{}
+	for rows.Next() {
+		pg := PgEvent{}
+		err := rows.StructScan(&pg)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to scan to struct: %w", err)
+		}
+		events = append(events, Event{
+			ID:               pg.ID,
+			AggregateID:      pg.AggregateID,
+			AggregateVersion: pg.AggregateVersion,
+			AggregateType:    pg.AggregateType,
+			Kind:             pg.Kind,
+			Body:             pg.Body,
+			CreatedAt:        pg.CreatedAt,
+		})
+	}
+	return events, nil
 }
 
 func (es *ESPostgreSQL) getSnapshot(ctx context.Context, aggregateID string) (*PgSnapshot, error) {
