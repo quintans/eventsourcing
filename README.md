@@ -17,7 +17,8 @@ But there is a solution. We can introduce a latency in the que tracking queries,
 ```sql
 SELECT *
 FROM events 
-WHERE id >= $1 AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
+WHERE id >= $1
+AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
 ORDER BY id ASC
 LIMIT 100
 ```
@@ -25,6 +26,8 @@ LIMIT 100
 Using this approach, systems like RDBMS like Cockroach can be used.
 
 This is the solution that I will be implementing.
+
+> Instead of sequence number, I will be using [xid](https://github.com/rs/xid) as the event ID
 
 ## Core Concepts
 
