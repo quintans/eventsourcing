@@ -181,6 +181,45 @@ func TestListener(t *testing.T) {
 	assert.Equal(t, OPEN, acc2.Status)
 }
 
+func TestListenerWithType(t *testing.T) {
+	ctx := context.Background()
+	es, err := NewESPostgreSQL(dbURL, 3)
+	require.NoError(t, err)
+
+	id := uuid.New().String()
+	acc := CreateAccount(id, 100)
+	acc.Deposit(10)
+	acc.Deposit(20)
+	err = es.Save(ctx, acc)
+	acc.Deposit(5)
+	err = es.Save(ctx, acc)
+	require.NoError(t, err)
+	time.Sleep(time.Second)
+
+	acc2 := NewAccount()
+	counter := 0
+	lm := NewListenerManager(es)
+
+	done := make(chan struct{})
+	lm.Listen(func(e Event) {
+		acc2.ApplyChangeFromHistory(e)
+		counter++
+		if counter == 4 {
+			close(done)
+		}
+	}, StartFrom(BEGINNING), AggregateTypes("Account"))
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+	}
+	assert.Equal(t, 4, counter)
+	assert.Equal(t, id, acc2.ID)
+	assert.Equal(t, 4, acc2.Version)
+	assert.Equal(t, int64(135), acc2.Balance)
+	assert.Equal(t, OPEN, acc2.Status)
+}
+
 func BenchmarkDepositAndSave2(b *testing.B) {
 	es, _ := NewESPostgreSQL(dbURL, 3)
 	b.RunParallel(func(pb *testing.PB) {

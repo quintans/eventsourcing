@@ -183,7 +183,6 @@ func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, limi
 	}
 	args = append(args, limit)
 	query += fmt.Sprintf(" ORDER BY id ASC LIMIT $%d", len(args))
-	log.Println("===>", query)
 
 	rows, err := es.db.QueryxContext(ctx, query, args...)
 	if err != nil {
