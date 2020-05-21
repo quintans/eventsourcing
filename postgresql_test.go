@@ -95,6 +95,7 @@ func dbSchema() error {
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		UNIQUE (aggregate_id, aggregate_version)
 	);
+	CREATE INDEX aggregate_idx ON events (aggregate_id, aggregate_version);
 		
 	CREATE TABLE IF NOT EXISTS snapshots(
 		id VARCHAR (50) PRIMARY KEY,
@@ -103,7 +104,8 @@ func dbSchema() error {
 		body JSONB NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		FOREIGN KEY (id) REFERENCES events (id)
-	 );	 
+	 );
+	 CREATE INDEX aggregate_id_idx ON snapshots (aggregate_id);
 	`)
 
 	return nil
