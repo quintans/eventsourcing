@@ -29,8 +29,12 @@ This is the solution that I will be implementing.
 
 > Instead of sequence number, I will be using [xid](https://github.com/rs/xid) as the event ID
 
+This solution could evolve by plugging in a message queue. This MQ could be feeded the tracker described above.
+
+` events -> Event Store <- tracker process -> Message Queue <- projectors`
+
 ## Core Concepts
 
 The presented solution will use PostgreSQL, and SERIAL to uniquely identify an event.
 
-Snapshots is a technic used to improve the performance of the event store, when retrieving an aggregate, but they don't play any part in keeping the consistency of the event store, therefore if we sporadically fail to save a snapshot, it is not a problem, so they can be saved in a separate go routine.
+Snapshots is a technique used to improve the performance of the event store, when retrieving an aggregate, but they don't play any part in keeping the consistency of the event store, therefore if we sporadically fail to save a snapshot, it is not a problem, so they can be saved in a separate go routine.
