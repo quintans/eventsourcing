@@ -166,7 +166,7 @@ func TestListener(t *testing.T) {
 	lm := NewListener(es, StartFrom(BEGINNING))
 
 	done := make(chan struct{})
-	lm.Listen(func(e Event) {
+	lm.Listen(ctx, func(ctx context.Context, e Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -207,7 +207,7 @@ func TestListenerWithType(t *testing.T) {
 	l := NewListener(es, StartFrom(BEGINNING), AggregateTypes("Account"))
 
 	done := make(chan struct{})
-	l.Listen(func(e Event) {
+	l.Listen(ctx, func(ctx context.Context, e Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++

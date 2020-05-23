@@ -57,16 +57,16 @@ In the following example we exemplify a money transfer with rollback actions, le
 func NewTransferReactor(es EventStore) {
     // ...
 	l := NewListener(es)
-	cancel, err := l.Listen(func(e Event) {
+	cancel, err := l.Listen(ctx, func(c context.Context, e Event) {
         switch e.Kind {
         case "TransferStarted":
-            OnTransferStarted(context.Background(), es, e)
+            OnTransferStarted(c, es, e)
         case "MoneyWithdrawn":
-            OnMoneyWithdrawn(context.Background(), es, e)
+            OnMoneyWithdrawn(c, es, e)
         case "MoneyDeposited":
-            OnMoneyDeposited(context.Background(), es, e)
+            OnMoneyDeposited(c, es, e)
         case "TransferFailedToDeposit":
-            OnTransferFailedToDeposit(context.Background(), es, e)
+            OnTransferFailedToDeposit(c, es, e)
         }
     })
     // ...

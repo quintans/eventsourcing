@@ -119,12 +119,12 @@ type Listener struct {
 	limit          int
 }
 
-func (l *Listener) Listen(handler func(e Event)) (Cancel, error) {
+func (l *Listener) Listen(ctx context.Context, handler func(ctx context.Context, e Event)) (Cancel, error) {
 	var afterEventID string
 	var err error
 	switch l.startFrom {
 	case END:
-		afterEventID, err = l.est.GetLastEventID(context.Background())
+		afterEventID, err = l.est.GetLastEventID(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -133,12 +133,10 @@ func (l *Listener) Listen(handler func(e Event)) (Cancel, error) {
 		afterEventID = l.afterEventID
 	}
 
-	ticker := time.NewTicker(l.pollInterval)
 	done := make(chan bool)
 
 	cancel := func() {
 		done <- true
-		ticker.Stop()
 	}
 
 	go func() {
@@ -147,8 +145,8 @@ func (l *Listener) Listen(handler func(e Event)) (Cancel, error) {
 			select {
 			case <-done:
 				return
-			case _ = <-ticker.C:
-				eid, err := l.retrieve(handler, afterEventID, l.limit)
+			case _ = <-time.After(l.pollInterval):
+				eid, err := l.retrieve(ctx, handler, afterEventID, l.limit)
 				if err != nil {
 					log.WithError(err).Error("Failure retrieving events")
 					failedCounter++
@@ -169,14 +167,18 @@ func (l *Listener) Listen(handler func(e Event)) (Cancel, error) {
 	return cancel, nil
 }
 
-func (l *Listener) retrieve(handler func(e Event), afterEventID string, limit int) (string, error) {
-	events, err := l.est.GetEvents(context.Background(), afterEventID, limit)
-	if err != nil {
-		return "", err
-	}
-	for _, evt := range events {
-		handler(evt)
-		afterEventID = evt.ID
+func (l *Listener) retrieve(ctx context.Context, handler func(ctx context.Context, e Event), afterEventID string, limit int) (string, error) {
+	loop := true
+	for loop {
+		events, err := l.est.GetEvents(ctx, afterEventID, limit)
+		if err != nil {
+			return "", err
+		}
+		for _, evt := range events {
+			handler(ctx, evt)
+			afterEventID = evt.ID
+		}
+		loop = len(events) == limit
 	}
 	return afterEventID, nil
 }
