@@ -92,10 +92,12 @@ func dbSchema() error {
 		aggregate_type VARCHAR (50) NOT NULL,
 		kind VARCHAR (50) NOT NULL,
 		body JSONB NOT NULL,
+		idempotency_key VARCHAR (50),
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		UNIQUE (aggregate_id, aggregate_version)
 	);
 	CREATE INDEX aggregate_idx ON events (aggregate_id, aggregate_version);
+	CREATE INDEX idempotency_key_idx ON events (idempotency_key, aggregate_id);
 		
 	CREATE TABLE IF NOT EXISTS snapshots(
 		id VARCHAR (50) PRIMARY KEY,
@@ -120,14 +122,14 @@ func TestSaveAndGet(t *testing.T) {
 	acc := CreateAccount(id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	_, err = es.Save(ctx, acc, Options{})
 	acc.Deposit(5)
-	err = es.Save(ctx, acc)
+	_, err = es.Save(ctx, acc, Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
 	evts := []PgEvent{}
-	err = es.db.Select(&evts, "SELECT * FROM events")
+	err = es.db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	require.Equal(t, 4, len(evts))
 	assert.Equal(t, "AccountCreated", evts[0].Kind)
@@ -153,24 +155,26 @@ func TestListener(t *testing.T) {
 	acc := CreateAccount(id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	_, err = es.Save(ctx, acc, Options{})
 	acc.Deposit(5)
-	err = es.Save(ctx, acc)
+	_, err = es.Save(ctx, acc, Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
 	acc2 := NewAccount()
 	counter := 0
-	lm := NewListenerManager(es)
+	lm := NewListener(es, StartFrom(BEGINNING))
 
 	done := make(chan struct{})
 	lm.Listen(func(e Event) {
-		acc2.ApplyChangeFromHistory(e)
-		counter++
-		if counter == 4 {
-			close(done)
+		if e.AggregateID == id {
+			acc2.ApplyChangeFromHistory(e)
+			counter++
+			if counter == 4 {
+				close(done)
+			}
 		}
-	}, StartFrom(BEGINNING))
+	})
 
 	select {
 	case <-done:
@@ -192,24 +196,26 @@ func TestListenerWithType(t *testing.T) {
 	acc := CreateAccount(id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	_, err = es.Save(ctx, acc, Options{})
 	acc.Deposit(5)
-	err = es.Save(ctx, acc)
+	_, err = es.Save(ctx, acc, Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
 	acc2 := NewAccount()
 	counter := 0
-	lm := NewListenerManager(es)
+	l := NewListener(es, StartFrom(BEGINNING), AggregateTypes("Account"))
 
 	done := make(chan struct{})
-	lm.Listen(func(e Event) {
-		acc2.ApplyChangeFromHistory(e)
-		counter++
-		if counter == 4 {
-			close(done)
+	l.Listen(func(e Event) {
+		if e.AggregateID == id {
+			acc2.ApplyChangeFromHistory(e)
+			counter++
+			if counter == 4 {
+				close(done)
+			}
 		}
-	}, StartFrom(BEGINNING), AggregateTypes("Account"))
+	})
 
 	select {
 	case <-done:
@@ -222,7 +228,7 @@ func TestListenerWithType(t *testing.T) {
 	assert.Equal(t, OPEN, acc2.Status)
 }
 
-func BenchmarkDepositAndSave2(b *testing.B) {
+func _BenchmarkDepositAndSave2(b *testing.B) {
 	es, _ := NewESPostgreSQL(dbURL, 3)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
@@ -231,7 +237,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 
 		for pb.Next() {
 			acc.Deposit(10)
-			_ = es.Save(ctx, acc)
+			_, _ = es.Save(ctx, acc, Options{})
 		}
 	})
 }

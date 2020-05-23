@@ -75,7 +75,7 @@ func (es *ESPostgreSQL) GetByID(ctx context.Context, aggregateID string, aggrega
 	return nil
 }
 
-func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater) (err error) {
+func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options Options) (ok bool, err error) {
 	tName := nameFor(aggregate)
 	version := aggregate.GetVersion()
 	oldVersion := version
@@ -84,7 +84,7 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater) (err err
 	var takeSnapshot bool
 	tx, err := es.db.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	defer func() {
@@ -106,21 +106,13 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater) (err err
 		aggregate.SetVersion(version)
 		body, err := json.Marshal(e)
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		eventID := xid.New().String()
-		_, err = tx.ExecContext(ctx,
-			`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body)
-			VALUES ($1, $2, $3, $4, $5, $6)`,
-			eventID, aggregate.GetID(), version, tName, nameFor(e), body)
+		err = es.saveEvent(ctx, tx, eventID, aggregate.GetID(), version, tName, nameFor(e), body, options.IdempotencyKey)
 		if err != nil {
-			if pgerr, ok := err.(*pq.Error); ok {
-				if pgerr.Code == uniqueViolation {
-					return ErrConcurrentModification
-				}
-			}
-			return fmt.Errorf("Unable to retrieve event ID: %w", err)
+			return false, err
 		}
 
 		if version > es.snapshotThreshold-1 &&
@@ -130,7 +122,8 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater) (err err
 
 	}
 	aggregate.ClearEvents()
-	return tx.Commit()
+	err = tx.Commit()
+	return (err == nil), err
 }
 
 func nameFor(x interface{}) string {
@@ -139,6 +132,31 @@ func nameFor(x interface{}) string {
 		t = t.Elem()
 	}
 	return t.Name()
+}
+
+func (es *ESPostgreSQL) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
+	var exists int
+	err := es.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=$1 AND aggregate_type=$2) AS "EXISTS"`, idempotencyKey, aggregateID)
+	if err != nil {
+		return false, fmt.Errorf("Unable to verify the existence of the idempotency key: %w", err)
+	}
+	return exists != 0, nil
+}
+
+func (es *ESPostgreSQL) saveEvent(ctx context.Context, tx *sql.Tx, eventID, aggID string, version int, tName, eName string, body []byte, idempotencyKey string) error {
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		eventID, aggID, version, tName, eName, body, idempotencyKey)
+	if err != nil {
+		if pgerr, ok := err.(*pq.Error); ok {
+			if pgerr.Code == uniqueViolation {
+				return ErrConcurrentModification
+			}
+		}
+		return fmt.Errorf("Unable to insert event: %w", err)
+	}
+	return nil
 }
 
 func (es *ESPostgreSQL) GetLastEventID(ctx context.Context) (string, error) {
@@ -275,6 +293,7 @@ type PgEvent struct {
 	AggregateType    string          `db:"aggregate_type"`
 	Kind             string          `db:"kind"`
 	Body             json.RawMessage `db:"body"`
+	IdempotencyKey   string          `db:"idempotency_key"`
 	CreatedAt        time.Time       `db:"created_at"`
 }
 

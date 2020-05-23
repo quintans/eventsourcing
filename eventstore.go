@@ -12,9 +12,14 @@ var (
 	ErrConcurrentModification = errors.New("Concurrent Modification")
 )
 
+type Options struct {
+	IdempotencyKey string
+}
+
 type EventStore interface {
 	GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error
-	Save(ctx context.Context, aggregate Aggregater) error
+	Save(ctx context.Context, aggregate Aggregater, options Options) (bool, error)
+	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
 }
 
 type Tracker interface {
@@ -39,6 +44,7 @@ type Event struct {
 	AggregateType    string
 	Kind             string
 	Body             []byte
+	IdempotencyKey   string
 	CreatedAt        time.Time
 }
 
@@ -56,51 +62,69 @@ const (
 
 type Cancel func()
 
-type Option func(*ListenerManager)
+type Option func(*Listener)
 
 func PollInterval(pi time.Duration) Option {
-	return func(l *ListenerManager) {
+	return func(l *Listener) {
 		l.pollInterval = pi
 	}
 }
 
-func NewListenerManager(est Tracker, options ...Option) *ListenerManager {
-	t := &ListenerManager{
-		est:           est,
-		pollInterval:  500 * time.Millisecond,
-		cancellations: []Cancel{},
-	}
-	for _, o := range options {
-		o(t)
-	}
-	return t
-}
-
-type ListenerManager struct {
-	est           Tracker
-	pollInterval  time.Duration
-	cancellations []Cancel
-}
-
-func (lm *ListenerManager) Close() {
-	for _, c := range lm.cancellations {
-		c()
+func StartFrom(from Start) Option {
+	return func(l *Listener) {
+		l.startFrom = from
 	}
 }
 
-func (lm *ListenerManager) Listen(handler func(e Event), options ...ListenerOption) (Cancel, error) {
+func AfterEventID(eventID string) Option {
+	return func(l *Listener) {
+		l.afterEventID = eventID
+		l.startFrom = SEQUENCE
+	}
+}
+
+func AggregateTypes(at ...string) Option {
+	return func(l *Listener) {
+		l.aggregateTypes = at
+	}
+}
+
+func Limit(limit int) Option {
+	return func(l *Listener) {
+		if limit > 0 {
+			l.limit = limit
+		}
+	}
+}
+
+func NewListener(est Tracker, options ...Option) *Listener {
 	l := &Listener{
-		limit: 100,
+		est:          est,
+		pollInterval: 500 * time.Millisecond,
+		startFrom:    END,
+		limit:        100,
 	}
 	for _, o := range options {
 		o(l)
 	}
+	return l
+}
 
+type Listener struct {
+	est            Tracker
+	pollInterval   time.Duration
+	startFrom      Start
+	afterEventID   string
+	aggregateTypes []string
+	limit          int
+}
+
+func (l *Listener) Listen(handler func(e Event)) (Cancel, error) {
 	var afterEventID string
 	var err error
 	switch l.startFrom {
 	case END:
-		afterEventID, err = lm.est.GetLastEventID(context.Background())
+		afterEventID, err = l.est.GetLastEventID(context.Background())
 		if err != nil {
 			return nil, err
 		}
@@ -109,14 +133,13 @@ func (lm *ListenerManager) Listen(handler func(e Event), options ...ListenerOpti
 		afterEventID = l.afterEventID
 	}
 
-	ticker := time.NewTicker(lm.pollInterval)
+	ticker := time.NewTicker(l.pollInterval)
 	done := make(chan bool)
 
 	cancel := func() {
 		done <- true
 		ticker.Stop()
 	}
-	lm.cancellations = append(lm.cancellations, cancel)
 
 	go func() {
 		failedCounter := 0
@@ -125,7 +148,7 @@ func (lm *ListenerManager) Listen(handler func(e Event), options ...ListenerOpti
 			case <-done:
 				return
 			case _ = <-ticker.C:
-				eid, err := lm.retrieve(handler, afterEventID, l.limit)
+				eid, err := l.retrieve(handler, afterEventID, l.limit)
 				if err != nil {
 					log.WithError(err).Error("Failure retrieving events")
 					failedCounter++
@@ -146,8 +169,8 @@ func (lm *ListenerManager) Listen(handler func(e Event), options ...ListenerOpti
 	return cancel, nil
 }
 
-func (lm *ListenerManager) retrieve(handler func(e Event), afterEventID string, limit int) (string, error) {
-	events, err := lm.est.GetEvents(context.Background(), afterEventID, limit)
+func (l *Listener) retrieve(handler func(e Event), afterEventID string, limit int) (string, error) {
+	events, err := l.est.GetEvents(context.Background(), afterEventID, limit)
 	if err != nil {
 		return "", err
 	}
@@ -156,40 +179,4 @@ func (lm *ListenerManager) retrieve(handler func(e Event), afterEventID string, 
 		afterEventID = evt.ID
 	}
 	return afterEventID, nil
-}
-
-type ListenerOption func(l *Listener)
-
-func StartFrom(from Start) ListenerOption {
-	return func(l *Listener) {
-		l.startFrom = from
-	}
-}
-
-func AfterEventID(eventID string) ListenerOption {
-	return func(l *Listener) {
-		l.afterEventID = eventID
-		l.startFrom = SEQUENCE
-	}
-}
-
-func AggregateTypes(at ...string) ListenerOption {
-	return func(l *Listener) {
-		l.aggregateTypes = at
-	}
-}
-
-func Limit(limit int) ListenerOption {
-	return func(l *Listener) {
-		if limit > 0 {
-			l.limit = limit
-		}
-	}
-}
-
-type Listener struct {
-	startFrom      Start
-	afterEventID   string
-	aggregateTypes []string
-	limit          int
 }
