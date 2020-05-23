@@ -49,7 +49,7 @@ In all the examples I've seen, about implementing a process manager, it is not c
 If the process is only considering the happy path, there is no advantage in having several subscribers, by the contrary.
 But, if we introduce compensation actions, it becomes clear that there is an advantage in using a several subscribers (this is a state machine)
 
-In the following example we exemplify a money transfer with rollback actions, levering idempotent keys.
+In the following example I exemplify a money transfer with rollback actions, levering idempotent keys.
 
 > I don't see the need to use command handlers in the following examples
 
@@ -118,8 +118,8 @@ func OnMoneyWithdrawn(ctx context.Context, es EventStore, e Event) {
     if !exists {
         account := NewAccount()
         es.GetByID(ctx, transfer.ToAccount, &account)
-        if ok := account.Deposit(transfer.Amount, transfer.Transaction); !pk {
-            idempotentKey := event.Transaction + "/no-deposit"
+        if ok := account.Deposit(transfer.Amount, transfer.Transaction); !ok {
+            idempotentKey := event.Transaction + "/failed-deposit"
             exists, _ = es.HasIdempotencyKey(ctx, event.FromAccount, idempotentKey)
             if !exists {
                 transfer := NewTransfer()
