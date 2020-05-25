@@ -18,7 +18,7 @@ type Options struct {
 
 type EventStore interface {
 	GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error
-	Save(ctx context.Context, aggregate Aggregater, options Options) (bool, error)
+	Save(ctx context.Context, aggregate Aggregater, options Options) error
 	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
 }
 
@@ -48,8 +48,13 @@ type Event struct {
 	CreatedAt        time.Time
 }
 
+type Locker interface {
+	Lock() bool
+	Unlock()
+}
+
 const (
-	maxFailures = 3
+	maxWait = time.Minute
 )
 
 type Start int
@@ -97,12 +102,13 @@ func Limit(limit int) Option {
 	}
 }
 
-func NewListener(est Tracker, options ...Option) *Listener {
+func NewListener(est Tracker, locker Locker, options ...Option) *Listener {
 	l := &Listener{
 		est:          est,
 		pollInterval: 500 * time.Millisecond,
 		startFrom:    END,
 		limit:        100,
+		locker:       locker,
 	}
 	for _, o := range options {
 		o(l)
@@ -117,6 +123,7 @@ type Listener struct {
 	afterEventID   string
 	aggregateTypes []string
 	limit          int
+	locker         Locker
 }
 
 func (l *Listener) Listen(ctx context.Context, handler func(ctx context.Context, e Event)) (Cancel, error) {
@@ -140,25 +147,28 @@ func (l *Listener) Listen(ctx context.Context, handler func(ctx context.Context,
 	}
 
 	go func() {
-		failedCounter := 0
+		wait := l.pollInterval
 		for {
 			select {
 			case <-done:
 				return
 			case _ = <-time.After(l.pollInterval):
-				eid, err := l.retrieve(ctx, handler, afterEventID, l.limit)
-				if err != nil {
-					log.WithError(err).Error("Failure retrieving events")
-					failedCounter++
-					if failedCounter == maxFailures {
-						log.
-							WithField("aggregate_types", l.aggregateTypes).
-							Errorf("Stop listening after %d consecutive failures", maxFailures)
-						return
+				if l.locker.Lock() {
+					defer l.locker.Unlock()
+
+					eid, err := l.retrieve(ctx, handler, afterEventID, l.limit)
+					if err != nil {
+						wait += 2 * wait
+						if wait > maxWait {
+							wait = maxWait
+						}
+						log.WithField("backoff", wait).
+							WithError(err).
+							Error("Failure retrieving events. Backing off.")
+					} else {
+						afterEventID = eid
+						wait = l.pollInterval
 					}
-				} else {
-					afterEventID = eid
-					failedCounter = 0
 				}
 			}
 		}

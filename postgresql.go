@@ -75,7 +75,12 @@ func (es *ESPostgreSQL) GetByID(ctx context.Context, aggregateID string, aggrega
 	return nil
 }
 
-func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options Options) (ok bool, err error) {
+func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options Options) (err error) {
+	events := aggregate.GetEvents()
+	if len(events) == 0 {
+		return nil
+	}
+
 	tName := nameFor(aggregate)
 	version := aggregate.GetVersion()
 	oldVersion := version
@@ -84,7 +89,7 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options 
 	var takeSnapshot bool
 	tx, err := es.db.Begin()
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	defer func() {
@@ -101,18 +106,17 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options 
 		}
 	}()
 
-	for _, e := range aggregate.GetEvents() {
+	for _, e := range events {
 		version++
 		aggregate.SetVersion(version)
 		body, err := json.Marshal(e)
 		if err != nil {
-			return false, err
+			return err
 		}
 
-		eventID := xid.New().String()
-		err = es.saveEvent(ctx, tx, eventID, aggregate.GetID(), version, tName, nameFor(e), body, options.IdempotencyKey)
+		err = es.saveEvent(ctx, tx, aggregate, tName, nameFor(e), body, options.IdempotencyKey)
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		if version > es.snapshotThreshold-1 &&
@@ -122,8 +126,7 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options 
 
 	}
 	aggregate.ClearEvents()
-	err = tx.Commit()
-	return (err == nil), err
+	return tx.Commit()
 }
 
 func nameFor(x interface{}) string {
@@ -143,11 +146,14 @@ func (es *ESPostgreSQL) HasIdempotencyKey(ctx context.Context, aggregateID, idem
 	return exists != 0, nil
 }
 
-func (es *ESPostgreSQL) saveEvent(ctx context.Context, tx *sql.Tx, eventID, aggID string, version int, tName, eName string, body []byte, idempotencyKey string) error {
+func (es *ESPostgreSQL) saveEvent(ctx context.Context, tx *sql.Tx, aggregate Aggregater, tName, eName string, body []byte, idempotencyKey string) error {
+	eventID := xid.New().String()
+	now := time.Now().UTC()
+
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		eventID, aggID, version, tName, eName, body, idempotencyKey)
+		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		eventID, aggregate.GetID(), aggregate.GetVersion(), tName, eName, body, idempotencyKey, now)
 	if err != nil {
 		if pgerr, ok := err.(*pq.Error); ok {
 			if pgerr.Code == uniqueViolation {
@@ -175,13 +181,14 @@ func (es *ESPostgreSQL) GetLastEventID(ctx context.Context) (string, error) {
 
 func (es *ESPostgreSQL) GetEventsForAggregate(ctx context.Context, afterEventID string, aggregateID string, limit int) ([]Event, error) {
 	events := []Event{}
+	delay := time.Now().Add(-500 * time.Millisecond)
 	if err := es.db.SelectContext(ctx, &events, `
 	SELECT * FROM events
 	WHERE id > $1
 	AND aggregate_id = $2
-	AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
-	ORDER BY id ASC LIMIT $3
-	`, afterEventID, aggregateID, limit); err != nil {
+	AND created_at <= $3
+	ORDER BY id ASC LIMIT $4
+	`, afterEventID, aggregateID, delay, limit); err != nil {
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("Unable to get events after %q: %w", afterEventID, err)
 		}
@@ -265,7 +272,7 @@ func buildSnapshot(agg Aggregater, eventID string) (*PgSnapshot, error) {
 		AggregateID:      agg.GetID(),
 		AggregateVersion: agg.GetVersion(),
 		Body:             body,
-		CreatedAt:        time.Now(),
+		CreatedAt:        time.Now().UTC(),
 	}, nil
 }
 

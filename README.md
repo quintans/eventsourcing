@@ -15,8 +15,7 @@ Sequence numbers can only guarantee that they are unique, nothing else.
 But there is a solution. We can introduce a latency in the que tracking queries, to allow for the concurrent transactions to complete. The track system will then only query up to the current time minus a safety margin.
 
 ```sql
-SELECT *
-FROM events 
+SELECT * FROM events 
 WHERE id >= $1
 AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
 ORDER BY id ASC
@@ -45,11 +44,13 @@ Snapshots is a technique used to improve the performance of the event store, whe
 
 When saving an aggregate, we have the option to supply an idempotent key. Later, we can check the presence of the idempotency key, to see if we are repeating an action. This can be useful when used in process manager reactors.
 
-In all the examples I've seen, about implementing a process manager, it is not clear what the value is in breaking into several subscribers to handle every step of the process, and I think this is because they only consider the happy paths.
+In most the examples I've seen, about implementing a process manager, it is not clear what the value is in breaking into several subscribers to handle every step of the process, and I think this is because they only consider the happy paths.
 If the process is only considering the happy path, there is no advantage in having several subscribers, by the contrary.
-But, if we introduce compensation actions, it becomes clear that there is an advantage in using a several subscribers (this is a state machine)
+If we introduce compensation actions, it becomes clear that there is an advantage in using a several subscribers to manage the "transaction" involving multiple aggregates.
 
 In the following example I exemplify a money transfer with rollback actions, levering idempotent keys.
+
+Here, Withdraw and Deposit need to be idempotent, but setting the transfer state does not. The former is a cumulative action while the former is not. 
 
 > I don't see the need to use command handlers in the following examples
 
@@ -74,6 +75,11 @@ func NewTransferReactor(es EventStore) {
 
 func OnTransferStarted(ctx context.Context, es EventStore, e Event) {
     event = NewTransferStarted(e)
+    transfer := NewTransfer()
+    es.GetByID(ctx, event.Transaction, &transfer)
+    if !transfer.IsRunning() {
+        return
+    }
     
     // event.Transaction is the idempotent key for the account withdrawal
     exists, _ := es.HasIdempotencyKey(ctx, event.FromAccount, event.Transaction)
@@ -81,16 +87,8 @@ func OnTransferStarted(ctx context.Context, es EventStore, e Event) {
         account := NewAccount()
         es.GetByID(ctx, event.FromAccount, &account)
         if ok := account.Withdraw(event.Amount, event.Transaction); !ok {
-            idempotentKey := event.Transaction + "/no-withdraw"
-            exists, _ = es.HasIdempotencyKey(ctx, event.FromAccount, idempotentKey)
-            if !exists {
-                transfer := NewTransfer()
-                es.GetByID(ctx, transfer.GetID(), &transfer)
-                transfer.NotEnoughFunds()
-                es.Save(ctx, transfer, Options{
-                    IdempotencyKey: idempotentKey,
-                })
-            }
+            transfer.FailedWithdraw("Not Enough Funds")
+            es.Save(ctx, transfer, Options{})
             return
         }
         es.Save(ctx, account, Options{
@@ -101,34 +99,22 @@ func OnTransferStarted(ctx context.Context, es EventStore, e Event) {
 
 func OnMoneyWithdrawn(ctx context.Context, es EventStore, e Event) {
     event := NewMoneyWithdrawnEvent(e)
-    
-    idempotentKey := event.Transaction + "/debit"
-    exists, _ = es.HasIdempotencyKey(ctx, transfer.ToAccount, idempotentKey)
-    if !exists {
-        transfer = NewTransfer()
-        es.GetByID(ctx, transfer.GetID(), &transfer)
-
-        transfer.Debited()
-        es.Save(ctx, transfer, Options{
-            IdempotencyKey: idempotentKey,
-        })
+    transfer := NewTransfer()
+    es.GetByID(ctx, event.Transaction, &transfer)
+    if !transfer.IsRunning() {
+        return
     }
+    
+    transfer.Debited()
+    es.Save(ctx, transfer, Options{})
 
     exists, _ = es.HasIdempotencyKey(ctx, transfer.ToAccount, transfer.Transaction)
     if !exists {
         account := NewAccount()
         es.GetByID(ctx, transfer.ToAccount, &account)
         if ok := account.Deposit(transfer.Amount, transfer.Transaction); !ok {
-            idempotentKey := event.Transaction + "/failed-deposit"
-            exists, _ = es.HasIdempotencyKey(ctx, event.FromAccount, idempotentKey)
-            if !exists {
-                transfer := NewTransfer()
-                es.GetByID(ctx, transfer.GetID(), &transfer)
-                transfer.FailedToDeposit()
-                es.Save(ctx, transfer, Options{
-                    IdempotencyKey: idempotentKey,
-                })
-            }
+            transfer.FailedDeposit("Some Reason")
+            es.Save(ctx, transfer, Options{})
             return
         }
         es.Save(ctx, account, Options{
@@ -139,48 +125,26 @@ func OnMoneyWithdrawn(ctx context.Context, es EventStore, e Event) {
 
 func OnMoneyDeposited(ctx context.Context, es EventStore, e Event) {
     event := NewMoneyDepositedEvent(e)
-    
-    idempotentKey := event.Transaction + "/credited"
-    exists, _ = es.HasIdempotencyKey(ctx, event.Transaction, idempotentKey)
-    if !exists {
-        transfer = NewTransfer()
-        es.GetByID(ctx, transfer.GetID(), &transfer)
 
-        transfer.Credited()
-        es.Save(ctx, transfer, Options{
-            IdempotencyKey: idempotentKey,
-        })
-    }
+    transfer = NewTransfer()
+    es.GetByID(ctx, event.Transaction, &transfer)
 
-    completeTransfer(es, event.Transaction)
+    transfer.Credited()
+    es.Save(ctx, transfer, Options{
+        IdempotencyKey: idempotentKey,
+    })
 }
 
 func OnTransferFailedToDeposit(ctx context.Context, es EventStore, e Event) {
     event := NewTransferFailedToDepositEvent(e)
 
-    idempotentKey := event.FromAccount + "/refund"
+    idempotentKey := event.Transaction + "/refund"
     exists, _ = es.HasIdempotencyKey(ctx, event.FromAccount, idempotentKey)
     if !exists {
         account := NewAccount()
         es.GetByID(ctx, event.FromAccount, &account)
         account.Refund(event.Amount, event.Transaction)
         es.Save(ctx, account, Options{
-            IdempotencyKey: idempotentKey,
-        })
-    }
-
-    completeTransfer(es, event.Transaction)
-}
-
-func completeTransfer(es EventStore, txID string) {
-    idempotentKey := txID + "/complete"
-    exists, _ = es.HasIdempotencyKey(ctx, txID, idempotentKey)
-    if !exists {
-        transfer = NewTransfer()
-        es.GetByID(ctx, transfer.GetID(), &transfer)
-
-        transfer.Completed()
-        es.Save(ctx, transfer, Options{
             IdempotencyKey: idempotentKey,
         })
     }

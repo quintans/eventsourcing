@@ -113,6 +113,15 @@ func dbSchema() error {
 	return nil
 }
 
+type MockLocker struct {
+}
+
+func (m MockLocker) Lock() bool {
+	return true
+}
+
+func (m MockLocker) Unlock() {}
+
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
 	es, err := NewESPostgreSQL(dbURL, 3)
@@ -163,7 +172,7 @@ func TestListener(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	lm := NewListener(es, StartFrom(BEGINNING))
+	lm := NewListener(es, MockLocker{}, StartFrom(BEGINNING))
 
 	done := make(chan struct{})
 	lm.Listen(ctx, func(ctx context.Context, e Event) {
@@ -204,7 +213,7 @@ func TestListenerWithType(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	l := NewListener(es, StartFrom(BEGINNING), AggregateTypes("Account"))
+	l := NewListener(es, MockLocker{}, StartFrom(BEGINNING), AggregateTypes("Account"))
 
 	done := make(chan struct{})
 	l.Listen(ctx, func(ctx context.Context, e Event) {
