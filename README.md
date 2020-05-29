@@ -3,10 +3,18 @@ a simple implementation of an event store using only a database
 
 ## Introduction
 
+The implementation is done using a Postgresql database. 
+For the IDs generation I used [xid](https://github.com/rs/xid), meaning that the IDs will be ordered in time.
+
+> What is important is that for a given aggregate the events IDs are ordered.
+
+A listener process can then poll the database for new events. The events can be published to a message queue or consumed directly.
+
+
 In most of the implementations that I have seen, they all use some sort of message queue to deliver the domain events to external consumers. But there is a problem with this. It is not possible to write into a database and publish to a message queue in a transaction. Many things can go wrong, like for example, after writing to the database we fail to write into the event message queue. Even if it fails, there is no guarantee that it wasn't published.
 
-Other solutions rely on some kind of sequence number, like serial in Postgres, to track the next record to be read or to be published to a message queue.
-This is wrong. Records will not become visible in the same order as the sequence number. 
+Other solutions rely on some kind of sequence number, like serial in Postgres, to poll the next record to be read or to be published to a message queue.
+This is cannot be done unless we take some precautions, because records will not become visible in the same order as the sequence number. 
 Consider two concurrent transactions. One acquires the ID 100 and the other the ID 101. If the one with ID 101 is faster to finish the transaction, it will show up first in a query than the one with ID 100.
 
 If the tracker service relies of this number to determine from where to pull, it could miss the last added record, and this could lead to events not being tracked.
@@ -22,11 +30,24 @@ ORDER BY id ASC
 LIMIT 100
 ```
 
-Using this approach, systems like RDBMS like Cockroach can be used.
+Using this approach, systems like RDBMS and Cockroach can be used.
 
-This solution could evolve by plugging in a message queue. This MQ could be feeded the tracker described above.
+This solution could evolve by plugging in a message queue. This MQ could be feeded by the tracker described above.
 
 ` events -> Event Store <- tracker process -> Message Queue <- projectors`
+
+### NoSQL
+
+It would seem that what we described above can't be applied to NoSQL databases.
+
+The current solution takes advantage of the RDBMS transaction to make sure that a batch of events for an aggregate are correctly saved, but the same can be accomplished using a NoSQL database like MongoDB.
+
+The only requirement is that that the database needs to provide unique constraints on multiple fields (aggregate_id, version). Then we would only need to write the events as an array inside the document record.
+The schema would be something like:
+
+`{ _id = 1, aggregate_id = 1, version = 1, events = [ { … }, { … }, { … }, { … } ] }`
+
+Regarding the IDs we could use [xid](https://github.com/rs/xid), not forgetting to use the tracking query latency, mentioned above, to compensate server clock differences and latencies.
 
 ## Core Concepts
 
