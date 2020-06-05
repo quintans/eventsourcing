@@ -67,43 +67,43 @@ const (
 
 type Cancel func()
 
-type Option func(*Listener)
+type Option func(*Poller)
 
 func PollInterval(pi time.Duration) Option {
-	return func(l *Listener) {
+	return func(l *Poller) {
 		l.pollInterval = pi
 	}
 }
 
 func StartFrom(from Start) Option {
-	return func(l *Listener) {
+	return func(l *Poller) {
 		l.startFrom = from
 	}
 }
 
 func AfterEventID(eventID string) Option {
-	return func(l *Listener) {
+	return func(l *Poller) {
 		l.afterEventID = eventID
 		l.startFrom = SEQUENCE
 	}
 }
 
 func AggregateTypes(at ...string) Option {
-	return func(l *Listener) {
+	return func(l *Poller) {
 		l.aggregateTypes = at
 	}
 }
 
 func Limit(limit int) Option {
-	return func(l *Listener) {
+	return func(l *Poller) {
 		if limit > 0 {
 			l.limit = limit
 		}
 	}
 }
 
-func NewListener(est Tracker, locker Locker, options ...Option) *Listener {
-	l := &Listener{
+func NewPoller(est Tracker, locker Locker, options ...Option) *Poller {
+	p := &Poller{
 		est:          est,
 		pollInterval: 500 * time.Millisecond,
 		startFrom:    END,
@@ -111,12 +111,12 @@ func NewListener(est Tracker, locker Locker, options ...Option) *Listener {
 		locker:       locker,
 	}
 	for _, o := range options {
-		o(l)
+		o(p)
 	}
-	return l
+	return p
 }
 
-type Listener struct {
+type Poller struct {
 	est            Tracker
 	pollInterval   time.Duration
 	startFrom      Start
@@ -126,18 +126,18 @@ type Listener struct {
 	locker         Locker
 }
 
-func (l *Listener) Listen(ctx context.Context, handler func(ctx context.Context, e Event)) (Cancel, error) {
+func (p *Poller) Handle(ctx context.Context, handler func(ctx context.Context, e Event)) (Cancel, error) {
 	var afterEventID string
 	var err error
-	switch l.startFrom {
+	switch p.startFrom {
 	case END:
-		afterEventID, err = l.est.GetLastEventID(ctx)
+		afterEventID, err = p.est.GetLastEventID(ctx)
 		if err != nil {
 			return nil, err
 		}
 	case BEGINNING:
 	case SEQUENCE:
-		afterEventID = l.afterEventID
+		afterEventID = p.afterEventID
 	}
 
 	done := make(chan bool)
@@ -147,16 +147,16 @@ func (l *Listener) Listen(ctx context.Context, handler func(ctx context.Context,
 	}
 
 	go func() {
-		wait := l.pollInterval
+		wait := p.pollInterval
 		for {
 			select {
 			case <-done:
 				return
-			case _ = <-time.After(l.pollInterval):
-				if l.locker.Lock() {
-					defer l.locker.Unlock()
+			case _ = <-time.After(p.pollInterval):
+				if p.locker.Lock() {
+					defer p.locker.Unlock()
 
-					eid, err := l.retrieve(ctx, handler, afterEventID, l.limit)
+					eid, err := p.retrieve(ctx, handler, afterEventID, p.limit)
 					if err != nil {
 						wait += 2 * wait
 						if wait > maxWait {
@@ -167,7 +167,7 @@ func (l *Listener) Listen(ctx context.Context, handler func(ctx context.Context,
 							Error("Failure retrieving events. Backing off.")
 					} else {
 						afterEventID = eid
-						wait = l.pollInterval
+						wait = p.pollInterval
 					}
 				}
 			}
@@ -177,10 +177,32 @@ func (l *Listener) Listen(ctx context.Context, handler func(ctx context.Context,
 	return cancel, nil
 }
 
-func (l *Listener) retrieve(ctx context.Context, handler func(ctx context.Context, e Event), afterEventID string, limit int) (string, error) {
+func (p *Poller) Drain(ctx context.Context, handler func(ctx context.Context, e Event)) (string, error) {
+	afterEventID, err := p.getAfterEventID(ctx)
+	if err == nil {
+		return "", err
+	}
+	return p.retrieve(ctx, handler, afterEventID, p.limit)
+}
+
+func (p *Poller) getAfterEventID(ctx context.Context) (afterEventID string, err error) {
+	switch p.startFrom {
+	case END:
+		afterEventID, err = p.est.GetLastEventID(ctx)
+		if err != nil {
+			return "", err
+		}
+	case BEGINNING:
+	case SEQUENCE:
+		afterEventID = p.afterEventID
+	}
+	return afterEventID, err
+}
+
+func (p *Poller) retrieve(ctx context.Context, handler func(ctx context.Context, e Event), afterEventID string, limit int) (string, error) {
 	loop := true
 	for loop {
-		events, err := l.est.GetEvents(ctx, afterEventID, limit)
+		events, err := p.est.GetEvents(ctx, afterEventID, limit)
 		if err != nil {
 			return "", err
 		}

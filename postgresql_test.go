@@ -131,9 +131,9 @@ func TestSaveAndGet(t *testing.T) {
 	acc := CreateAccount(id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	_, err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, Options{})
 	acc.Deposit(5)
-	_, err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -164,18 +164,18 @@ func TestListener(t *testing.T) {
 	acc := CreateAccount(id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	_, err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, Options{})
 	acc.Deposit(5)
-	_, err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
 	acc2 := NewAccount()
 	counter := 0
-	lm := NewListener(es, MockLocker{}, StartFrom(BEGINNING))
+	lm := NewPoller(es, MockLocker{}, StartFrom(BEGINNING))
 
 	done := make(chan struct{})
-	lm.Listen(ctx, func(ctx context.Context, e Event) {
+	lm.Handle(ctx, func(ctx context.Context, e Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -205,18 +205,18 @@ func TestListenerWithType(t *testing.T) {
 	acc := CreateAccount(id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	_, err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, Options{})
 	acc.Deposit(5)
-	_, err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
 	acc2 := NewAccount()
 	counter := 0
-	l := NewListener(es, MockLocker{}, StartFrom(BEGINNING), AggregateTypes("Account"))
+	p := NewPoller(es, MockLocker{}, StartFrom(BEGINNING), AggregateTypes("Account"))
 
 	done := make(chan struct{})
-	l.Listen(ctx, func(ctx context.Context, e Event) {
+	p.Handle(ctx, func(ctx context.Context, e Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -246,7 +246,7 @@ func _BenchmarkDepositAndSave2(b *testing.B) {
 
 		for pb.Next() {
 			acc.Deposit(10)
-			_, _ = es.Save(ctx, acc, Options{})
+			_ = es.Save(ctx, acc, Options{})
 		}
 	})
 }

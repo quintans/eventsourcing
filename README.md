@@ -8,12 +8,12 @@ For the IDs generation I used [xid](https://github.com/rs/xid), meaning that the
 
 > What is important is that for a given aggregate the events IDs are ordered.
 
-A listener process can then poll the database for new events. The events can be published to a message queue or consumed directly.
+A listener process can then poll the database for new events. The events can be published to a event bus or consumed directly.
 
 
-In most of the implementations that I have seen, they all use some sort of message queue to deliver the domain events to external consumers. But there is a problem with this. It is not possible to write into a database and publish to a message queue in a transaction. Many things can go wrong, like for example, after writing to the database we fail to write into the event message queue. Even if it fails, there is no guarantee that it wasn't published.
+In most of the implementations that I have seen, they all use some sort of event bus to deliver the domain events to external consumers. But there is a problem with this. It is not possible to write into a database and publish to a event bus in a transaction. Many things can go wrong, like for example, after writing to the database we fail to write into the event event bus. Even if it fails, there is no guarantee that it wasn't published.
 
-Other solutions rely on some kind of sequence number, like serial in Postgres, to poll the next record to be read or to be published to a message queue.
+Other solutions rely on some kind of sequence number, like serial in Postgres, to poll the next record to be read or to be published to a event bus.
 This is cannot be done unless we take some precautions, because records will not become visible in the same order as the sequence number. 
 Consider two concurrent transactions. One acquires the ID 100 and the other the ID 101. If the one with ID 101 is faster to finish the transaction, it will show up first in a query than the one with ID 100.
 
@@ -32,9 +32,9 @@ LIMIT 100
 
 Using this approach, systems like RDBMS and Cockroach can be used.
 
-This solution could evolve by plugging in a message queue. This MQ could be feeded by the tracker described above.
+This solution could evolve by plugging in a event bus. This MQ could be feeded by the tracker described above.
 
-` events -> Event Store <- tracker process -> Message Queue <- projectors`
+` events -> Event Store <- tracker process -> event bus <- projectors`
 
 ### NoSQL
 
@@ -171,3 +171,43 @@ func OnTransferFailedToDeposit(ctx context.Context, es EventStore, e Event) {
     }
 }
 ```
+
+## Command Query Responsibility Segregation (CQRS)
+
+An event store is where we store the events of an application that follows the event sourcing architecture pattern.
+This pattern essentially is modelling the changes to the application as a series of events. The state of the application, at a given point in time, can always be reconstructed by replaying the events from the begging of time until that point in time.
+
+CQRS is an application architecture pattern often used with event sourcing.
+
+How can we use use the current event store?
+
+### Simple use
+
+For a simple architecture, where we have a small number of projections, we could use the existing event Listener. This event listener pools the database for new events at a regular interval (should be less than 1 second), from a given event id.
+The reactor should take care of persisting the last handled event (watermark), so that in the case of a restart it will pick from the last know event.
+It is also important to note that for each reactor, there can only exist one instance working at a given time.
+
+
+### Scalability
+
+As the number of projections increase, so the number of data store poller increase. This will lead to an increase load of the database, due to the polling of the database at a short interval (less than one second).
+At some point, to offload the database we need a new strategy.
+
+The offload off the database is accomplished by placing an event bus after the data store poller, and let the event bus deliver the events to the projections, as depicted in the following picture:
+
+![CQRS](cqrs-es.png)
+
+The data store poller polls the database, and writes into the event bus.
+If it fails to write into the event bus, it queries the message for the last message and start polling the database from there.
+If the poller service restarts, it will do the same as before, querying the event bus for the last message.
+
+On the projection side it is the same as before, but now with the extra care to not process already delivered events.
+This is accomplished by ignoring events that are lesser or equal than the last handled event.
+
+If the projection restarts, it will just start listening to the event bus from the last event. 
+
+### Replay
+
+Considering that the event bus as a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
+* using data store poller, start consuming the messages
+* when there are messages to consume, start listening the event bus from the last handled message in the data store poller.  
