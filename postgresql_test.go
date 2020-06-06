@@ -2,6 +2,7 @@ package eventstore
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -128,7 +129,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 
 	id := uuid.New().String()
-	acc := CreateAccount(id, 100)
+	acc := CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, Options{})
@@ -161,7 +162,7 @@ func TestListener(t *testing.T) {
 	require.NoError(t, err)
 
 	id := uuid.New().String()
-	acc := CreateAccount(id, 100)
+	acc := CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, Options{})
@@ -202,7 +203,7 @@ func TestListenerWithType(t *testing.T) {
 	require.NoError(t, err)
 
 	id := uuid.New().String()
-	acc := CreateAccount(id, 100)
+	acc := CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, Options{})
@@ -237,12 +238,64 @@ func TestListenerWithType(t *testing.T) {
 	assert.Equal(t, OPEN, acc2.Status)
 }
 
+func TestForget(t *testing.T) {
+	ctx := context.Background()
+	es, err := NewESPostgreSQL(dbURL, 3)
+	require.NoError(t, err)
+
+	id := uuid.New().String()
+	acc := CreateAccount("Paulo", id, 100)
+	acc.UpdateOwner("Paulo Quintans")
+	acc.Deposit(10)
+	acc.Deposit(20)
+	err = es.Save(ctx, acc, Options{})
+	acc.Deposit(5)
+	acc.Withdraw(15)
+	acc.UpdateOwner("Paulo Quintans Pereira")
+	err = es.Save(ctx, acc, Options{})
+	require.NoError(t, err)
+
+	err = es.Forget(ctx, ForgetRequest{
+		AggregateID: id,
+		EventKinds: []EventKind{
+			{
+				Kind:   "OwnerUpdated",
+				Fields: []string{"owner"},
+			},
+		},
+		SnapshotFields: []string{"owner"},
+	})
+	require.NoError(t, err)
+
+	evts := []json.RawMessage{}
+	err = es.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(evts))
+	for _, v := range evts {
+		ou := &OwnerUpdated{}
+		err = json.Unmarshal(v, ou)
+		require.NoError(t, err)
+		assert.Empty(t, ou.Owner)
+	}
+
+	bodies := []json.RawMessage{}
+	err = es.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(evts))
+	for _, v := range bodies {
+		a := NewAccount()
+		err = json.Unmarshal(v, a)
+		require.NoError(t, err)
+		assert.Empty(t, a.Owner)
+	}
+}
+
 func _BenchmarkDepositAndSave2(b *testing.B) {
 	es, _ := NewESPostgreSQL(dbURL, 3)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New().String()
-		acc := CreateAccount(id, 0)
+		acc := CreateAccount("Paulo", id, 0)
 
 		for pb.Next() {
 			acc.Deposit(10)

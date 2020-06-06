@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -14,7 +15,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const uniqueViolation = "23505"
+const (
+	uniqueViolation = "23505"
+	lag             = -200 * time.Millisecond
+)
 
 var _ EventStore = (*ESPostgreSQL)(nil)
 var _ Tracker = (*ESPostgreSQL)(nil)
@@ -75,6 +79,27 @@ func (es *ESPostgreSQL) GetByID(ctx context.Context, aggregateID string, aggrega
 	return nil
 }
 
+func (es *ESPostgreSQL) withTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) (err error) {
+	tx, err := es.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+			panic(r)
+		}
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+	err = fn(ctx, tx)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options Options) (err error) {
 	events := aggregate.GetEvents()
 	if len(events) == 0 {
@@ -87,14 +112,8 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options 
 
 	var eventID string
 	var takeSnapshot bool
-	tx, err := es.db.Begin()
-	if err != nil {
-		return err
-	}
-
 	defer func() {
 		if err != nil {
-			tx.Rollback()
 			aggregate.SetVersion(oldVersion)
 			return
 		}
@@ -106,27 +125,31 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options 
 		}
 	}()
 
-	for _, e := range events {
-		version++
-		aggregate.SetVersion(version)
-		body, err := json.Marshal(e)
-		if err != nil {
-			return err
-		}
+	err = es.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
+		for _, e := range events {
+			version++
+			aggregate.SetVersion(version)
+			body, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
 
-		err = es.saveEvent(ctx, tx, aggregate, tName, nameFor(e), body, options.IdempotencyKey)
-		if err != nil {
-			return err
-		}
+			err = es.saveEvent(c, tx, aggregate, tName, nameFor(e), body, options.IdempotencyKey)
+			if err != nil {
+				return err
+			}
 
-		if version > es.snapshotThreshold-1 &&
-			version%es.snapshotThreshold == 0 {
-			takeSnapshot = true
-		}
+			if version > es.snapshotThreshold-1 &&
+				version%es.snapshotThreshold == 0 {
+				takeSnapshot = true
+			}
 
-	}
-	aggregate.ClearEvents()
-	return tx.Commit()
+		}
+		aggregate.ClearEvents()
+		return nil
+	})
+
+	return err
 }
 
 func nameFor(x interface{}) string {
@@ -146,32 +169,14 @@ func (es *ESPostgreSQL) HasIdempotencyKey(ctx context.Context, aggregateID, idem
 	return exists != 0, nil
 }
 
-func (es *ESPostgreSQL) saveEvent(ctx context.Context, tx *sql.Tx, aggregate Aggregater, tName, eName string, body []byte, idempotencyKey string) error {
-	eventID := xid.New().String()
-	now := time.Now().UTC()
-
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		eventID, aggregate.GetID(), aggregate.GetVersion(), tName, eName, body, idempotencyKey, now)
-	if err != nil {
-		if pgerr, ok := err.(*pq.Error); ok {
-			if pgerr.Code == uniqueViolation {
-				return ErrConcurrentModification
-			}
-		}
-		return fmt.Errorf("Unable to insert event: %w", err)
-	}
-	return nil
-}
-
 func (es *ESPostgreSQL) GetLastEventID(ctx context.Context) (string, error) {
 	var eventID string
+	safetyMargin := time.Now().Add(lag)
 	if err := es.db.GetContext(ctx, &eventID, `
 	SELECT * FROM events
-	WHERE id > $1 AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
+	WHERE created_at <= $1'
 	ORDER BY id DESC LIMIT 1
-	`); err != nil {
+	`, safetyMargin); err != nil {
 		if err != sql.ErrNoRows {
 			return "", fmt.Errorf("Unable to get the last event ID: %w", err)
 		}
@@ -179,16 +184,16 @@ func (es *ESPostgreSQL) GetLastEventID(ctx context.Context) (string, error) {
 	return eventID, nil
 }
 
-func (es *ESPostgreSQL) GetEventsForAggregate(ctx context.Context, afterEventID string, aggregateID string, limit int) ([]Event, error) {
+func (es *ESPostgreSQL) GetEventsForAggregate(ctx context.Context, afterEventID string, aggregateID string, batchSize int) ([]Event, error) {
 	events := []Event{}
-	delay := time.Now().Add(-500 * time.Millisecond)
+	safetyMargin := time.Now().Add(lag)
 	if err := es.db.SelectContext(ctx, &events, `
 	SELECT * FROM events
 	WHERE id > $1
 	AND aggregate_id = $2
 	AND created_at <= $3
 	ORDER BY id ASC LIMIT $4
-	`, afterEventID, aggregateID, delay, limit); err != nil {
+	`, afterEventID, aggregateID, safetyMargin, batchSize); err != nil {
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("Unable to get events after %q: %w", afterEventID, err)
 		}
@@ -197,23 +202,31 @@ func (es *ESPostgreSQL) GetEventsForAggregate(ctx context.Context, afterEventID 
 
 }
 
-func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, limit int, aggregateTypes ...string) ([]Event, error) {
-	args := []interface{}{afterEventID}
+func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, batchSize int, aggregateTypes ...string) ([]Event, error) {
+	safetyMargin := time.Now().Add(lag)
+	args := []interface{}{afterEventID, safetyMargin}
 	query := `SELECT * FROM events
 	WHERE id > $1
-	AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'`
+	AND created_at <= $2`
 	if len(aggregateTypes) > 0 {
-		query += " AND aggregate_type IN ($2)"
+		query += " AND aggregate_type IN ($3)"
 		args = append(args, aggregateTypes)
 	}
-	args = append(args, limit)
-	query += fmt.Sprintf(" ORDER BY id ASC LIMIT $%d", len(args))
+	query += fmt.Sprintf(" ORDER BY id ASC LIMIT %d", batchSize)
 
-	rows, err := es.db.QueryxContext(ctx, query, args...)
+	rows, err := es.queryEvents(ctx, query, args)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("Unable to get events after %q for %s: %w", afterEventID, aggregateTypes, err)
 		}
+	}
+	return rows, nil
+}
+
+func (es *ESPostgreSQL) queryEvents(ctx context.Context, query string, args []interface{}) ([]Event, error) {
+	rows, err := es.db.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
 	events := []Event{}
 	for rows.Next() {
@@ -233,6 +246,61 @@ func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, limi
 		})
 	}
 	return events, nil
+}
+
+type ForgetRequest struct {
+	AggregateID    string
+	EventKinds     []EventKind
+	SnapshotFields []string
+}
+
+type EventKind struct {
+	Kind   string
+	Fields []string
+}
+
+func (es *ESPostgreSQL) Forget(ctx context.Context, request ForgetRequest) error {
+	for _, evt := range request.EventKinds {
+		sql := joinAndEscape(evt.Fields)
+		sql = fmt.Sprintf("UPDATE events SET body =  body - '{%s}'::text[] WHERE aggregate_id = $1 AND kind = $2", sql)
+		_, err := es.db.ExecContext(ctx, sql, request.AggregateID, evt.Kind)
+		if err != nil {
+			return fmt.Errorf("Unable to forget events: %w", err)
+		}
+	}
+
+	sql := joinAndEscape(request.SnapshotFields)
+	sql = fmt.Sprintf("UPDATE snapshots SET body =  body - '{%s}'::text[] WHERE aggregate_id = $1", sql)
+	_, err := es.db.ExecContext(ctx, sql, request.AggregateID)
+	if err != nil {
+		return fmt.Errorf("Unable to forget snapshots: %w", err)
+	}
+
+	return nil
+}
+
+func joinAndEscape(s []string) string {
+	fields := strings.Join(s, ", ")
+	return strings.ReplaceAll(fields, "'", "''")
+}
+
+func (es *ESPostgreSQL) saveEvent(ctx context.Context, tx *sql.Tx, aggregate Aggregater, tName, eName string, body []byte, idempotencyKey string) error {
+	eventID := xid.New().String()
+	now := time.Now().UTC()
+
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		eventID, aggregate.GetID(), aggregate.GetVersion(), tName, eName, body, idempotencyKey, now)
+	if err != nil {
+		if pgerr, ok := err.(*pq.Error); ok {
+			if pgerr.Code == uniqueViolation {
+				return ErrConcurrentModification
+			}
+		}
+		return fmt.Errorf("Unable to insert event: %w", err)
+	}
+	return nil
 }
 
 func (es *ESPostgreSQL) getSnapshot(ctx context.Context, aggregateID string) (*PgSnapshot, error) {

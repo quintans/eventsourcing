@@ -20,6 +20,8 @@ type EventStore interface {
 	GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error
 	Save(ctx context.Context, aggregate Aggregater, options Options) error
 	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
+	// Forget erases the values of the specified fields
+	Forget(ctx context.Context, request ForgetRequest) error
 }
 
 type Tracker interface {
@@ -107,7 +109,7 @@ func NewPoller(est Tracker, locker Locker, options ...Option) *Poller {
 		est:          est,
 		pollInterval: 500 * time.Millisecond,
 		startFrom:    END,
-		limit:        100,
+		limit:        20,
 		locker:       locker,
 	}
 	for _, o := range options {
@@ -156,7 +158,7 @@ func (p *Poller) Handle(ctx context.Context, handler func(ctx context.Context, e
 				if p.locker.Lock() {
 					defer p.locker.Unlock()
 
-					eid, err := p.retrieve(ctx, handler, afterEventID, p.limit)
+					eid, err := p.retrieve(ctx, handler, afterEventID, "")
 					if err != nil {
 						wait += 2 * wait
 						if wait > maxWait {
@@ -177,40 +179,29 @@ func (p *Poller) Handle(ctx context.Context, handler func(ctx context.Context, e
 	return cancel, nil
 }
 
-func (p *Poller) Drain(ctx context.Context, handler func(ctx context.Context, e Event)) (string, error) {
-	afterEventID, err := p.getAfterEventID(ctx)
-	if err == nil {
-		return "", err
-	}
-	return p.retrieve(ctx, handler, afterEventID, p.limit)
+func (p *Poller) ReplayUntil(ctx context.Context, handler func(ctx context.Context, e Event), untilEventID string) (string, error) {
+	return p.retrieve(ctx, handler, "", untilEventID)
 }
 
-func (p *Poller) getAfterEventID(ctx context.Context) (afterEventID string, err error) {
-	switch p.startFrom {
-	case END:
-		afterEventID, err = p.est.GetLastEventID(ctx)
-		if err != nil {
-			return "", err
-		}
-	case BEGINNING:
-	case SEQUENCE:
-		afterEventID = p.afterEventID
-	}
-	return afterEventID, err
+func (p *Poller) ReplayFromUntil(ctx context.Context, handler func(ctx context.Context, e Event), afterEventID, untilEventID string) (string, error) {
+	return p.retrieve(ctx, handler, afterEventID, untilEventID)
 }
 
-func (p *Poller) retrieve(ctx context.Context, handler func(ctx context.Context, e Event), afterEventID string, limit int) (string, error) {
+func (p *Poller) retrieve(ctx context.Context, handler func(ctx context.Context, e Event), afterEventID, untilEventID string) (string, error) {
 	loop := true
 	for loop {
-		events, err := p.est.GetEvents(ctx, afterEventID, limit)
+		events, err := p.est.GetEvents(ctx, afterEventID, p.limit)
 		if err != nil {
 			return "", err
 		}
 		for _, evt := range events {
 			handler(ctx, evt)
 			afterEventID = evt.ID
+			if evt.ID == untilEventID {
+				return untilEventID, nil
+			}
 		}
-		loop = len(events) == limit
+		loop = len(events) == p.limit
 	}
 	return afterEventID, nil
 }

@@ -1,6 +1,8 @@
 # Event Store
 a simple implementation of an event store using only a database
 
+This an exercise on how we could implement a event store and how this could be used with CQRS.
+
 ## Introduction
 
 The implementation is done using a Postgresql database. 
@@ -78,8 +80,8 @@ Here, Withdraw and Deposit need to be idempotent, but setting the transfer state
 ```go
 func NewTransferReactor(es EventStore) {
     // ...
-	l := NewListener(es)
-	cancel, err := l.Listen(ctx, func(c context.Context, e Event) {
+	l := NewPoller(es)
+	cancel, err := l.Handle(ctx, func(c context.Context, e Event) {
         switch e.Kind {
         case "TransferStarted":
             OnTransferStarted(c, es, e)
@@ -179,25 +181,25 @@ This pattern essentially is modelling the changes to the application as a series
 
 CQRS is an application architecture pattern often used with event sourcing.
 
-How can we use use the current event store?
-
 ### Simple use
 
-For a simple architecture, where we have a small number of projections, we could use the existing event Listener. This event listener pools the database for new events at a regular interval (should be less than 1 second), from a given event id.
-The reactor should take care of persisting the last handled event (watermark), so that in the case of a restart it will pick from the last know event.
-It is also important to note that for each reactor, there can only exist one instance working at a given time.
+For a simple architecture, where we have a small number of projectors, we could use the existing event Listener. This event listener polls the database for new events at a regular interval (should be less than 1 second), from a given event id.
+The projectors should take care of persisting the last handled event, so that in the case of a restart it will pick from the last known event.
+It is also important to note that for each poller+projectors, there can only exist one instance working at a given time.
+
+![CQRS](cqrs-es-simple.png)
 
 
 ### Scalability
 
-As the number of projections increase, so the number of data store poller increase. This will lead to an increase load of the database, due to the polling of the database at a short interval (less than one second).
-At some point, to offload the database we need a new strategy.
+As the number of projectors increase, so the number of data store pollers increase and this will lead to an increase load of the database, due to the polling of the database at a short interval (less than one second).
+At some point the database becomes overloaded with so many queries, that we will need a new strategy.
 
-The offload off the database is accomplished by placing an event bus after the data store poller, and let the event bus deliver the events to the projections, as depicted in the following picture:
+The offload of the database is accomplished by placing an event bus after the data store poller, and let the event bus deliver the events to the projectors, as depicted in the following picture:
 
 ![CQRS](cqrs-es.png)
 
-The data store poller polls the database, and writes into the event bus.
+The data store poller polls the database, and writes the events into the event bus.
 If it fails to write into the event bus, it queries the message for the last message and start polling the database from there.
 If the poller service restarts, it will do the same as before, querying the event bus for the last message.
 
@@ -208,6 +210,27 @@ If the projection restarts, it will just start listening to the event bus from t
 
 ### Replay
 
-Considering that the event bus as a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
-* using data store poller, start consuming the messages
-* when there are messages to consume, start listening the event bus from the last handled message in the data store poller.  
+Considering that the event bus should have a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
+1) get the position of the last consumed message from the event bus
+2) consume events from the event store until we reach the event matching the previous event bus position
+3) resume listening the event bus from the position of 1)  
+
+### GDPR
+
+According to the GDPR rules, we must completely remove the information that can identify a user. Making the information unreadable, by deleting encryption keys, is not enough.
+
+This means that the data stored in the data store has to change, going against the rule that an event store should only be an append only "log".
+Regarding the event-bus, this will not be a problem if we consider a limited retention window for messages (we have 30 days to comply with the GDPR).
+
+```go
+eventStore.Forget(ctx, ForgetRequest{
+    AggregateID: id,
+    EventKinds: []EventKind{
+        {
+            Kind:   "OwnerUpdated",
+            Fields: []string{"owner"},
+        },
+    },
+    SnapshotFields: []string{"owner"},
+})
+```
