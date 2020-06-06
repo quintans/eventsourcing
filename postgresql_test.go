@@ -257,13 +257,13 @@ func TestForget(t *testing.T) {
 
 	err = es.Forget(ctx, ForgetRequest{
 		AggregateID: id,
-		EventKinds: []EventKind{
+		Events: []EventKind{
 			{
 				Kind:   "OwnerUpdated",
 				Fields: []string{"owner"},
 			},
 		},
-		SnapshotFields: []string{"owner"},
+		AggregateFields: []string{"owner"},
 	})
 	require.NoError(t, err)
 

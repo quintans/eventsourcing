@@ -223,14 +223,14 @@ This means that the data stored in the data store has to change, going against t
 Regarding the event-bus, this will not be a problem if we consider a limited retention window for messages (we have 30 days to comply with the GDPR).
 
 ```go
-eventStore.Forget(ctx, ForgetRequest{
+es.Forget(ctx, ForgetRequest{
     AggregateID: id,
-    EventKinds: []EventKind{
+    AggregateFields: []string{"owner"},
+    Events: []EventKind{
         {
             Kind:   "OwnerUpdated",
             Fields: []string{"owner"},
         },
     },
-    SnapshotFields: []string{"owner"},
 })
 ```

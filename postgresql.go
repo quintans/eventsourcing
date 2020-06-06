@@ -249,9 +249,9 @@ func (es *ESPostgreSQL) queryEvents(ctx context.Context, query string, args []in
 }
 
 type ForgetRequest struct {
-	AggregateID    string
-	EventKinds     []EventKind
-	SnapshotFields []string
+	AggregateID     string
+	AggregateFields []string
+	Events          []EventKind
 }
 
 type EventKind struct {
@@ -260,7 +260,7 @@ type EventKind struct {
 }
 
 func (es *ESPostgreSQL) Forget(ctx context.Context, request ForgetRequest) error {
-	for _, evt := range request.EventKinds {
+	for _, evt := range request.Events {
 		sql := joinAndEscape(evt.Fields)
 		sql = fmt.Sprintf("UPDATE events SET body =  body - '{%s}'::text[] WHERE aggregate_id = $1 AND kind = $2", sql)
 		_, err := es.db.ExecContext(ctx, sql, request.AggregateID, evt.Kind)
@@ -269,7 +269,7 @@ func (es *ESPostgreSQL) Forget(ctx context.Context, request ForgetRequest) error
 		}
 	}
 
-	sql := joinAndEscape(request.SnapshotFields)
+	sql := joinAndEscape(request.AggregateFields)
 	sql = fmt.Sprintf("UPDATE snapshots SET body =  body - '{%s}'::text[] WHERE aggregate_id = $1", sql)
 	_, err := es.db.ExecContext(ctx, sql, request.AggregateID)
 	if err != nil {
