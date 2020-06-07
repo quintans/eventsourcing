@@ -94,12 +94,13 @@ func dbSchema() error {
 		kind VARCHAR (50) NOT NULL,
 		body JSONB NOT NULL,
 		idempotency_key VARCHAR (50),
+		labels JSONB NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		UNIQUE (aggregate_id, aggregate_version)
 	);
 	CREATE INDEX aggregate_idx ON events (aggregate_id, aggregate_version);
 	CREATE INDEX idempotency_key_idx ON events (idempotency_key, aggregate_id);
-		
+
 	CREATE TABLE IF NOT EXISTS snapshots(
 		id VARCHAR (50) PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,

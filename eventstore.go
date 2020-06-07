@@ -14,6 +14,8 @@ var (
 
 type Options struct {
 	IdempotencyKey string
+	// Labels tags the event. eg: {"geo": "EU"}
+	Labels map[string]string
 }
 
 type EventStore interface {
@@ -27,7 +29,14 @@ type EventStore interface {
 type Tracker interface {
 	GetLastEventID(ctx context.Context) (string, error)
 	GetEventsForAggregate(ctx context.Context, afterEventID string, aggregateID string, limit int) ([]Event, error)
-	GetEvents(ctx context.Context, afterEventID string, limit int, aggregateTypes ...string) ([]Event, error)
+	GetEvents(ctx context.Context, afterEventID string, limit int, filter Filter) ([]Event, error)
+}
+
+type Filter struct {
+	AggregateTypes []string
+	// Labels filters on top of labels. Every key of the map is ANDed with every OR of the values
+	// eg: {"geo": ["EU", "USA"], "membership": "prime"} equals to:  geo IN ("EU", "USA") AND membership = "prime"
+	Labels map[string][]string
 }
 
 type Aggregater interface {
@@ -190,7 +199,7 @@ func (p *Poller) ReplayFromUntil(ctx context.Context, handler func(ctx context.C
 func (p *Poller) retrieve(ctx context.Context, handler func(ctx context.Context, e Event), afterEventID, untilEventID string) (string, error) {
 	loop := true
 	for loop {
-		events, err := p.est.GetEvents(ctx, afterEventID, p.limit)
+		events, err := p.est.GetEvents(ctx, afterEventID, p.limit, Filter{})
 		if err != nil {
 			return "", err
 		}

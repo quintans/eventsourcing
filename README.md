@@ -192,7 +192,7 @@ CQRS is an application architecture pattern often used with event sourcing.
 
 ### Simple use
 
-For a simple architecture, where we have a small number of projectors, we could use the existing event Listener. This event listener polls the database for new events at a regular interval (should be less than 1 second), from a given event id.
+For a simple architecture, where we have a small number of projectors, we could use only the data store poller. This poller polls the database for new events at a regular interval (should be less than 1 second), for events after a given event id.
 The projectors should take care of persisting the last handled event, so that in the case of a restart it will pick from the last known event.
 It is also important to note that for each poller+projectors, there can only exist one instance working at a given time.
 
@@ -201,8 +201,8 @@ It is also important to note that for each poller+projectors, there can only exi
 
 ### Scalability
 
-As the number of projectors increase, so the number of data store pollers increase and this will lead to an increase load of the database, due to the polling of the database at a short interval (less than one second).
-At some point the database becomes overloaded with so many queries, that we will need a new strategy.
+As the number of projectors increase, so the number of pollers increase and this will lead to an increase load of the database, due to the polling of the database at short intervals.
+At some point the database becomes overloaded with so many queries, that we need a new strategy.
 
 The offload of the database is accomplished by placing an event bus after the data store poller, and let the event bus deliver the events to the projectors, as depicted in the following picture:
 
@@ -215,7 +215,12 @@ If the poller service restarts, it will do the same as before, querying the even
 On the projection side it is the same as before, but now with the extra care to not process already delivered events.
 This is accomplished by ignoring events that are lesser or equal than the last handled event.
 
-If the projection restarts, it will just start listening to the event bus from the last event. 
+If the projection restarts, it will just start listening to the event bus from the last event.
+
+Depending on the rate of events being written in the event store, the poller may not be able to keep up and becomes a bottleneck.
+When this happens we need to create more polling services that don't overlap when polling event.
+Overlapping can be avoided by filtering over metadata.
+Events can be stored with with generic labels, that in turn can be used to filter the events. Care should be taken so that we don't save contradicting labels in an aggregate.
 
 ### Replay
 

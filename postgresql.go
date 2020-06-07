@@ -1,11 +1,13 @@
 package eventstore
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,8 +135,12 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options 
 			if err != nil {
 				return err
 			}
+			labels, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
 
-			err = es.saveEvent(c, tx, aggregate, tName, nameFor(e), body, options.IdempotencyKey)
+			err = es.saveEvent(c, tx, aggregate, tName, nameFor(e), body, options.IdempotencyKey, labels)
 			if err != nil {
 				return err
 			}
@@ -202,22 +208,31 @@ func (es *ESPostgreSQL) GetEventsForAggregate(ctx context.Context, afterEventID 
 
 }
 
-func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, batchSize int, aggregateTypes ...string) ([]Event, error) {
+func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, batchSize int, filter Filter) ([]Event, error) {
 	safetyMargin := time.Now().Add(lag)
 	args := []interface{}{afterEventID, safetyMargin}
-	query := `SELECT * FROM events
-	WHERE id > $1
-	AND created_at <= $2`
-	if len(aggregateTypes) > 0 {
-		query += " AND aggregate_type IN ($3)"
-		args = append(args, aggregateTypes)
+	var query bytes.Buffer
+	query.WriteString("SELECT * FROM events WHERE id > $1 AND created_at <= $2")
+	if len(filter.AggregateTypes) > 0 {
+		query.WriteString(" AND aggregate_type IN ($3)")
+		args = append(args, filter.AggregateTypes)
 	}
-	query += fmt.Sprintf(" ORDER BY id ASC LIMIT %d", batchSize)
+	if len(filter.Labels) > 0 {
+		for k, v := range filter.Labels {
+			k = escape(k)
 
-	rows, err := es.queryEvents(ctx, query, args)
+			args = append(args, v)
+			query.WriteString(fmt.Sprintf(" AND metadata->'%s' IN ($%d)", k, len(args)+1))
+			args = append(args, filter.AggregateTypes)
+		}
+	}
+	query.WriteString(" ORDER BY id ASC LIMIT ")
+	query.WriteString(strconv.Itoa(batchSize))
+
+	rows, err := es.queryEvents(ctx, query.String(), args)
 	if err != nil {
 		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("Unable to get events after %q for %s: %w", afterEventID, aggregateTypes, err)
+			return nil, fmt.Errorf("Unable to get events after %q for %s: %w", afterEventID, filter.AggregateTypes, err)
 		}
 	}
 	return rows, nil
@@ -281,17 +296,21 @@ func (es *ESPostgreSQL) Forget(ctx context.Context, request ForgetRequest) error
 
 func joinAndEscape(s []string) string {
 	fields := strings.Join(s, ", ")
-	return strings.ReplaceAll(fields, "'", "''")
+	return escape(fields)
 }
 
-func (es *ESPostgreSQL) saveEvent(ctx context.Context, tx *sql.Tx, aggregate Aggregater, tName, eName string, body []byte, idempotencyKey string) error {
+func escape(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+func (es *ESPostgreSQL) saveEvent(ctx context.Context, tx *sql.Tx, aggregate Aggregater, tName, eName string, body []byte, idempotencyKey string, labels []byte) error {
 	eventID := xid.New().String()
 	now := time.Now().UTC()
 
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		eventID, aggregate.GetID(), aggregate.GetVersion(), tName, eName, body, idempotencyKey, now)
+		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		eventID, aggregate.GetID(), aggregate.GetVersion(), tName, eName, body, idempotencyKey, labels, now)
 	if err != nil {
 		if pgerr, ok := err.(*pq.Error); ok {
 			if pgerr.Code == uniqueViolation {
@@ -369,6 +388,7 @@ type PgEvent struct {
 	Kind             string          `db:"kind"`
 	Body             json.RawMessage `db:"body"`
 	IdempotencyKey   string          `db:"idempotency_key"`
+	Labels           json.RawMessage `db:"labels"`
 	CreatedAt        time.Time       `db:"created_at"`
 }
 
