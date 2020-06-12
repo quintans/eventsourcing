@@ -135,7 +135,7 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options 
 			if err != nil {
 				return err
 			}
-			labels, err := json.Marshal(e)
+			labels, err := json.Marshal(options.Labels)
 			if err != nil {
 				return err
 			}
@@ -201,7 +201,7 @@ func (es *ESPostgreSQL) GetEventsForAggregate(ctx context.Context, afterEventID 
 	ORDER BY id ASC LIMIT $4
 	`, afterEventID, aggregateID, safetyMargin, batchSize); err != nil {
 		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("Unable to get events after %q: %w", afterEventID, err)
+			return nil, fmt.Errorf("Unable to get events after '%s': %w", afterEventID, err)
 		}
 	}
 	return events, nil
@@ -221,9 +221,17 @@ func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, batc
 		for k, v := range filter.Labels {
 			k = escape(k)
 
-			args = append(args, v)
-			query.WriteString(fmt.Sprintf(" AND metadata->'%s' IN ($%d)", k, len(args)+1))
-			args = append(args, filter.AggregateTypes)
+			query.WriteString(" AND (")
+			first := true
+			for _, x := range v {
+				if !first {
+					query.WriteString(" OR ")
+				}
+				first = false
+				x = escape(x)
+				query.WriteString(fmt.Sprintf(`labels  @> '{"%s": "%s"}'`, k, x))
+			}
+			query.WriteString(")")
 		}
 	}
 	query.WriteString(" ORDER BY id ASC LIMIT ")
@@ -232,7 +240,7 @@ func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, batc
 	rows, err := es.queryEvents(ctx, query.String(), args)
 	if err != nil {
 		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("Unable to get events after %q for %s: %w", afterEventID, filter.AggregateTypes, err)
+			return nil, fmt.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
 		}
 	}
 	return rows, nil
@@ -257,6 +265,7 @@ func (es *ESPostgreSQL) queryEvents(ctx context.Context, query string, args []in
 			AggregateType:    pg.AggregateType,
 			Kind:             pg.Kind,
 			Body:             pg.Body,
+			Labels:           pg.Labels,
 			CreatedAt:        pg.CreatedAt,
 		})
 	}
@@ -328,7 +337,7 @@ func (es *ESPostgreSQL) getSnapshot(ctx context.Context, aggregateID string) (*P
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("Unable to get snapshot for aggregate %q: %w", aggregateID, err)
+		return nil, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
 	return snap, nil
 }
@@ -373,29 +382,29 @@ func (es *ESPostgreSQL) getEvents(ctx context.Context, aggregateID string, snapV
 	events := []PgEvent{}
 	if err := es.db.SelectContext(ctx, &events, query, args...); err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("Aggregate %q was not found: %w", aggregateID, err)
+			return nil, fmt.Errorf("Aggregate '%s' was not found: %w", aggregateID, err)
 		}
-		return nil, fmt.Errorf("Unable to get events for Aggregate %q: %w", aggregateID, err)
+		return nil, fmt.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
 	return events, nil
 }
 
 type PgEvent struct {
-	ID               string          `db:"id"`
-	AggregateID      string          `db:"aggregate_id"`
-	AggregateVersion int             `db:"aggregate_version"`
-	AggregateType    string          `db:"aggregate_type"`
-	Kind             string          `db:"kind"`
-	Body             json.RawMessage `db:"body"`
-	IdempotencyKey   string          `db:"idempotency_key"`
-	Labels           json.RawMessage `db:"labels"`
-	CreatedAt        time.Time       `db:"created_at"`
+	ID               string    `db:"id"`
+	AggregateID      string    `db:"aggregate_id"`
+	AggregateVersion int       `db:"aggregate_version"`
+	AggregateType    string    `db:"aggregate_type"`
+	Kind             string    `db:"kind"`
+	Body             Json      `db:"body"`
+	IdempotencyKey   string    `db:"idempotency_key"`
+	Labels           Json      `db:"labels"`
+	CreatedAt        time.Time `db:"created_at"`
 }
 
 type PgSnapshot struct {
-	ID               string          `db:"id"`
-	AggregateID      string          `db:"aggregate_id"`
-	AggregateVersion int             `db:"aggregate_version"`
-	Body             json.RawMessage `db:"body"`
-	CreatedAt        time.Time       `db:"created_at"`
+	ID               string    `db:"id"`
+	AggregateID      string    `db:"aggregate_id"`
+	AggregateVersion int       `db:"aggregate_version"`
+	Body             Json      `db:"body"`
+	CreatedAt        time.Time `db:"created_at"`
 }

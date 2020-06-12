@@ -100,6 +100,7 @@ func dbSchema() error {
 	);
 	CREATE INDEX aggregate_idx ON events (aggregate_id, aggregate_version);
 	CREATE INDEX idempotency_key_idx ON events (idempotency_key, aggregate_id);
+	CREATE INDEX labels_idx ON events USING GIN (labels jsonb_path_ops);
 
 	CREATE TABLE IF NOT EXISTS snapshots(
 		id VARCHAR (50) PRIMARY KEY,
@@ -174,7 +175,7 @@ func TestListener(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	lm := NewPoller(es, MockLocker{}, StartFrom(BEGINNING))
+	lm := NewPoller(es, MockLocker{}, WithStartFrom(BEGINNING))
 
 	done := make(chan struct{})
 	lm.Handle(ctx, func(ctx context.Context, e Event) {
@@ -198,7 +199,7 @@ func TestListener(t *testing.T) {
 	assert.Equal(t, OPEN, acc2.Status)
 }
 
-func TestListenerWithType(t *testing.T) {
+func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
 	es, err := NewESPostgreSQL(dbURL, 3)
 	require.NoError(t, err)
@@ -215,7 +216,7 @@ func TestListenerWithType(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	p := NewPoller(es, MockLocker{}, StartFrom(BEGINNING), AggregateTypes("Account"))
+	p := NewPoller(es, MockLocker{}, WithStartFrom(BEGINNING), WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
 	p.Handle(ctx, func(ctx context.Context, e Event) {
@@ -236,6 +237,55 @@ func TestListenerWithType(t *testing.T) {
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, 4, acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
+	assert.Equal(t, OPEN, acc2.Status)
+}
+
+func TestListenerWithLabels(t *testing.T) {
+	ctx := context.Background()
+	es, err := NewESPostgreSQL(dbURL, 3)
+	require.NoError(t, err)
+
+	id := uuid.New().String()
+	acc := CreateAccount("Paulo", id, 100)
+	acc.Deposit(10)
+	acc.Deposit(20)
+	err = es.Save(ctx, acc, Options{
+		Labels: map[string]string{
+			"geo": "EU",
+		},
+	})
+	acc.Deposit(5)
+	err = es.Save(ctx, acc, Options{
+		Labels: map[string]string{
+			"geo": "US",
+		},
+	})
+	require.NoError(t, err)
+	time.Sleep(time.Second)
+
+	acc2 := NewAccount()
+	counter := 0
+	p := NewPoller(es, MockLocker{}, WithStartFrom(BEGINNING), WithLabels(NewLabel("geo", "EU")))
+
+	done := make(chan struct{})
+	p.Handle(ctx, func(ctx context.Context, e Event) {
+		if e.AggregateID == id {
+			acc2.ApplyChangeFromHistory(e)
+			counter++
+			if counter == 3 {
+				close(done)
+			}
+		}
+	})
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+	}
+	assert.Equal(t, 3, counter)
+	assert.Equal(t, id, acc2.ID)
+	assert.Equal(t, 3, acc2.Version)
+	assert.Equal(t, int64(130), acc2.Balance)
 	assert.Equal(t, OPEN, acc2.Status)
 }
 
@@ -291,7 +341,7 @@ func TestForget(t *testing.T) {
 	}
 }
 
-func _BenchmarkDepositAndSave2(b *testing.B) {
+func BenchmarkDepositAndSave2(b *testing.B) {
 	es, _ := NewESPostgreSQL(dbURL, 3)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()

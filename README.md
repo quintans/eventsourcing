@@ -41,8 +41,10 @@ ORDER BY id ASC
 LIMIT 100
 ```
 
-
 This polling strategy can be used both with SQL and NoSQL databases, like Postgresql, Cockroach or MongoDB, to name a few.
+
+As a side note I would like to say that I went for the polling strategy because it fits well for SQL and NoSQL generic databases and it is simple to understand and straight forward to implement.
+There are other solutions that might work better if we took advantage of specific features that some database vendors provide. 
 
 ### IDs
 
@@ -220,7 +222,8 @@ If the projection restarts, it will just start listening to the event bus from t
 Depending on the rate of events being written in the event store, the poller may not be able to keep up and becomes a bottleneck.
 When this happens we need to create more polling services that don't overlap when polling event.
 Overlapping can be avoided by filtering over metadata.
-Events can be stored with with generic labels, that in turn can be used to filter the events. Care should be taken so that we don't save contradicting labels in an aggregate.
+What this metadata can be and how it is stored will depend in your business case.
+As an implementation example, for a very broad spectrum of problem, events can be stored with with generic labels, that in turn can be used to filter the events. Each poller would then be sending events into its own event bus topic.
 
 ### Replay
 

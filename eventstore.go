@@ -39,6 +39,18 @@ type Filter struct {
 	Labels map[string][]string
 }
 
+func NewLabel(key, value string) Label {
+	return Label{
+		Key:   key,
+		Value: value,
+	}
+}
+
+type Label struct {
+	Key   string
+	Value string
+}
+
 type Aggregater interface {
 	GetID() string
 	GetVersion() int
@@ -54,8 +66,9 @@ type Event struct {
 	AggregateVersion int
 	AggregateType    string
 	Kind             string
-	Body             []byte
+	Body             Json
 	IdempotencyKey   string
+	Labels           Json
 	CreatedAt        time.Time
 }
 
@@ -80,35 +93,63 @@ type Cancel func()
 
 type Option func(*Poller)
 
-func PollInterval(pi time.Duration) Option {
-	return func(l *Poller) {
-		l.pollInterval = pi
+func WithPollInterval(pi time.Duration) Option {
+	return func(p *Poller) {
+		p.pollInterval = pi
 	}
 }
 
-func StartFrom(from Start) Option {
-	return func(l *Poller) {
-		l.startFrom = from
+func WithStartFrom(from Start) Option {
+	return func(p *Poller) {
+		p.startFrom = from
 	}
 }
 
-func AfterEventID(eventID string) Option {
-	return func(l *Poller) {
-		l.afterEventID = eventID
-		l.startFrom = SEQUENCE
+func WithAfterEventID(eventID string) Option {
+	return func(p *Poller) {
+		p.afterEventID = eventID
+		p.startFrom = SEQUENCE
 	}
 }
 
-func AggregateTypes(at ...string) Option {
-	return func(l *Poller) {
-		l.aggregateTypes = at
+func WithFilter(filter Filter) Option {
+	return func(p *Poller) {
+		p.filter = filter
 	}
 }
 
-func Limit(limit int) Option {
-	return func(l *Poller) {
+func WithAggregateTypes(at ...string) Option {
+	return func(p *Poller) {
+		p.filter.AggregateTypes = at
+	}
+}
+
+func WithLabelMap(labels map[string][]string) Option {
+	return func(p *Poller) {
+		p.filter.Labels = labels
+	}
+}
+
+func WithLabels(labels ...Label) Option {
+	return func(p *Poller) {
+		if p.filter.Labels == nil {
+			p.filter.Labels = map[string][]string{}
+		}
+		f := p.filter.Labels
+		for _, v := range labels {
+			a := f[v.Key]
+			if a == nil {
+				a = []string{}
+			}
+			f[v.Key] = append(a, v.Value)
+		}
+	}
+}
+
+func WithLimit(limit int) Option {
+	return func(p *Poller) {
 		if limit > 0 {
-			l.limit = limit
+			p.limit = limit
 		}
 	}
 }
@@ -120,6 +161,7 @@ func NewPoller(est Tracker, locker Locker, options ...Option) *Poller {
 		startFrom:    END,
 		limit:        20,
 		locker:       locker,
+		filter:       Filter{},
 	}
 	for _, o := range options {
 		o(p)
@@ -128,13 +170,13 @@ func NewPoller(est Tracker, locker Locker, options ...Option) *Poller {
 }
 
 type Poller struct {
-	est            Tracker
-	pollInterval   time.Duration
-	startFrom      Start
-	afterEventID   string
-	aggregateTypes []string
-	limit          int
-	locker         Locker
+	est          Tracker
+	pollInterval time.Duration
+	startFrom    Start
+	afterEventID string
+	filter       Filter
+	limit        int
+	locker       Locker
 }
 
 func (p *Poller) Handle(ctx context.Context, handler func(ctx context.Context, e Event)) (Cancel, error) {
@@ -199,7 +241,7 @@ func (p *Poller) ReplayFromUntil(ctx context.Context, handler func(ctx context.C
 func (p *Poller) retrieve(ctx context.Context, handler func(ctx context.Context, e Event), afterEventID, untilEventID string) (string, error) {
 	loop := true
 	for loop {
-		events, err := p.est.GetEvents(ctx, afterEventID, p.limit, Filter{})
+		events, err := p.est.GetEvents(ctx, afterEventID, p.limit, p.filter)
 		if err != nil {
 			return "", err
 		}
