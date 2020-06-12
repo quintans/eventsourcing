@@ -211,11 +211,12 @@ The offload of the database is accomplished by placing an event bus after the da
 ![CQRS](cqrs-es.png)
 
 The data store poller polls the database, and writes the events into the event bus.
-If it fails to write into the event bus, it queries the message for the last message and start polling the database from there.
+If it fails to write into the event bus, it queries the event bus for the last message and start polling the database from there.
 If the poller service restarts, it will do the same as before, querying the event bus for the last message.
+> If it is not possible to get the last published message to the event bus, we can store it in a database.
+> Writing repeated messages to the event bus is not a concern, since the used event bus must guarantee `at least once` delivery. It is the job of the projector to be idempotent, discarding repeated messages.
 
-On the projection side it is the same as before, but now with the extra care to not process already delivered events.
-This is accomplished by ignoring events that are lesser or equal than the last handled event.
+On the projection side it is pretty much the same as in the Simple use, but now we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages. 
 
 If the projection restarts, it will just start listening to the event bus from the last event.
 
