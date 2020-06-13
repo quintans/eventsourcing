@@ -113,49 +113,57 @@ func (es *ESPostgreSQL) Save(ctx context.Context, aggregate Aggregater, options 
 	oldVersion := version
 
 	var eventID string
-	var takeSnapshot bool
 	defer func() {
 		if err != nil {
 			aggregate.SetVersion(oldVersion)
 			return
 		}
-		if takeSnapshot {
-			snap, err := buildSnapshot(aggregate, eventID)
-			if err != nil {
+		if version > es.snapshotThreshold-1 {
+			mod := oldVersion % es.snapshotThreshold
+			delta := version - oldVersion + mod
+			if delta >= es.snapshotThreshold {
+				var snap *PgSnapshot
+				snap, err = buildSnapshot(aggregate, eventID)
+				if err != nil {
+					return
+				}
 				go es.saveSnapshot(ctx, snap)
 			}
 		}
 	}()
 
-	err = es.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
-		for _, e := range events {
-			version++
-			aggregate.SetVersion(version)
-			body, err := json.Marshal(e)
-			if err != nil {
-				return err
-			}
-			labels, err := json.Marshal(options.Labels)
-			if err != nil {
-				return err
-			}
+	labels, err := json.Marshal(options.Labels)
+	if err != nil {
+		return err
+	}
 
-			err = es.saveEvent(c, tx, aggregate, tName, nameFor(e), body, options.IdempotencyKey, labels)
-			if err != nil {
-				return err
-			}
-
-			if version > es.snapshotThreshold-1 &&
-				version%es.snapshotThreshold == 0 {
-				takeSnapshot = true
-			}
-
-		}
-		aggregate.ClearEvents()
+	size := len(events)
+	if size == 0 {
 		return nil
-	})
+	}
+	ers := make([]EventRecord, size)
+	for i := 0; i < size; i++ {
+		e := events[i]
+		version++
+		aggregate.SetVersion(version)
+		body, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		ers[i] = EventRecord{
+			AggregateID: aggregate.GetID(),
+			Version:     aggregate.GetVersion(),
+			Name:        nameFor(e),
+			Body:        body,
+		}
+	}
+	eventID, err = es.saveEvent(ctx, tName, ers, options.IdempotencyKey, labels)
+	if err != nil {
+		return err
+	}
 
-	return err
+	aggregate.ClearEvents()
+	return nil
 }
 
 func nameFor(x interface{}) string {
@@ -214,8 +222,17 @@ func (es *ESPostgreSQL) GetEvents(ctx context.Context, afterEventID string, batc
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > $1 AND created_at <= $2")
 	if len(filter.AggregateTypes) > 0 {
-		query.WriteString(" AND aggregate_type IN ($3)")
-		args = append(args, filter.AggregateTypes)
+		query.WriteString(" AND (")
+		first := true
+		for _, v := range filter.AggregateTypes {
+			if !first {
+				query.WriteString(" OR ")
+			}
+			first = false
+			args = append(args, v)
+			query.WriteString(fmt.Sprintf("aggregate_type = $%d", len(args)))
+		}
+		query.WriteString(")")
 	}
 	if len(filter.Labels) > 0 {
 		for k, v := range filter.Labels {
@@ -312,23 +329,38 @@ func escape(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
-func (es *ESPostgreSQL) saveEvent(ctx context.Context, tx *sql.Tx, aggregate Aggregater, tName, eName string, body []byte, idempotencyKey string, labels []byte) error {
-	eventID := xid.New().String()
-	now := time.Now().UTC()
+type EventRecord struct {
+	AggregateID string
+	Version     int
+	Name        string
+	Body        []byte
+}
 
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		eventID, aggregate.GetID(), aggregate.GetVersion(), tName, eName, body, idempotencyKey, labels, now)
-	if err != nil {
-		if pgerr, ok := err.(*pq.Error); ok {
-			if pgerr.Code == uniqueViolation {
-				return ErrConcurrentModification
+func (es *ESPostgreSQL) saveEvent(ctx context.Context, tName string, eRec []EventRecord, idempotencyKey string, labels []byte) (string, error) {
+	var eID string
+	er := es.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
+		var eventID string
+		for _, e := range eRec {
+			eventID = xid.New().String()
+			now := time.Now().UTC()
+
+			_, err := tx.ExecContext(c,
+				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				eventID, e.AggregateID, e.Version, tName, e.Name, e.Body, idempotencyKey, labels, now)
+			if err != nil {
+				if pgerr, ok := err.(*pq.Error); ok {
+					if pgerr.Code == uniqueViolation {
+						return ErrConcurrentModification
+					}
+				}
+				return fmt.Errorf("Unable to insert event: %w", err)
 			}
 		}
-		return fmt.Errorf("Unable to insert event: %w", err)
-	}
-	return nil
+		eID = eventID
+		return nil
+	})
+	return eID, er
 }
 
 func (es *ESPostgreSQL) getSnapshot(ctx context.Context, aggregateID string) (*PgSnapshot, error) {

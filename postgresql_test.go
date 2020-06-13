@@ -140,6 +140,14 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
+	// giving time for the snapshots to write
+	time.Sleep(100 * time.Millisecond)
+
+	count := 0
+	err = es.db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
 	evts := []PgEvent{}
 	err = es.db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
@@ -306,6 +314,31 @@ func TestForget(t *testing.T) {
 	err = es.Save(ctx, acc, Options{})
 	require.NoError(t, err)
 
+	// giving time for the snapshots to write
+	time.Sleep(100 * time.Millisecond)
+
+	evts := []Json{}
+	err = es.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
+	require.NoError(t, err)
+	assert.Equal(t, 2, len(evts))
+	for _, v := range evts {
+		ou := &OwnerUpdated{}
+		err = json.Unmarshal(v, ou)
+		require.NoError(t, err)
+		assert.NotEmpty(t, ou.Owner)
+	}
+
+	bodies := []Json{}
+	err = es.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
+	require.NoError(t, err)
+	assert.Equal(t, 2, len(bodies))
+	for _, v := range bodies {
+		a := NewAccount()
+		err = json.Unmarshal(v, a)
+		require.NoError(t, err)
+		assert.NotEmpty(t, a.Owner)
+	}
+
 	err = es.Forget(ctx, ForgetRequest{
 		AggregateID: id,
 		Events: []EventKind{
@@ -318,10 +351,10 @@ func TestForget(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	evts := []json.RawMessage{}
+	evts = []Json{}
 	err = es.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(evts))
+	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
 		ou := &OwnerUpdated{}
 		err = json.Unmarshal(v, ou)
@@ -329,10 +362,10 @@ func TestForget(t *testing.T) {
 		assert.Empty(t, ou.Owner)
 	}
 
-	bodies := []json.RawMessage{}
+	bodies = []Json{}
 	err = es.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(evts))
+	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
 		a := NewAccount()
 		err = json.Unmarshal(v, a)
