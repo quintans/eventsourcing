@@ -218,12 +218,11 @@ If the poller service restarts, it will do the same as before, querying the even
 
 On the projection side it is pretty much the same as in the Simple use, but now we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages. 
 
-If the projection restarts, it will just start listening to the event bus from the last event.
-
 Depending on the rate of events being written in the event store, the poller may not be able to keep up and becomes a bottleneck.
 When this happens we need to create more polling services that don't overlap when polling event.
 Overlapping can be avoided by filtering over metadata.
 What this metadata can be and how it is stored will depend in your business case.
+A good example is to have a poller per set of aggregates types of per aggregate type.
 As an implementation example, for a very broad spectrum of problem, events can be stored with with generic labels, that in turn can be used to filter the events. Each poller would then be sending events into its own event bus topic.
 
 ### Replay
