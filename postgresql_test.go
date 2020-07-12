@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/poller"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
@@ -127,8 +129,9 @@ func (m MockLocker) Unlock() {}
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	es, err := NewESPostgreSQL(dbURL, 3)
+	r, err := NewPgEsRepository(dbURL)
 	require.NoError(t, err)
+	es := NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -144,12 +147,12 @@ func TestSaveAndGet(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	count := 0
-	err = es.db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
+	err = r.db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
-	evts := []PgEvent{}
-	err = es.db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
+	evts := []common.PgEvent{}
+	err = r.db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	require.Equal(t, 4, len(evts))
 	assert.Equal(t, "AccountCreated", evts[0].Kind)
@@ -168,8 +171,9 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestListener(t *testing.T) {
 	ctx := context.Background()
-	es, err := NewESPostgreSQL(dbURL, 3)
+	r, err := NewPgEsRepository(dbURL)
 	require.NoError(t, err)
+	es := NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -183,10 +187,12 @@ func TestListener(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	lm := NewPoller(es, MockLocker{}, WithStartFrom(BEGINNING))
+	tracker, err := poller.NewPgRepository(dbURL)
+	require.NoError(t, err)
+	lm := poller.New(tracker, MockLocker{}, poller.WithStartFrom(poller.BEGINNING))
 
 	done := make(chan struct{})
-	lm.Handle(ctx, func(ctx context.Context, e Event) {
+	lm.Handle(ctx, func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -209,8 +215,9 @@ func TestListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	es, err := NewESPostgreSQL(dbURL, 3)
+	r, err := NewPgEsRepository(dbURL)
 	require.NoError(t, err)
+	es := NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -224,10 +231,12 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	p := NewPoller(es, MockLocker{}, WithStartFrom(BEGINNING), WithAggregateTypes("Account"))
+	tracker, err := poller.NewPgRepository(dbURL)
+	require.NoError(t, err)
+	p := poller.New(tracker, MockLocker{}, poller.WithStartFrom(poller.BEGINNING), poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
-	p.Handle(ctx, func(ctx context.Context, e Event) {
+	p.Handle(ctx, func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -250,8 +259,9 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	es, err := NewESPostgreSQL(dbURL, 3)
+	r, err := NewPgEsRepository(dbURL)
 	require.NoError(t, err)
+	es := NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -273,10 +283,13 @@ func TestListenerWithLabels(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	p := NewPoller(es, MockLocker{}, WithStartFrom(BEGINNING), WithLabels(NewLabel("geo", "EU")))
+
+	tracker, err := poller.NewPgRepository(dbURL)
+	require.NoError(t, err)
+	p := poller.New(tracker, MockLocker{}, poller.WithStartFrom(poller.BEGINNING), poller.WithLabels(common.NewLabel("geo", "EU")))
 
 	done := make(chan struct{})
-	p.Handle(ctx, func(ctx context.Context, e Event) {
+	p.Handle(ctx, func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -299,8 +312,9 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	es, err := NewESPostgreSQL(dbURL, 3)
+	r, err := NewPgEsRepository(dbURL)
 	require.NoError(t, err)
+	es := NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -317,8 +331,8 @@ func TestForget(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	evts := []Json{}
-	err = es.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
+	evts := []common.Json{}
+	err = r.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -328,8 +342,8 @@ func TestForget(t *testing.T) {
 		assert.NotEmpty(t, ou.Owner)
 	}
 
-	bodies := []Json{}
-	err = es.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
+	bodies := []common.Json{}
+	err = r.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
@@ -351,8 +365,8 @@ func TestForget(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	evts = []Json{}
-	err = es.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
+	evts = []common.Json{}
+	err = r.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -362,8 +376,8 @@ func TestForget(t *testing.T) {
 		assert.Empty(t, ou.Owner)
 	}
 
-	bodies = []Json{}
-	err = es.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
+	bodies = []common.Json{}
+	err = r.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
@@ -375,7 +389,8 @@ func TestForget(t *testing.T) {
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
-	es, _ := NewESPostgreSQL(dbURL, 3)
+	r, _ := NewPgEsRepository(dbURL)
+	es := NewESPostgreSQL(r, 3)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New().String()

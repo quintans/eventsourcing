@@ -1,4 +1,4 @@
-package eventstore
+package common
 
 import (
 	"encoding/json"
