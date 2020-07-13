@@ -196,7 +196,9 @@ CQRS is an application architecture pattern often used with event sourcing.
 
 For a simple architecture, where we have a small number of projectors, we could use only the data store poller. This poller polls the database for new events at a regular interval (should be less than 1 second), for events after a given event id.
 The projectors should take care of persisting the last handled event, so that in the case of a restart it will pick from the last known event.
-It is also important to note that for each poller+projectors, there can only exist one instance working at a given time.
+It is also important to note that for each poller+projectors, there can only exist one instance working at a given time, to guarantee that for one aggregate the events are processed in order (if and event is not processed in order we might end up with corrupt data).
+
+> we could partition the events over a know number of projector instances, manually scaling up or down according to the volume of traffic.
 
 ![CQRS](cqrs-es-simple.png)
 
@@ -216,7 +218,8 @@ If the poller service restarts, it will do the same as before, querying the even
 > If it is not possible to get the last published message to the event bus, we can store it in a database.
 > Writing repeated messages to the event bus is not a concern, since the used event bus must guarantee `at least once` delivery. It is the job of the projector to be idempotent, discarding repeated messages.
 
-On the projection side it is pretty much the same as in the Simple use, but now we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages. 
+On the projection side it is pretty much the same as in the Simple use, but now we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages.
+Improving even further, we could lift the restriction of a projector single instance by using a message bus with an ordered keyed partition, like Apache Kafka. This would avoid different instances handle events for the same aggregate, because the same projector instance would be used for the same aggregate.
 
 Depending on the rate of events being written in the event store, the poller may not be able to keep up and becomes a bottleneck.
 When this happens we need to create more polling services that don't overlap when polling event.
