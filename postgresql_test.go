@@ -1,4 +1,4 @@
-package eventstore
+package eventstore_test
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/poller"
 	"github.com/stretchr/testify/assert"
@@ -127,32 +128,45 @@ func (m MockLocker) Lock() bool {
 
 func (m MockLocker) Unlock() {}
 
+func ping(dburl string) (*sqlx.DB, error) {
+	db, err := sqlx.Open("postgres", dburl)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r, err := NewPgEsRepository(dbURL)
+	r, err := eventstore.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := NewESPostgreSQL(r, 3)
+	es := eventstore.NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, eventstore.Options{})
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
+	db, err := ping(dbURL)
+	require.NoError(t, err)
 	count := 0
-	err = r.db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
+	err = db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
 	evts := []common.PgEvent{}
-	err = r.db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
+	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	require.Equal(t, 4, len(evts))
 	assert.Equal(t, "AccountCreated", evts[0].Kind)
@@ -171,17 +185,17 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestListener(t *testing.T) {
 	ctx := context.Background()
-	r, err := NewPgEsRepository(dbURL)
+	r, err := eventstore.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := NewESPostgreSQL(r, 3)
+	es := eventstore.NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, eventstore.Options{})
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -215,17 +229,17 @@ func TestListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r, err := NewPgEsRepository(dbURL)
+	r, err := eventstore.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := NewESPostgreSQL(r, 3)
+	es := eventstore.NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, eventstore.Options{})
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -259,21 +273,21 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r, err := NewPgEsRepository(dbURL)
+	r, err := eventstore.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := NewESPostgreSQL(r, 3)
+	es := eventstore.NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, Options{
+	err = es.Save(ctx, acc, eventstore.Options{
 		Labels: map[string]string{
 			"geo": "EU",
 		},
 	})
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, Options{
+	err = es.Save(ctx, acc, eventstore.Options{
 		Labels: map[string]string{
 			"geo": "US",
 		},
@@ -312,27 +326,29 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r, err := NewPgEsRepository(dbURL)
+	r, err := eventstore.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := NewESPostgreSQL(r, 3)
+	es := eventstore.NewESPostgreSQL(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, eventstore.Options{})
 	acc.Deposit(5)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")
-	err = es.Save(ctx, acc, Options{})
+	err = es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
+	db, err := ping(dbURL)
+	require.NoError(t, err)
 	evts := []common.Json{}
-	err = r.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
+	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -343,7 +359,7 @@ func TestForget(t *testing.T) {
 	}
 
 	bodies := []common.Json{}
-	err = r.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
+	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
@@ -353,9 +369,9 @@ func TestForget(t *testing.T) {
 		assert.NotEmpty(t, a.Owner)
 	}
 
-	err = es.Forget(ctx, ForgetRequest{
+	err = es.Forget(ctx, eventstore.ForgetRequest{
 		AggregateID: id,
-		Events: []EventKind{
+		Events: []eventstore.EventKind{
 			{
 				Kind:   "OwnerUpdated",
 				Fields: []string{"owner"},
@@ -366,7 +382,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 
 	evts = []common.Json{}
-	err = r.db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
+	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -377,7 +393,7 @@ func TestForget(t *testing.T) {
 	}
 
 	bodies = []common.Json{}
-	err = r.db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
+	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
@@ -389,8 +405,8 @@ func TestForget(t *testing.T) {
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
-	r, _ := NewPgEsRepository(dbURL)
-	es := NewESPostgreSQL(r, 3)
+	r, _ := eventstore.NewPgEsRepository(dbURL)
+	es := eventstore.NewESPostgreSQL(r, 3)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New().String()
@@ -398,7 +414,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 
 		for pb.Next() {
 			acc.Deposit(10)
-			_ = es.Save(ctx, acc, Options{})
+			_ = es.Save(ctx, acc, eventstore.Options{})
 		}
 	})
 }

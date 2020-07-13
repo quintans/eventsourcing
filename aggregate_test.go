@@ -1,4 +1,8 @@
-package eventstore
+package eventstore_test
+
+import (
+	"github.com/quintans/eventstore"
+)
 
 type Status string
 
@@ -32,25 +36,23 @@ func CreateAccount(owner string, id string, money int64) *Account {
 		Balance: money,
 		Owner:   owner,
 	}
-	a.RootAggregate = NewRootAggregate(a, id, 0)
-	a.events = []interface{}{
-		AccountCreated{
-			ID:    id,
-			Money: money,
-			Owner: owner,
-		},
-	}
+	a.RootAggregate = eventstore.NewRootAggregate(a, id, 0)
+	a.ApplyChange(AccountCreated{
+		ID:    id,
+		Money: money,
+		Owner: owner,
+	})
 	return a
 }
 
 func NewAccount() *Account {
 	a := &Account{}
-	a.RootAggregate = NewRootAggregate(a, "", 0)
+	a.RootAggregate = eventstore.NewRootAggregate(a, "", 0)
 	return a
 }
 
 type Account struct {
-	RootAggregate
+	eventstore.RootAggregate
 	Status  Status `json:"status,omitempty"`
 	Balance int64  `json:"balance,omitempty"`
 	Owner   string `json:"owner,omitempty"`
