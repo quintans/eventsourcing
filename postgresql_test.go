@@ -197,7 +197,15 @@ func TestListener(t *testing.T) {
 	lm := poller.New(tracker, poller.WithStartFrom(poller.BEGINNING))
 
 	done := make(chan struct{})
-	go lm.Handle(ctx, func(ctx context.Context, e common.Event) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		cancel()
+	}()
+	lm.Handle(ctx, func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -207,10 +215,6 @@ func TestListener(t *testing.T) {
 		}
 	})
 
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-	}
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, 4, acc2.Version)
