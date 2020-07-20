@@ -31,6 +31,15 @@ type Repository interface {
 	GetEvents(ctx context.Context, afterEventID string, limit int, filter common.Filter) ([]common.Event, error)
 }
 
+type NoOpLock struct {
+}
+
+func (m NoOpLock) Lock() bool {
+	return true
+}
+
+func (m NoOpLock) Unlock() {}
+
 type Start int
 
 const (
@@ -42,6 +51,12 @@ const (
 type Cancel func()
 
 type Option func(*Poller)
+
+func WithDistributedLocker(locker Locker) Option {
+	return func(p *Poller) {
+		p.distLocker = locker
+	}
+}
 
 func WithPollInterval(pi time.Duration) Option {
 	return func(p *Poller) {
@@ -104,13 +119,13 @@ func WithLimit(limit int) Option {
 	}
 }
 
-func New(est Repository, locker Locker, options ...Option) *Poller {
+func New(est Repository, options ...Option) *Poller {
 	p := &Poller{
 		est:          est,
 		pollInterval: 500 * time.Millisecond,
 		startFrom:    END,
 		limit:        20,
-		distLocker:   locker,
+		distLocker:   NoOpLock{},
 		filter:       common.Filter{},
 	}
 	for _, o := range options {
@@ -129,55 +144,45 @@ type Poller struct {
 	distLocker   Locker
 }
 
-func (p *Poller) Handle(ctx context.Context, handler func(ctx context.Context, e common.Event)) (Cancel, error) {
+func (p *Poller) Handle(ctx context.Context, handler func(ctx context.Context, e common.Event)) error {
 	var afterEventID string
 	var err error
 	switch p.startFrom {
 	case END:
 		afterEventID, err = p.est.GetLastEventID(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	case BEGINNING:
 	case SEQUENCE:
 		afterEventID = p.afterEventID
 	}
 
-	done := make(chan bool)
+	wait := p.pollInterval
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case _ = <-time.After(p.pollInterval):
+			if p.distLocker.Lock() {
+				defer p.distLocker.Unlock()
 
-	cancel := func() {
-		done <- true
-	}
-
-	go func() {
-		wait := p.pollInterval
-		for {
-			select {
-			case <-done:
-				return
-			case _ = <-time.After(p.pollInterval):
-				if p.distLocker.Lock() {
-					defer p.distLocker.Unlock()
-
-					eid, err := p.retrieve(ctx, handler, afterEventID, "")
-					if err != nil {
-						wait += 2 * wait
-						if wait > maxWait {
-							wait = maxWait
-						}
-						log.WithField("backoff", wait).
-							WithError(err).
-							Error("Failure retrieving events. Backing off.")
-					} else {
-						afterEventID = eid
-						wait = p.pollInterval
+				eid, err := p.retrieve(ctx, handler, afterEventID, "")
+				if err != nil {
+					wait += 2 * wait
+					if wait > maxWait {
+						wait = maxWait
 					}
+					log.WithField("backoff", wait).
+						WithError(err).
+						Error("Failure retrieving events. Backing off.")
+				} else {
+					afterEventID = eid
+					wait = p.pollInterval
 				}
 			}
 		}
-	}()
-
-	return cancel, nil
+	}
 }
 
 func (p *Poller) ReplayUntil(ctx context.Context, handler func(ctx context.Context, e common.Event), untilEventID string) (string, error) {

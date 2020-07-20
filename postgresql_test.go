@@ -119,15 +119,6 @@ func dbSchema() error {
 	return nil
 }
 
-type MockLocker struct {
-}
-
-func (m MockLocker) Lock() bool {
-	return true
-}
-
-func (m MockLocker) Unlock() {}
-
 func ping(dburl string) (*sqlx.DB, error) {
 	db, err := sqlx.Open("postgres", dburl)
 	if err != nil {
@@ -203,10 +194,10 @@ func TestListener(t *testing.T) {
 	counter := 0
 	tracker, err := poller.NewPgRepository(dbURL)
 	require.NoError(t, err)
-	lm := poller.New(tracker, MockLocker{}, poller.WithStartFrom(poller.BEGINNING))
+	lm := poller.New(tracker, poller.WithStartFrom(poller.BEGINNING))
 
 	done := make(chan struct{})
-	lm.Handle(ctx, func(ctx context.Context, e common.Event) {
+	go lm.Handle(ctx, func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -247,10 +238,10 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	tracker, err := poller.NewPgRepository(dbURL)
 	require.NoError(t, err)
-	p := poller.New(tracker, MockLocker{}, poller.WithStartFrom(poller.BEGINNING), poller.WithAggregateTypes("Account"))
+	p := poller.New(tracker, poller.WithStartFrom(poller.BEGINNING), poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
-	p.Handle(ctx, func(ctx context.Context, e common.Event) {
+	go p.Handle(ctx, func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -300,10 +291,10 @@ func TestListenerWithLabels(t *testing.T) {
 
 	tracker, err := poller.NewPgRepository(dbURL)
 	require.NoError(t, err)
-	p := poller.New(tracker, MockLocker{}, poller.WithStartFrom(poller.BEGINNING), poller.WithLabels(common.NewLabel("geo", "EU")))
+	p := poller.New(tracker, poller.WithStartFrom(poller.BEGINNING), poller.WithLabels(common.NewLabel("geo", "EU")))
 
 	done := make(chan struct{})
-	p.Handle(ctx, func(ctx context.Context, e common.Event) {
+	go p.Handle(ctx, func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
