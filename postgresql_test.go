@@ -194,7 +194,7 @@ func TestListener(t *testing.T) {
 	counter := 0
 	tracker, err := poller.NewPgRepository(dbURL)
 	require.NoError(t, err)
-	lm := poller.New(tracker, poller.WithStartFrom(poller.BEGINNING))
+	lm := poller.New(tracker)
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -205,7 +205,7 @@ func TestListener(t *testing.T) {
 		}
 		cancel()
 	}()
-	lm.Handle(ctx, func(ctx context.Context, e common.Event) {
+	lm.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -242,10 +242,10 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	tracker, err := poller.NewPgRepository(dbURL)
 	require.NoError(t, err)
-	p := poller.New(tracker, poller.WithStartFrom(poller.BEGINNING), poller.WithAggregateTypes("Account"))
+	p := poller.New(tracker, poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
-	go p.Handle(ctx, func(ctx context.Context, e common.Event) {
+	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -295,10 +295,10 @@ func TestListenerWithLabels(t *testing.T) {
 
 	tracker, err := poller.NewPgRepository(dbURL)
 	require.NoError(t, err)
-	p := poller.New(tracker, poller.WithStartFrom(poller.BEGINNING), poller.WithLabels(common.NewLabel("geo", "EU")))
+	p := poller.New(tracker, poller.WithLabels(common.NewLabel("geo", "EU")))
 
 	done := make(chan struct{})
-	go p.Handle(ctx, func(ctx context.Context, e common.Event) {
+	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++

@@ -33,18 +33,20 @@ type Aggregater interface {
 	ApplyChangeFromHistory(event Event) error
 }
 
+// Event represents the event data
 type Event struct {
-	ID               string
-	AggregateID      string
-	AggregateVersion int
-	AggregateType    string
-	Kind             string
-	Body             Json
-	IdempotencyKey   string
-	Labels           Json
-	CreatedAt        time.Time
+	ID               string    `json:"id"`
+	AggregateID      string    `json:"aggregate_id"`
+	AggregateVersion int       `json:"aggregate_version"`
+	AggregateType    string    `json:"aggregate_type"`
+	Kind             string    `json:"kind"`
+	Body             Json      `json:"body"`
+	IdempotencyKey   string    `json:"idempotency_key"`
+	Labels           Json      `json:"labels"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
+// PgEvent is the event data stored in the database
 type PgEvent struct {
 	ID               string    `db:"id"`
 	AggregateID      string    `db:"aggregate_id"`

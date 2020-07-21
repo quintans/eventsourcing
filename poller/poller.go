@@ -48,6 +48,8 @@ const (
 	SEQUENCE
 )
 
+type EventHandler func(ctx context.Context, e common.Event)
+
 type Cancel func()
 
 type Option func(*Poller)
@@ -61,19 +63,6 @@ func WithDistributedLocker(locker Locker) Option {
 func WithPollInterval(pi time.Duration) Option {
 	return func(p *Poller) {
 		p.pollInterval = pi
-	}
-}
-
-func WithStartFrom(from Start) Option {
-	return func(p *Poller) {
-		p.startFrom = from
-	}
-}
-
-func WithAfterEventID(eventID string) Option {
-	return func(p *Poller) {
-		p.afterEventID = eventID
-		p.startFrom = SEQUENCE
 	}
 }
 
@@ -119,11 +108,10 @@ func WithLimit(limit int) Option {
 	}
 }
 
-func New(est Repository, options ...Option) *Poller {
+func New(repo Repository, options ...Option) *Poller {
 	p := &Poller{
-		est:          est,
+		repo:         repo,
 		pollInterval: 500 * time.Millisecond,
-		startFrom:    END,
 		limit:        20,
 		distLocker:   NoOpLock{},
 		filter:       common.Filter{},
@@ -135,29 +123,54 @@ func New(est Repository, options ...Option) *Poller {
 }
 
 type Poller struct {
-	est          Repository
+	repo         Repository
 	pollInterval time.Duration
-	startFrom    Start
-	afterEventID string
 	filter       common.Filter
 	limit        int
 	distLocker   Locker
 }
 
-func (p *Poller) Handle(ctx context.Context, handler func(ctx context.Context, e common.Event)) error {
+type StartOption struct {
+	startFrom    Start
+	afterEventID string
+}
+
+func StartEnd() StartOption {
+	return StartOption{
+		startFrom: END,
+	}
+}
+
+func StartBeginning() StartOption {
+	return StartOption{
+		startFrom: BEGINNING,
+	}
+}
+
+func StartAt(afterEventID string) StartOption {
+	return StartOption{
+		startFrom:    SEQUENCE,
+		afterEventID: afterEventID,
+	}
+}
+
+func (p *Poller) Handle(ctx context.Context, startOption StartOption, handler EventHandler) error {
 	var afterEventID string
 	var err error
-	switch p.startFrom {
+	switch startOption.startFrom {
 	case END:
-		afterEventID, err = p.est.GetLastEventID(ctx)
+		afterEventID, err = p.repo.GetLastEventID(ctx)
 		if err != nil {
 			return err
 		}
 	case BEGINNING:
 	case SEQUENCE:
-		afterEventID = p.afterEventID
+		afterEventID = startOption.afterEventID
 	}
+	return p.handle(ctx, afterEventID, handler)
+}
 
+func (p *Poller) handle(ctx context.Context, afterEventID string, handler EventHandler) error {
 	wait := p.pollInterval
 	for {
 		select {
@@ -185,18 +198,33 @@ func (p *Poller) Handle(ctx context.Context, handler func(ctx context.Context, e
 	}
 }
 
-func (p *Poller) ReplayUntil(ctx context.Context, handler func(ctx context.Context, e common.Event), untilEventID string) (string, error) {
+type Sink interface {
+	LastEventID(ctx context.Context) (string, error)
+	Send(ctx context.Context, e common.Event)
+}
+
+// Forward forwars the handling to a sink.
+// eg: a message queue
+func (p *Poller) Forward(ctx context.Context, sink Sink) error {
+	id, err := sink.LastEventID(ctx)
+	if err != nil {
+		return err
+	}
+	return p.handle(ctx, id, sink.Send)
+}
+
+func (p *Poller) ReplayUntil(ctx context.Context, handler EventHandler, untilEventID string) (string, error) {
 	return p.retrieve(ctx, handler, "", untilEventID)
 }
 
-func (p *Poller) ReplayFromUntil(ctx context.Context, handler func(ctx context.Context, e common.Event), afterEventID, untilEventID string) (string, error) {
+func (p *Poller) ReplayFromUntil(ctx context.Context, handler EventHandler, afterEventID, untilEventID string) (string, error) {
 	return p.retrieve(ctx, handler, afterEventID, untilEventID)
 }
 
-func (p *Poller) retrieve(ctx context.Context, handler func(ctx context.Context, e common.Event), afterEventID, untilEventID string) (string, error) {
+func (p *Poller) retrieve(ctx context.Context, handler EventHandler, afterEventID, untilEventID string) (string, error) {
 	loop := true
 	for loop {
-		events, err := p.est.GetEvents(ctx, afterEventID, p.limit, p.filter)
+		events, err := p.repo.GetEvents(ctx, afterEventID, p.limit, p.filter)
 		if err != nil {
 			return "", err
 		}
@@ -216,7 +244,7 @@ type PgRepository struct {
 	db *sqlx.DB
 }
 
-// NewESPostgreSQL creates a new instance of ESPostgreSQL
+// NewPgRepository creates a new instance of ESPostgreSQL
 func NewPgRepository(dburl string) (*PgRepository, error) {
 	db, err := sqlx.Open("postgres", dburl)
 	if err != nil {
