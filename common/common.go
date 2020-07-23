@@ -35,15 +35,15 @@ type Aggregater interface {
 
 // Event represents the event data
 type Event struct {
-	ID               string    `json:"id"`
-	AggregateID      string    `json:"aggregate_id"`
-	AggregateVersion int       `json:"aggregate_version"`
-	AggregateType    string    `json:"aggregate_type"`
-	Kind             string    `json:"kind"`
-	Body             Json      `json:"body"`
-	IdempotencyKey   string    `json:"idempotency_key"`
-	Labels           Json      `json:"labels"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID               string    `json:"id,omitempty"`
+	AggregateID      string    `json:"aggregate_id,omitempty"`
+	AggregateVersion int       `json:"aggregate_version,omitempty"`
+	AggregateType    string    `json:"aggregate_type,omitempty"`
+	Kind             string    `json:"kind,omitempty"`
+	Body             Json      `json:"body,omitempty"`
+	IdempotencyKey   string    `json:"idempotency_key,omitempty"`
+	Labels           Json      `json:"labels,omitempty"`
+	CreatedAt        time.Time `json:"created_at,omitempty"`
 }
 
 // PgEvent is the event data stored in the database
