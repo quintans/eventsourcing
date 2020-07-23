@@ -48,7 +48,7 @@ const (
 	SEQUENCE
 )
 
-type EventHandler func(ctx context.Context, e common.Event)
+type EventHandler func(ctx context.Context, e common.Event) error
 
 type Cancel func()
 
@@ -200,7 +200,7 @@ func (p *Poller) handle(ctx context.Context, afterEventID string, handler EventH
 
 type Sink interface {
 	LastEventID(ctx context.Context) (string, error)
-	Send(ctx context.Context, e common.Event)
+	Send(ctx context.Context, e common.Event) error
 }
 
 // Forward forwars the handling to a sink.
@@ -229,7 +229,10 @@ func (p *Poller) retrieve(ctx context.Context, handler EventHandler, afterEventI
 			return "", err
 		}
 		for _, evt := range events {
-			handler(ctx, evt)
+			err := handler(ctx, evt)
+			if err != nil {
+				return "", err
+			}
 			afterEventID = evt.ID
 			if evt.ID == untilEventID {
 				return untilEventID, nil

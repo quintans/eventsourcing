@@ -205,7 +205,7 @@ func TestListener(t *testing.T) {
 		}
 		cancel()
 	}()
-	lm.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) {
+	lm.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -213,6 +213,7 @@ func TestListener(t *testing.T) {
 				close(done)
 			}
 		}
+		return nil
 	})
 
 	assert.Equal(t, 4, counter)
@@ -245,7 +246,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	p := poller.New(tracker, poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
-	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) {
+	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -253,6 +254,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 				close(done)
 			}
 		}
+		return nil
 	})
 
 	select {
@@ -298,7 +300,7 @@ func TestListenerWithLabels(t *testing.T) {
 	p := poller.New(tracker, poller.WithLabels(common.NewLabel("geo", "EU")))
 
 	done := make(chan struct{})
-	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) {
+	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -306,6 +308,7 @@ func TestListenerWithLabels(t *testing.T) {
 				close(done)
 			}
 		}
+		return nil
 	})
 
 	select {
