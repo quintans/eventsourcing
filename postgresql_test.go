@@ -404,7 +404,7 @@ func TestForget(t *testing.T) {
 
 func BenchmarkDepositAndSave2(b *testing.B) {
 	r, _ := eventstore.NewPgEsRepository(dbURL)
-	es := eventstore.NewESPostgreSQL(r, 3)
+	es := eventstore.NewESPostgreSQL(r, 50)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New().String()
