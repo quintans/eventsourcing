@@ -27,7 +27,6 @@ const (
 
 type Repository interface {
 	GetLastEventID(ctx context.Context) (string, error)
-	GetEventsForAggregate(ctx context.Context, afterEventID string, aggregateID string, limit int) ([]common.Event, error)
 	GetEvents(ctx context.Context, afterEventID string, limit int, filter common.Filter) ([]common.Event, error)
 }
 
@@ -275,24 +274,6 @@ func (es *PgRepository) GetLastEventID(ctx context.Context) (string, error) {
 		}
 	}
 	return eventID, nil
-}
-
-func (es *PgRepository) GetEventsForAggregate(ctx context.Context, afterEventID string, aggregateID string, batchSize int) ([]common.Event, error) {
-	events := []common.Event{}
-	safetyMargin := time.Now().Add(lag)
-	if err := es.db.SelectContext(ctx, &events, `
-	SELECT * FROM events
-	WHERE id > $1
-	AND aggregate_id = $2
-	AND created_at <= $3
-	ORDER BY id ASC LIMIT $4
-	`, afterEventID, aggregateID, safetyMargin, batchSize); err != nil {
-		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("Unable to get events after '%s': %w", afterEventID, err)
-		}
-	}
-	return events, nil
-
 }
 
 func (es *PgRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, filter common.Filter) ([]common.Event, error) {

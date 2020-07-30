@@ -46,6 +46,10 @@ type Event struct {
 	CreatedAt        time.Time `json:"created_at,omitempty"`
 }
 
+func (e Event) IsZero() bool {
+	return e.ID == ""
+}
+
 // PgEvent is the event data stored in the database
 type PgEvent struct {
 	ID               string    `db:"id"`
