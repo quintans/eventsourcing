@@ -95,38 +95,40 @@ func TestSingleConsumer(t *testing.T) {
 }
 
 func TestBuffer(t *testing.T) {
-	r := NewMockRepo()
-	p := New(r, WithLimit(2))
-	c := NewCache(p)
-	fastCount := []string{}
-	slowCount := []string{}
+	for i := 0; i < 15; i++ {
+		r := NewMockRepo()
+		p := New(r, WithLimit(2))
+		c := NewCache(p)
+		fastCount := []string{}
+		slowCount := []string{}
 
-	fast := c.NewConsumer("fast")
-	lastFastID := ""
-	go fast.Start("", func(ctx context.Context, e common.Event) error {
-		time.Sleep(100)
-		fastCount = append(fastCount, e.ID)
-		assert.Greater(t, e.ID, lastFastID, "Fast")
-		lastFastID = e.ID
-		return nil
-	})
+		fast := c.NewConsumer("fast")
+		lastFastID := ""
+		go fast.Start("", func(ctx context.Context, e common.Event) error {
+			time.Sleep(100)
+			fastCount = append(fastCount, e.ID)
+			require.Greater(t, e.ID, lastFastID, "Fast")
+			lastFastID = e.ID
+			return nil
+		})
 
-	slow := c.NewConsumer("slow")
-	lastSlowID := ""
-	go slow.Start("", func(ctx context.Context, e common.Event) error {
-		time.Sleep(200)
-		slowCount = append(slowCount, e.ID)
-		assert.Greater(t, e.ID, lastSlowID, "Slow")
-		lastSlowID = e.ID
-		return nil
-	})
+		slow := c.NewConsumer("slow")
+		lastSlowID := ""
+		go slow.Start("", func(ctx context.Context, e common.Event) error {
+			time.Sleep(300)
+			slowCount = append(slowCount, e.ID)
+			require.Greater(t, e.ID, lastSlowID, "Slow")
+			lastSlowID = e.ID
+			return nil
+		})
 
-	ctx, _ := context.WithTimeout(context.Background(), time.Second)
-	err := c.Start(ctx, "")
-	require.NoError(t, err)
+		ctx, _ := context.WithTimeout(context.Background(), time.Second)
+		err := c.Start(ctx, "")
+		require.NoError(t, err)
 
-	assert.Equal(t, len(r.events), len(fastCount), "Fast Count: %s", fastCount)
-	assert.Equal(t, len(r.events), len(slowCount), "Slow Count: %s", slowCount)
+		require.Equal(t, len(r.events), len(fastCount), "Fast Count: %s", fastCount)
+		require.Equal(t, len(r.events), len(slowCount), "Slow Count: %s", slowCount)
+	}
 }
 
 func TestLateConsumer(t *testing.T) {

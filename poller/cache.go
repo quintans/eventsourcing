@@ -13,14 +13,13 @@ import (
 // Cache tracks events that were not yet consumed by ALL consumers.
 // The gaol is to provide a fast cache for consumer handlers only.
 type Cache struct {
-	mu           sync.Mutex
-	poller       *Poller
-	buffer       *list.List
-	consumers    *list.List
-	events       chan common.Event
-	waiting      bool
-	cond         *sync.Cond
-	waitingEvent *list.Element
+	mu        sync.Mutex
+	poller    *Poller
+	buffer    *list.List
+	consumers *list.List
+	events    chan common.Event
+	waiting   bool
+	cond      *sync.Cond
 }
 
 // NewCache creates a cache instance
@@ -36,15 +35,10 @@ func NewCache(poller *Poller) *Cache {
 }
 
 func (c *Cache) next(elem *list.Element) *list.Element {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.cond.L.Lock()
+	defer c.cond.L.Unlock()
 
-	var e *list.Element
-	if elem != nil {
-		e = elem.Next()
-	} else {
-		e = c.buffer.Front()
-	}
+	e := c.innerNext(elem)
 
 	if e != nil {
 		return e
@@ -52,23 +46,32 @@ func (c *Cache) next(elem *list.Element) *list.Element {
 
 	if !c.waiting {
 		c.waiting = true
-		c.waitingEvent = nil
 		go func() {
 			// event is zero if channel is closed
 			event := <-c.events
 			c.cond.L.Lock()
 			if !event.IsZero() {
 				fmt.Println("===> Pushing", event.ID)
-				c.waitingEvent = c.buffer.PushBack(event)
+				c.buffer.PushBack(event)
 			}
 			c.waiting = false
-			c.cond.Broadcast()
 			c.cond.L.Unlock()
+			c.cond.Broadcast()
 		}()
 	}
 
 	c.cond.Wait()
-	return c.waitingEvent
+
+	e = c.innerNext(elem)
+	fmt.Printf("===> Nexting %+v\n", e)
+	return e
+}
+
+func (c *Cache) innerNext(elem *list.Element) *list.Element {
+	if elem != nil {
+		return elem.Next()
+	}
+	return c.buffer.Front()
 }
 
 // consumed advances the cursor for this consumer
