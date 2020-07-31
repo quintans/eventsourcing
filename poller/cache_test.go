@@ -72,6 +72,8 @@ func (r *MockRepo) SetEvents(events []common.Event) {
 }
 
 func TestSingleConsumer(t *testing.T) {
+	t.Parallel()
+
 	r := NewMockRepo()
 	p := New(r, WithLimit(2))
 	c := NewCache(p)
@@ -95,6 +97,8 @@ func TestSingleConsumer(t *testing.T) {
 }
 
 func TestBuffer(t *testing.T) {
+	t.Parallel()
+
 	for i := 0; i < 15; i++ {
 		r := NewMockRepo()
 		p := New(r, WithLimit(2))
@@ -132,6 +136,8 @@ func TestBuffer(t *testing.T) {
 }
 
 func TestLateConsumer(t *testing.T) {
+	t.Parallel()
+
 	r := NewMockRepo()
 	p := New(r, WithLimit(2))
 	c := NewCache(p)
@@ -180,8 +186,198 @@ func TestLateConsumer(t *testing.T) {
 	time.Sleep(time.Second)
 	cancel()
 
+	time.Sleep(500 * time.Millisecond)
+
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, len(events1)-2+len(events2), len(firstCount), "First Count: %s", firstCount)
 	assert.Equal(t, len(events2)-1, len(lateCount), "Late Count: %s", lateCount)
+}
+
+func TestStopConsumer(t *testing.T) {
+	t.Parallel()
+
+	r := NewMockRepo()
+	p := New(r, WithLimit(2))
+	c := NewCache(p)
+	firstCount := []string{}
+	lateCount := []string{}
+	var mu sync.Mutex
+
+	first := c.NewConsumer("first")
+	lastFirstID := ""
+	go first.Start(events1[1].ID, func(ctx context.Context, e common.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		time.Sleep(100)
+		firstCount = append(firstCount, e.ID)
+		assert.Greater(t, e.ID, lastFirstID, "First")
+		lastFirstID = e.ID
+		return nil
+	})
+
+	late := c.NewConsumer("late")
+	lastLateID := ""
+	go late.Start("", func(ctx context.Context, e common.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		time.Sleep(100)
+		lateCount = append(lateCount, e.ID)
+		assert.Greater(t, e.ID, lastLateID, "Late")
+		lastLateID = e.ID
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := c.Start(ctx, "")
+		require.NoError(t, err)
+	}()
+
+	time.Sleep(time.Second)
+
+	late.Stop()
+
+	time.Sleep(time.Second)
+
+	r.SetEvents(append(events1, events2...))
+
+	time.Sleep(time.Second)
+	cancel()
+
+	time.Sleep(500 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, len(events1)-2+len(events2), len(firstCount), "First Count: %s", firstCount)
+	assert.Equal(t, len(events1), len(lateCount), "Late Count: %s", lateCount)
+}
+
+func TestRestartSingleConsumer(t *testing.T) {
+	t.Parallel()
+
+	r := NewMockRepo()
+	p := New(r, WithLimit(2))
+	c := NewCache(p)
+	count := []string{}
+	var mu sync.Mutex
+
+	single := c.NewConsumer("single")
+	lastID := ""
+	handler := func(ctx context.Context, e common.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		time.Sleep(100)
+		count = append(count, e.ID)
+		assert.Greater(t, e.ID, lastID, "Second")
+		lastID = e.ID
+		return nil
+	}
+	go single.Start("", handler)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := c.Start(ctx, "")
+		require.NoError(t, err)
+	}()
+
+	time.Sleep(time.Second)
+
+	single.Stop()
+
+	time.Sleep(time.Second)
+
+	mu.Lock()
+	assert.Equal(t, len(events1), len(count), "Count: %s", count)
+	mu.Unlock()
+
+	single.Hold("")
+	evts := append(events1, events2...)
+	r.SetEvents(evts)
+
+	time.Sleep(time.Second)
+
+	go single.Resume(events3[0].ID, handler)
+	evts = append(evts, events3...)
+	r.SetEvents(evts)
+
+	time.Sleep(time.Second)
+
+	cancel()
+
+	mu.Lock()
+	assert.Equal(t, len(events1)+len(events3)-1, len(count), "Count: %s", count)
+	mu.Unlock()
+}
+
+func TestRestartConsumer(t *testing.T) {
+	t.Parallel()
+
+	r := NewMockRepo()
+	p := New(r, WithLimit(2))
+	c := NewCache(p)
+	firstCount := []string{}
+	secondCount := []string{}
+	var mu sync.Mutex
+
+	first := c.NewConsumer("first")
+	lastFirstID := ""
+	go first.Start(events1[1].ID, func(ctx context.Context, e common.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		time.Sleep(100)
+		firstCount = append(firstCount, e.ID)
+		assert.Greater(t, e.ID, lastFirstID, "First")
+		lastFirstID = e.ID
+		return nil
+	})
+
+	second := c.NewConsumer("second")
+	lastSecondID := ""
+	handler := func(ctx context.Context, e common.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		time.Sleep(100)
+		secondCount = append(secondCount, e.ID)
+		assert.Greater(t, e.ID, lastSecondID, "Second")
+		lastSecondID = e.ID
+		return nil
+	}
+	go second.Start("", handler)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := c.Start(ctx, "")
+		require.NoError(t, err)
+	}()
+
+	time.Sleep(time.Second)
+
+	second.Stop()
+
+	time.Sleep(time.Second)
+
+	second.Hold("")
+	evts := append(events1, events2...)
+	r.SetEvents(evts)
+
+	time.Sleep(time.Second)
+
+	go second.Resume(events3[0].ID, handler)
+	evts = append(evts, events3...)
+	r.SetEvents(evts)
+
+	time.Sleep(time.Second)
+
+	cancel()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, len(events1)-2+len(events2)+len(events3), len(firstCount), "First Count: %s", firstCount)
+	assert.Equal(t, len(events1)+len(events3)-1, len(secondCount), "Second Count: %s", secondCount)
 }

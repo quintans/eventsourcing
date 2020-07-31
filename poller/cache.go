@@ -3,7 +3,6 @@ package poller
 import (
 	"container/list"
 	"context"
-	"fmt"
 	"log"
 	"sync"
 
@@ -18,8 +17,42 @@ type Cache struct {
 	buffer    *list.List
 	consumers *list.List
 	events    chan common.Event
-	waiting   bool
-	cond      *sync.Cond
+	waiting   []*LockerChan
+}
+
+// LockerChan reusable lock that uses a channel to wait for the release of the lock
+type LockerChan struct {
+	ch     chan struct{}
+	closed bool
+	mu     sync.RWMutex
+}
+
+// NewLockerChan creates a new LockerChan
+func NewLockerChan() *LockerChan {
+	return &LockerChan{}
+}
+
+// Lock locks the release of wait
+func (c *LockerChan) Lock() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ch = make(chan struct{})
+	c.closed = false
+}
+
+// Unlock releases the lock
+func (c *LockerChan) Unlock() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed {
+		close(c.ch)
+		c.closed = true
+	}
+}
+
+// Wait wait for the lock to be released
+func (c *LockerChan) Wait() <-chan struct{} {
+	return c.ch
 }
 
 // NewCache creates a cache instance
@@ -30,41 +63,43 @@ func NewCache(poller *Poller) *Cache {
 		consumers: list.New(),
 		events:    make(chan common.Event, 1),
 	}
-	c.cond = sync.NewCond(&c.mu)
 	return &c
 }
 
-func (c *Cache) next(elem *list.Element) *list.Element {
-	c.cond.L.Lock()
-	defer c.cond.L.Unlock()
+func (c *Cache) next(quit *LockerChan, elem *list.Element) *list.Element {
+	quit.Lock()
+
+	c.mu.Lock()
 
 	e := c.innerNext(elem)
 
 	if e != nil {
+		c.mu.Unlock()
 		return e
 	}
 
-	if !c.waiting {
-		c.waiting = true
+	if c.waiting == nil {
+		c.waiting = []*LockerChan{}
 		go func() {
 			// event is zero if channel is closed
 			event := <-c.events
-			c.cond.L.Lock()
+			c.mu.Lock()
 			if !event.IsZero() {
-				fmt.Println("===> Pushing", event.ID)
 				c.buffer.PushBack(event)
 			}
-			c.waiting = false
-			c.cond.L.Unlock()
-			c.cond.Broadcast()
+			for _, v := range c.waiting {
+				v.Unlock()
+			}
+			c.waiting = nil
+			c.mu.Unlock()
 		}()
 	}
 
-	c.cond.Wait()
+	c.waiting = append(c.waiting, quit)
+	c.mu.Unlock()
+	<-quit.Wait()
 
-	e = c.innerNext(elem)
-	fmt.Printf("===> Nexting %+v\n", e)
-	return e
+	return c.innerNext(elem)
 }
 
 func (c *Cache) innerNext(elem *list.Element) *list.Element {
@@ -147,44 +182,59 @@ type CacheConsumer struct {
 	name     string
 	cache    *Cache
 	consumer *list.Element
-	active   bool
 	mu       sync.RWMutex
+	quit     *LockerChan
+	active   bool
+}
+
+func (cc *CacheConsumer) Hold(startAt string) {
+	cc.mu.Lock()
+	cc.consumer = cc.cache.registerConsumer(startAt)
+	cc.mu.Unlock()
+}
+
+func (cc *CacheConsumer) Resume(startAt string, handler EventHandler) {
+	cc.Stop()
+
+	cc.mu.Lock()
+	quit := NewLockerChan()
+	cc.quit = quit
+	cc.mu.Unlock()
+
+	cc.active = true
+	for elem := cc.cache.next(quit, nil); elem != nil && cc.active; elem = cc.cache.next(quit, elem) {
+		event := elem.Value.(common.Event)
+		if event.ID > startAt {
+			err := handler(context.Background(), event)
+			if err != nil {
+				log.Printf("Something went wrong with %s consumer: %v", cc.name, err)
+				break
+			}
+		}
+		cc.mu.Lock()
+		cc.cache.consumed(cc.consumer, event.ID)
+		cc.mu.Unlock()
+	}
+	cc.cache.unregisterConsumer(cc.consumer)
+
+	cc.mu.Lock()
+	cc.consumer = nil
+	cc.mu.Unlock()
 }
 
 // Start starts consuming events
 func (cc *CacheConsumer) Start(startAt string, handler EventHandler) {
-	cc.setActive(true)
-	cc.consumer = cc.cache.registerConsumer(startAt)
-	for elem := cc.cache.next(nil); elem != nil && cc.isActive(); elem = cc.cache.next(elem) {
-		event := elem.Value.(common.Event)
-		if event.ID <= startAt {
-			continue
-		}
-		err := handler(context.Background(), event)
-		if err != nil {
-			log.Printf("Something went wrong with  of %s consumer: %v", cc.name, err)
-			break
-		}
-		cc.cache.consumed(cc.consumer, event.ID)
-	}
-	cc.cache.unregisterConsumer(cc.consumer)
-	cc.consumer = nil
+	cc.Hold(startAt)
+	cc.Resume(startAt, handler)
 }
 
 // Stop stops consuming events
 func (cc *CacheConsumer) Stop() {
-	cc.setActive(false)
-}
-
-func (cc *CacheConsumer) setActive(active bool) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	cc.active = active
-}
-
-func (cc *CacheConsumer) isActive() bool {
-	cc.mu.RLock()
-	defer cc.mu.RUnlock()
-
-	return cc.active
+	if cc.quit != nil {
+		cc.quit.Unlock()
+	}
+	cc.quit = nil
+	cc.active = false
 }
