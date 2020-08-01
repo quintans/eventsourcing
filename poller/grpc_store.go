@@ -14,38 +14,38 @@ import (
 )
 
 type GrpcRepository struct {
-	client pb.StoreClient
+	address string
 }
 
-func NewGrpcRepository(ctx context.Context, address string) (Repository, error) {
-	// Set up a connection to the server.
-	conn, err := grpc.Dial(address, grpc.WithInsecure())
-	if err != nil {
-		return nil, fmt.Errorf("did not connect: %w", err)
+func NewGrpcRepository(address string) Repository {
+	return GrpcRepository{
+		address: address,
 	}
-
-	go func() {
-		<-ctx.Done()
-		conn.Close()
-	}()
-
-	c := pb.NewStoreClient(conn)
-	return &GrpcRepository{
-		client: c,
-	}, nil
 }
 
-func (c *GrpcRepository) GetLastEventID(ctx context.Context) (string, error) {
+func (c GrpcRepository) GetLastEventID(ctx context.Context) (string, error) {
+	cli, conn, err := c.dial()
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	r, err := c.client.GetLastEventID(ctx, &pb.GetLastEventIDRequest{})
+	r, err := cli.GetLastEventID(ctx, &pb.GetLastEventIDRequest{})
 	if err != nil {
 		return "", fmt.Errorf("could not get last event id: %w", err)
 	}
 	return r.EventId, nil
 }
 
-func (c *GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, filter common.Filter) ([]common.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, filter common.Filter) ([]common.Event, error) {
+	cli, conn, err := c.dial()
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
 	types := make([]string, len(filter.AggregateTypes))
 	for k, v := range filter.AggregateTypes {
 		types[k] = v
@@ -57,7 +57,7 @@ func (c *GrpcRepository) GetEvents(ctx context.Context, afterEventID string, lim
 
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	r, err := c.client.GetEvents(ctx, &pb.GetEventsRequest{
+	r, err := cli.GetEvents(ctx, &pb.GetEventsRequest{
 		AfterEventId: afterEventID,
 		Limit:        int32(limit),
 		Filter: &pb.Filter{
@@ -71,7 +71,7 @@ func (c *GrpcRepository) GetEvents(ctx context.Context, afterEventID string, lim
 
 	events := make([]common.Event, len(r.Events))
 	for k, v := range r.Events {
-		createdAt, err := TimestampToTime(v.CreatedAt)
+		createdAt, err := tsToTime(v.CreatedAt)
 		if err != nil {
 			log.Fatal("could convert timestamp")
 		}
@@ -92,7 +92,15 @@ func (c *GrpcRepository) GetEvents(ctx context.Context, afterEventID string, lim
 
 }
 
-func TimestampToTime(ts *timestamp.Timestamp) (*time.Time, error) {
+func (c GrpcRepository) dial() (pb.StoreClient, *grpc.ClientConn, error) {
+	conn, err := grpc.Dial(c.address, grpc.WithInsecure())
+	if err != nil {
+		return nil, nil, fmt.Errorf("did not connect: %w", err)
+	}
+	return pb.NewStoreClient(conn), conn, nil
+}
+
+func tsToTime(ts *timestamp.Timestamp) (*time.Time, error) {
 	var exp *time.Time
 	if ts != nil {
 		t, err := ptypes.Timestamp(ts)
