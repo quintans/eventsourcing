@@ -8,8 +8,8 @@ import (
 type Filter struct {
 	AggregateTypes []string
 	// Labels filters on top of labels. Every key of the map is ANDed with every OR of the values
-	// eg: {"geo": ["EU", "USA"], "membership": "prime"} equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Labels map[string][]string
+	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
+	Labels []Label
 }
 
 func NewLabel(key, value string) Label {

@@ -255,3 +255,8 @@ es.Forget(ctx, ForgetRequest{
     },
 })
 ```
+
+## gRPC codegen
+```sh
+./codegen.sh ./api/proto/*.proto
+```
