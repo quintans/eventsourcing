@@ -231,7 +231,7 @@ As an implementation example, for a very broad spectrum of problem, events can b
 ### Replay
 
 Considering that the event bus should have a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
-1) get the position of the last consumed message from the event bus
+1) get the position of the last message from the event bus
 2) consume events from the event store until we reach the event matching the previous event bus position
 3) resume listening the event bus from the position of 1)  
 
