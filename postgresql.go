@@ -191,18 +191,22 @@ type PgEsRepository struct {
 	db *sqlx.DB
 }
 
-// NewESPostgreSQL creates a new instance of ESPostgreSQL
 func NewPgEsRepository(dburl string) (*PgEsRepository, error) {
-	db, err := sqlx.Open("postgres", dburl)
+	db, err := sql.Open("postgres", dburl)
 	if err != nil {
 		return nil, err
 	}
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
+	return NewPgEsRepositoryDB(db)
+}
 
+// NewESPostgreSQL creates a new instance of ESPostgreSQL
+func NewPgEsRepositoryDB(db *sql.DB) (*PgEsRepository, error) {
+	dbx := sqlx.NewDb(db, "postgres")
 	return &PgEsRepository{
-		db: db,
+		db: dbx,
 	}, nil
 }
 

@@ -18,16 +18,20 @@ type PgRepository struct {
 
 // NewPgRepository creates a new instance of ESPostgreSQL
 func NewPgRepository(dburl string) (*PgRepository, error) {
-	db, err := sqlx.Open("postgres", dburl)
+	db, err := sql.Open("postgres", dburl)
 	if err != nil {
 		return nil, err
 	}
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
+	return NewPgRepositoryDB(db)
+}
 
+func NewPgRepositoryDB(db *sql.DB) (*PgRepository, error) {
+	dbx := sqlx.NewDb(db, "postgres")
 	return &PgRepository{
-		db: db,
+		db: dbx,
 	}, nil
 }
 
