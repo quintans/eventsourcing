@@ -158,10 +158,11 @@ func (c *Cache) unregisterConsumer(consumer *list.Element) {
 }
 
 // Consumer creates a consumer for this cache.
-func (c *Cache) NewConsumer(name string) *CacheConsumer {
+func (c *Cache) NewConsumer(name string, handler EventHandler) *CacheConsumer {
 	return &CacheConsumer{
-		name:  name,
-		cache: c,
+		name:    name,
+		cache:   c,
+		handler: handler,
 	}
 }
 
@@ -182,18 +183,26 @@ type CacheConsumer struct {
 	name     string
 	cache    *Cache
 	consumer *list.Element
+	handler  EventHandler
 	mu       sync.RWMutex
 	quit     *LockerChan
 	active   bool
 }
 
-func (cc *CacheConsumer) Hold(startAt string) {
+// Hold creates a cursor to the most recent event
+func (cc *CacheConsumer) Hold() {
+	cc.HoldAt("")
+}
+
+// HoldAt creates a cursor at a specific event
+func (cc *CacheConsumer) HoldAt(startAt string) {
 	cc.mu.Lock()
 	cc.consumer = cc.cache.registerConsumer(startAt)
 	cc.mu.Unlock()
 }
 
-func (cc *CacheConsumer) Resume(startAt string, handler EventHandler) {
+// Resume will make the consumer start processing events after the startAt event
+func (cc *CacheConsumer) Resume(startAt string) {
 	cc.Stop()
 
 	cc.mu.Lock()
@@ -205,7 +214,7 @@ func (cc *CacheConsumer) Resume(startAt string, handler EventHandler) {
 	for elem := cc.cache.next(quit, nil); elem != nil && cc.active; elem = cc.cache.next(quit, elem) {
 		event := elem.Value.(common.Event)
 		if event.ID > startAt {
-			err := handler(context.Background(), event)
+			err := cc.handler(context.Background(), event)
 			if err != nil {
 				log.Printf("Something went wrong with %s consumer: %v", cc.name, err)
 				break
@@ -222,10 +231,15 @@ func (cc *CacheConsumer) Resume(startAt string, handler EventHandler) {
 	cc.mu.Unlock()
 }
 
-// Start starts consuming events
-func (cc *CacheConsumer) Start(startAt string, handler EventHandler) {
-	cc.Hold(startAt)
-	cc.Resume(startAt, handler)
+// Start starts consuming events from the current position
+func (cc *CacheConsumer) Start() {
+	cc.StartAt("")
+}
+
+// StartAt starts consuming events from the startAt position
+func (cc *CacheConsumer) StartAt(startAt string) {
+	cc.HoldAt(startAt)
+	cc.Resume(startAt)
 }
 
 // Stop stops consuming events

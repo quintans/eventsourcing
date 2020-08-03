@@ -79,15 +79,15 @@ func TestSingleConsumer(t *testing.T) {
 	c := NewCache(p)
 	count := 0
 
-	fast := c.NewConsumer("single")
 	lastID := ""
-	go fast.Start("", func(ctx context.Context, e common.Event) error {
+	fast := c.NewConsumer("single", func(ctx context.Context, e common.Event) error {
 		time.Sleep(100)
 		count++
 		assert.Greater(t, e.ID, lastID)
 		lastID = e.ID
 		return nil
 	})
+	go fast.StartAt("")
 
 	ctx, _ := context.WithTimeout(context.Background(), time.Second)
 	err := c.Start(ctx, "")
@@ -106,25 +106,25 @@ func TestBuffer(t *testing.T) {
 		fastCount := []string{}
 		slowCount := []string{}
 
-		fast := c.NewConsumer("fast")
 		lastFastID := ""
-		go fast.Start("", func(ctx context.Context, e common.Event) error {
+		fast := c.NewConsumer("fast", func(ctx context.Context, e common.Event) error {
 			time.Sleep(100)
 			fastCount = append(fastCount, e.ID)
 			require.Greater(t, e.ID, lastFastID, "Fast")
 			lastFastID = e.ID
 			return nil
 		})
+		go fast.StartAt("")
 
-		slow := c.NewConsumer("slow")
 		lastSlowID := ""
-		go slow.Start("", func(ctx context.Context, e common.Event) error {
+		slow := c.NewConsumer("slow", func(ctx context.Context, e common.Event) error {
 			time.Sleep(300)
 			slowCount = append(slowCount, e.ID)
 			require.Greater(t, e.ID, lastSlowID, "Slow")
 			lastSlowID = e.ID
 			return nil
 		})
+		go slow.StartAt("")
 
 		ctx, _ := context.WithTimeout(context.Background(), time.Second)
 		err := c.Start(ctx, "")
@@ -145,9 +145,8 @@ func TestLateConsumer(t *testing.T) {
 	lateCount := []string{}
 	var mu sync.Mutex
 
-	first := c.NewConsumer("first")
 	lastFirstID := ""
-	go first.Start(events1[1].ID, func(ctx context.Context, e common.Event) error {
+	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -157,6 +156,7 @@ func TestLateConsumer(t *testing.T) {
 		lastFirstID = e.ID
 		return nil
 	})
+	go first.StartAt(events1[1].ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -166,9 +166,8 @@ func TestLateConsumer(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	late := c.NewConsumer("late")
 	lastLateID := ""
-	go late.Start(events2[0].ID, func(ctx context.Context, e common.Event) error {
+	late := c.NewConsumer("late", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -178,6 +177,7 @@ func TestLateConsumer(t *testing.T) {
 		lastLateID = e.ID
 		return nil
 	})
+	go late.StartAt(events2[0].ID)
 
 	time.Sleep(time.Second)
 
@@ -204,9 +204,8 @@ func TestStopConsumer(t *testing.T) {
 	lateCount := []string{}
 	var mu sync.Mutex
 
-	first := c.NewConsumer("first")
 	lastFirstID := ""
-	go first.Start(events1[1].ID, func(ctx context.Context, e common.Event) error {
+	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -216,10 +215,10 @@ func TestStopConsumer(t *testing.T) {
 		lastFirstID = e.ID
 		return nil
 	})
+	go first.StartAt(events1[1].ID)
 
-	late := c.NewConsumer("late")
 	lastLateID := ""
-	go late.Start("", func(ctx context.Context, e common.Event) error {
+	late := c.NewConsumer("late", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -229,6 +228,7 @@ func TestStopConsumer(t *testing.T) {
 		lastLateID = e.ID
 		return nil
 	})
+	go late.StartAt("")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -264,9 +264,8 @@ func TestRestartSingleConsumer(t *testing.T) {
 	count := []string{}
 	var mu sync.Mutex
 
-	single := c.NewConsumer("single")
 	lastID := ""
-	handler := func(ctx context.Context, e common.Event) error {
+	single := c.NewConsumer("single", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -275,8 +274,8 @@ func TestRestartSingleConsumer(t *testing.T) {
 		assert.Greater(t, e.ID, lastID, "Second")
 		lastID = e.ID
 		return nil
-	}
-	go single.Start("", handler)
+	})
+	go single.StartAt("")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -294,13 +293,13 @@ func TestRestartSingleConsumer(t *testing.T) {
 	assert.Equal(t, len(events1), len(count), "Count: %s", count)
 	mu.Unlock()
 
-	single.Hold("")
+	single.HoldAt("")
 	evts := append(events1, events2...)
 	r.SetEvents(evts)
 
 	time.Sleep(time.Second)
 
-	go single.Resume(events3[0].ID, handler)
+	go single.Resume(events3[0].ID)
 	evts = append(evts, events3...)
 	r.SetEvents(evts)
 
@@ -323,9 +322,8 @@ func TestRestartConsumer(t *testing.T) {
 	secondCount := []string{}
 	var mu sync.Mutex
 
-	first := c.NewConsumer("first")
 	lastFirstID := ""
-	go first.Start(events1[1].ID, func(ctx context.Context, e common.Event) error {
+	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -335,10 +333,10 @@ func TestRestartConsumer(t *testing.T) {
 		lastFirstID = e.ID
 		return nil
 	})
+	go first.StartAt(events1[1].ID)
 
-	second := c.NewConsumer("second")
 	lastSecondID := ""
-	handler := func(ctx context.Context, e common.Event) error {
+	second := c.NewConsumer("second", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -347,8 +345,8 @@ func TestRestartConsumer(t *testing.T) {
 		assert.Greater(t, e.ID, lastSecondID, "Second")
 		lastSecondID = e.ID
 		return nil
-	}
-	go second.Start("", handler)
+	})
+	go second.StartAt("")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -362,13 +360,13 @@ func TestRestartConsumer(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	second.Hold("")
+	second.HoldAt("")
 	evts := append(events1, events2...)
 	r.SetEvents(evts)
 
 	time.Sleep(time.Second)
 
-	go second.Resume(events3[0].ID, handler)
+	go second.Resume(events3[0].ID)
 	evts = append(evts, events3...)
 	r.SetEvents(evts)
 
