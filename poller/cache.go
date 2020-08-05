@@ -189,6 +189,14 @@ type CacheConsumer struct {
 	active   bool
 }
 
+func (cc *CacheConsumer) Name() string {
+	return cc.name
+}
+
+func (cc *CacheConsumer) IsActive() bool {
+	return cc.active
+}
+
 // Hold creates a cursor to the most recent event
 func (cc *CacheConsumer) Hold() {
 	cc.HoldAt("")
@@ -198,6 +206,7 @@ func (cc *CacheConsumer) Hold() {
 func (cc *CacheConsumer) HoldAt(startAt string) {
 	cc.mu.Lock()
 	cc.consumer = cc.cache.registerConsumer(startAt)
+	cc.active = true
 	cc.mu.Unlock()
 }
 
