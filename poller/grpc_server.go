@@ -17,8 +17,9 @@ type GrpcServer struct {
 	repo Repository
 }
 
-func (s *GrpcServer) GetLastEventID(ctx context.Context, _ *pb.GetLastEventIDRequest) (*pb.GetLastEventIDReply, error) {
-	eID, err := s.repo.GetLastEventID(ctx)
+func (s *GrpcServer) GetLastEventID(ctx context.Context, r *pb.GetLastEventIDRequest) (*pb.GetLastEventIDReply, error) {
+	filter := pbFilterToFilter(r.GetFilter())
+	eID, err := s.repo.GetLastEventID(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -26,17 +27,8 @@ func (s *GrpcServer) GetLastEventID(ctx context.Context, _ *pb.GetLastEventIDReq
 }
 
 func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb.GetEventsReply, error) {
-	pbFilter := r.GetFilter()
-	types := make([]string, len(pbFilter.AggregateTypes))
-	for k, v := range pbFilter.AggregateTypes {
-		types[k] = v
-	}
-	labels := make([]common.Label, len(pbFilter.Labels))
-	for k, v := range pbFilter.Labels {
-		labels[k] = common.NewLabel(v.Key, v.Value)
-	}
-
-	events, err := s.repo.GetEvents(ctx, r.GetAfterEventId(), int(r.GetLimit()), common.Filter{AggregateTypes: types, Labels: labels})
+	filter := pbFilterToFilter(r.GetFilter())
+	events, err := s.repo.GetEvents(ctx, r.GetAfterEventId(), int(r.GetLimit()), filter)
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +52,18 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 		}
 	}
 	return &pb.GetEventsReply{Events: pbEvents}, nil
+}
+
+func pbFilterToFilter(pbFilter *pb.Filter) common.Filter {
+	types := make([]string, len(pbFilter.AggregateTypes))
+	for k, v := range pbFilter.AggregateTypes {
+		types[k] = v
+	}
+	labels := make([]common.Label, len(pbFilter.Labels))
+	for k, v := range pbFilter.Labels {
+		labels[k] = common.NewLabel(v.Key, v.Value)
+	}
+	return common.Filter{AggregateTypes: types, Labels: labels}
 }
 
 func StartGrpcServer(ctx context.Context, address string, repo Repository) error {

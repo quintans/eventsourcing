@@ -10,29 +10,15 @@ import (
 
 var _ Repository = (*PgRepository)(nil)
 
-type Locker interface {
-	Lock() bool
-	Unlock()
-}
-
 const (
 	maxWait = time.Minute
 	lag     = -200 * time.Millisecond
 )
 
 type Repository interface {
-	GetLastEventID(ctx context.Context) (string, error)
+	GetLastEventID(ctx context.Context, filter common.Filter) (string, error)
 	GetEvents(ctx context.Context, afterEventID string, limit int, filter common.Filter) ([]common.Event, error)
 }
-
-type NoOpLock struct {
-}
-
-func (m NoOpLock) Lock() bool {
-	return true
-}
-
-func (m NoOpLock) Unlock() {}
 
 type Start int
 
@@ -47,12 +33,6 @@ type EventHandler func(ctx context.Context, e common.Event) error
 type Cancel func()
 
 type Option func(*Poller)
-
-func WithDistributedLocker(locker Locker) Option {
-	return func(p *Poller) {
-		p.distLocker = locker
-	}
-}
 
 func WithPollInterval(pi time.Duration) Option {
 	return func(p *Poller) {
@@ -91,7 +71,6 @@ func New(repo Repository, options ...Option) *Poller {
 		repo:         repo,
 		pollInterval: 500 * time.Millisecond,
 		limit:        20,
-		distLocker:   NoOpLock{},
 		filter:       common.Filter{},
 	}
 	for _, o := range options {
@@ -105,7 +84,6 @@ type Poller struct {
 	pollInterval time.Duration
 	filter       common.Filter
 	limit        int
-	distLocker   Locker
 }
 
 type StartOption struct {
@@ -137,7 +115,7 @@ func (p *Poller) Handle(ctx context.Context, startOption StartOption, handler Ev
 	var err error
 	switch startOption.startFrom {
 	case END:
-		afterEventID, err = p.repo.GetLastEventID(ctx)
+		afterEventID, err = p.repo.GetLastEventID(ctx, common.Filter{})
 		if err != nil {
 			return err
 		}
@@ -151,27 +129,24 @@ func (p *Poller) Handle(ctx context.Context, startOption StartOption, handler Ev
 func (p *Poller) handle(ctx context.Context, afterEventID string, handler EventHandler) error {
 	wait := p.pollInterval
 	for {
+		eid, err := p.retrieve(ctx, handler, afterEventID, "")
+		if err != nil {
+			wait += 2 * wait
+			if wait > maxWait {
+				wait = maxWait
+			}
+			log.WithField("backoff", wait).
+				WithError(err).
+				Error("Failure retrieving events. Backing off.")
+		} else {
+			afterEventID = eid
+			wait = p.pollInterval
+		}
+
 		select {
 		case <-ctx.Done():
 			return nil
 		case _ = <-time.After(p.pollInterval):
-			if p.distLocker.Lock() {
-				defer p.distLocker.Unlock()
-
-				eid, err := p.retrieve(ctx, handler, afterEventID, "")
-				if err != nil {
-					wait += 2 * wait
-					if wait > maxWait {
-						wait = maxWait
-					}
-					log.WithField("backoff", wait).
-						WithError(err).
-						Error("Failure retrieving events. Backing off.")
-				} else {
-					afterEventID = eid
-					wait = p.pollInterval
-				}
-			}
 		}
 	}
 }

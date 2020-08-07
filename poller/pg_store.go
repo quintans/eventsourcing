@@ -35,14 +35,15 @@ func NewPgRepositoryDB(db *sql.DB) (*PgRepository, error) {
 	}, nil
 }
 
-func (es *PgRepository) GetLastEventID(ctx context.Context) (string, error) {
+func (es *PgRepository) GetLastEventID(ctx context.Context, filter common.Filter) (string, error) {
 	var eventID string
 	safetyMargin := time.Now().Add(lag)
-	if err := es.db.GetContext(ctx, &eventID, `
-	SELECT * FROM events
-	WHERE created_at <= $1'
-	ORDER BY id DESC LIMIT 1
-	`, safetyMargin); err != nil {
+	args := []interface{}{safetyMargin}
+	var query bytes.Buffer
+	query.WriteString("SELECT * FROM events WHERE created_at <= $1 ")
+	args = writeFilter(filter, &query, args)
+	query.WriteString(" ORDER BY id DESC LIMIT 1")
+	if err := es.db.GetContext(ctx, &eventID, query.String(), args...); err != nil {
 		if err != sql.ErrNoRows {
 			return "", fmt.Errorf("Unable to get the last event ID: %w", err)
 		}
@@ -55,6 +56,20 @@ func (es *PgRepository) GetEvents(ctx context.Context, afterEventID string, batc
 	args := []interface{}{afterEventID, safetyMargin}
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > $1 AND created_at <= $2")
+	args = writeFilter(filter, &query, args)
+	query.WriteString(" ORDER BY id ASC LIMIT ")
+	query.WriteString(strconv.Itoa(batchSize))
+
+	rows, err := es.queryEvents(ctx, query.String(), args)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			return nil, fmt.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
+		}
+	}
+	return rows, nil
+}
+
+func writeFilter(filter common.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
 	if len(filter.AggregateTypes) > 0 {
 		query.WriteString(" AND (")
 		first := true
@@ -84,16 +99,7 @@ func (es *PgRepository) GetEvents(ctx context.Context, afterEventID string, batc
 			}
 		}
 	}
-	query.WriteString(" ORDER BY id ASC LIMIT ")
-	query.WriteString(strconv.Itoa(batchSize))
-
-	rows, err := es.queryEvents(ctx, query.String(), args)
-	if err != nil {
-		if err != sql.ErrNoRows {
-			return nil, fmt.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
-		}
-	}
-	return rows, nil
+	return args
 }
 
 func (es *PgRepository) queryEvents(ctx context.Context, query string, args []interface{}) ([]common.Event, error) {

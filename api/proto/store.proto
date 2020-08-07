@@ -9,7 +9,9 @@ service Store {
   rpc GetEvents (GetEventsRequest) returns (GetEventsReply) {}
 }
 
-message GetLastEventIDRequest {}
+message GetLastEventIDRequest {
+  Filter filter = 1;
+}
 
 message GetLastEventIDReply {
   string event_id = 1;
