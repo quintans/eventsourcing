@@ -43,7 +43,7 @@ func NewMockRepo() *MockRepo {
 	}
 }
 
-func (r *MockRepo) GetLastEventID(ctx context.Context) (string, error) {
+func (r *MockRepo) GetLastEventID(ctx context.Context, filter common.Filter) (string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.events[len(r.events)-1].ID, nil
@@ -76,87 +76,83 @@ func TestSingleConsumer(t *testing.T) {
 
 	r := NewMockRepo()
 	p := New(r, WithLimit(2))
-	c := NewCache(p)
-	count := 0
+	c := NewBuffer(p)
 
+	var mu sync.Mutex
+	ids := []string{}
 	lastID := ""
-	fast := c.NewConsumer("single", func(ctx context.Context, e common.Event) error {
-		time.Sleep(100)
-		count++
+	single := c.NewConsumer("single", func(ctx context.Context, e common.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
 		assert.Greater(t, e.ID, lastID)
 		lastID = e.ID
+		ids = append(ids, e.ID)
 		return nil
 	})
-	go fast.StartAt("")
+	go single.Start()
 
-	ctx, _ := context.WithTimeout(context.Background(), time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	ctx, _ := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	err := c.Start(ctx, "")
 	require.NoError(t, err)
 
-	assert.Equal(t, len(r.events), count, "Consumer Count")
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"A", "B", "C", "D"}, ids, "Consumer IDs", ids)
 }
 
 func TestBuffer(t *testing.T) {
 	t.Parallel()
 
-	for i := 0; i < 15; i++ {
+	for i := 0; i < 20; i++ {
 		r := NewMockRepo()
-		p := New(r, WithLimit(2))
-		c := NewCache(p)
-		fastCount := []string{}
-		slowCount := []string{}
+		p := New(r, WithLimit(2), WithPollInterval(200*time.Millisecond))
+		c := NewBuffer(p)
+		fastIDs := []string{}
+		slowIDs := []string{}
 
 		lastFastID := ""
 		fast := c.NewConsumer("fast", func(ctx context.Context, e common.Event) error {
-			time.Sleep(100)
-			fastCount = append(fastCount, e.ID)
-			require.Greater(t, e.ID, lastFastID, "Fast")
+			fastIDs = append(fastIDs, e.ID)
+			require.Greater(t, e.ID, lastFastID, "Fast %d - %s > %s", i, e.ID, lastFastID)
 			lastFastID = e.ID
 			return nil
 		})
-		go fast.StartAt("")
+		go fast.Start()
 
 		lastSlowID := ""
 		slow := c.NewConsumer("slow", func(ctx context.Context, e common.Event) error {
-			time.Sleep(300)
-			slowCount = append(slowCount, e.ID)
-			require.Greater(t, e.ID, lastSlowID, "Slow")
+			time.Sleep(10 * time.Millisecond)
+			slowIDs = append(slowIDs, e.ID)
+			require.Greater(t, e.ID, lastSlowID, "Slow %d - %s > %s", i, e.ID, lastSlowID)
 			lastSlowID = e.ID
 			return nil
 		})
-		go slow.StartAt("")
+		go slow.Start()
 
-		ctx, _ := context.WithTimeout(context.Background(), time.Second)
+		time.Sleep(100 * time.Millisecond)
+
+		ctx, _ := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		err := c.Start(ctx, "")
 		require.NoError(t, err)
 
-		require.Equal(t, len(r.events), len(fastCount), "Fast Count: %s", fastCount)
-		require.Equal(t, len(r.events), len(slowCount), "Slow Count: %s", slowCount)
+		time.Sleep(50 * time.Millisecond)
+
+		assert.Equal(t, []string{"A", "B", "C", "D"}, fastIDs, "Fast: %d - %s", i, fastIDs)
+		require.Equal(t, []string{"A", "B", "C", "D"}, slowIDs, "Slow: %d - %s", i, slowIDs)
 	}
 }
 
-func TestLateConsumer(t *testing.T) {
+func TestSingleLateConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
 	p := New(r, WithLimit(2))
-	c := NewCache(p)
-	firstCount := []string{}
-	lateCount := []string{}
+	c := NewBuffer(p)
 	var mu sync.Mutex
-
-	lastFirstID := ""
-	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
-		mu.Lock()
-		defer mu.Unlock()
-
-		time.Sleep(100)
-		firstCount = append(firstCount, e.ID)
-		assert.Greater(t, e.ID, lastFirstID, "First")
-		lastFirstID = e.ID
-		return nil
-	})
-	go first.StartAt(events1[1].ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -164,44 +160,43 @@ func TestLateConsumer(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	time.Sleep(time.Second)
+	time.Sleep(50 * time.Millisecond)
 
+	ids := []string{}
 	lastLateID := ""
 	late := c.NewConsumer("late", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
-		time.Sleep(100)
-		lateCount = append(lateCount, e.ID)
 		assert.Greater(t, e.ID, lastLateID, "Late")
 		lastLateID = e.ID
+		ids = append(ids, e.ID)
 		return nil
 	})
-	go late.StartAt(events2[0].ID)
+	go late.Resume(events2[0].ID)
 
-	time.Sleep(time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	r.SetEvents(append(events1, events2...))
 
 	time.Sleep(time.Second)
 	cancel()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, len(events1)-2+len(events2), len(firstCount), "First Count: %s", firstCount)
-	assert.Equal(t, len(events2)-1, len(lateCount), "Late Count: %s", lateCount)
+	assert.Equal(t, []string{"F", "G", "H"}, ids, "IDs: %s", ids)
 }
 
-func TestStopConsumer(t *testing.T) {
+func TestLateConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
 	p := New(r, WithLimit(2))
-	c := NewCache(p)
-	firstCount := []string{}
-	lateCount := []string{}
+	c := NewBuffer(p)
+	firstIDs := []string{}
+	lateIDs := []string{}
 	var mu sync.Mutex
 
 	lastFirstID := ""
@@ -209,26 +204,89 @@ func TestStopConsumer(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		time.Sleep(100)
-		firstCount = append(firstCount, e.ID)
+		time.Sleep(100 * time.Millisecond)
+		firstIDs = append(firstIDs, e.ID)
 		assert.Greater(t, e.ID, lastFirstID, "First")
 		lastFirstID = e.ID
 		return nil
 	})
-	go first.StartAt(events1[1].ID)
+	go first.Resume(events1[1].ID)
+
+	time.Sleep(100 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := c.Start(ctx, "")
+		require.NoError(t, err)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
 
 	lastLateID := ""
 	late := c.NewConsumer("late", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
-		time.Sleep(100)
-		lateCount = append(lateCount, e.ID)
+		time.Sleep(100 * time.Millisecond)
+		lateIDs = append(lateIDs, e.ID)
 		assert.Greater(t, e.ID, lastLateID, "Late")
 		lastLateID = e.ID
 		return nil
 	})
-	go late.StartAt("")
+	go late.Resume(events2[0].ID)
+
+	time.Sleep(100 * time.Millisecond)
+
+	r.SetEvents(append(events1, events2...))
+
+	time.Sleep(time.Second)
+	cancel()
+
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"C", "D", "E", "F", "G", "H"}, firstIDs, "First: %s", firstIDs)
+	assert.Equal(t, []string{"F", "G", "H"}, lateIDs, "Late: %s", lateIDs)
+}
+
+func TestStopConsumer(t *testing.T) {
+	t.Parallel()
+
+	r := NewMockRepo()
+	p := New(r, WithLimit(2))
+	c := NewBuffer(p)
+	var mu sync.Mutex
+
+	firstIDs := []string{}
+	lastFirstID := ""
+	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		time.Sleep(100 * time.Millisecond)
+		assert.Greater(t, e.ID, lastFirstID, "First")
+		lastFirstID = e.ID
+		firstIDs = append(firstIDs, e.ID)
+		return nil
+	})
+	go first.Resume(events1[1].ID)
+
+	lateIDs := []string{}
+	lastLateID := ""
+	late := c.NewConsumer("late", func(ctx context.Context, e common.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		time.Sleep(100 * time.Millisecond)
+		assert.Greater(t, e.ID, lastLateID, "Late")
+		lastLateID = e.ID
+		lateIDs = append(lateIDs, e.ID)
+		return nil
+	})
+	go late.Start()
+
+	time.Sleep(100 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -251,8 +309,8 @@ func TestStopConsumer(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, len(events1)-2+len(events2), len(firstCount), "First Count: %s", firstCount)
-	assert.Equal(t, len(events1), len(lateCount), "Late Count: %s", lateCount)
+	assert.Equal(t, []string{"C", "D", "E", "F", "G", "H"}, firstIDs, "First IDs: %s", firstIDs)
+	assert.Equal(t, []string{"A", "B", "C", "D"}, lateIDs, "Late IDs: %s", lateIDs)
 }
 
 func TestRestartSingleConsumer(t *testing.T) {
@@ -260,22 +318,25 @@ func TestRestartSingleConsumer(t *testing.T) {
 
 	r := NewMockRepo()
 	p := New(r, WithLimit(2))
-	c := NewCache(p)
+	c := NewBuffer(p)
 	count := []string{}
 	var mu sync.Mutex
 
+	ids := []string{}
 	lastID := ""
 	single := c.NewConsumer("single", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
-		time.Sleep(100)
 		count = append(count, e.ID)
 		assert.Greater(t, e.ID, lastID, "Second")
 		lastID = e.ID
+		ids = append(ids, e.ID)
 		return nil
 	})
-	go single.StartAt("")
+	go single.Start()
+
+	time.Sleep(100 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -283,32 +344,34 @@ func TestRestartSingleConsumer(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	time.Sleep(time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	single.Stop()
 
-	time.Sleep(time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	mu.Lock()
 	assert.Equal(t, len(events1), len(count), "Count: %s", count)
 	mu.Unlock()
 
-	single.HoldAt("")
+	time.Sleep(100 * time.Millisecond)
 	evts := append(events1, events2...)
 	r.SetEvents(evts)
 
 	time.Sleep(time.Second)
 
 	go single.Resume(events3[0].ID)
+	time.Sleep(100 * time.Millisecond)
+
 	evts = append(evts, events3...)
 	r.SetEvents(evts)
 
-	time.Sleep(time.Second)
+	time.Sleep(3 * time.Second)
 
 	cancel()
 
 	mu.Lock()
-	assert.Equal(t, len(events1)+len(events3)-1, len(count), "Count: %s", count)
+	assert.Equal(t, []string{"A", "B", "C", "D", "J", "K", "L"}, ids, "IDs: %s", ids)
 	mu.Unlock()
 }
 
@@ -317,36 +380,36 @@ func TestRestartConsumer(t *testing.T) {
 
 	r := NewMockRepo()
 	p := New(r, WithLimit(2))
-	c := NewCache(p)
-	firstCount := []string{}
-	secondCount := []string{}
+	c := NewBuffer(p)
 	var mu sync.Mutex
 
+	firstIDs := []string{}
 	lastFirstID := ""
 	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
-		time.Sleep(100)
-		firstCount = append(firstCount, e.ID)
 		assert.Greater(t, e.ID, lastFirstID, "First")
 		lastFirstID = e.ID
+		firstIDs = append(firstIDs, e.ID)
 		return nil
 	})
-	go first.StartAt(events1[1].ID)
+	go first.Resume(events1[1].ID)
 
+	secondIDs := []string{}
 	lastSecondID := ""
 	second := c.NewConsumer("second", func(ctx context.Context, e common.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
-		time.Sleep(100)
-		secondCount = append(secondCount, e.ID)
 		assert.Greater(t, e.ID, lastSecondID, "Second")
 		lastSecondID = e.ID
+		secondIDs = append(secondIDs, e.ID)
 		return nil
 	})
-	go second.StartAt("")
+	go second.Start()
+
+	time.Sleep(100 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -354,13 +417,13 @@ func TestRestartConsumer(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	time.Sleep(time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	second.Stop()
 
-	time.Sleep(time.Second)
+	time.Sleep(100 * time.Millisecond)
 
-	second.HoldAt("")
+	second.Attach()
 	evts := append(events1, events2...)
 	r.SetEvents(evts)
 
@@ -370,12 +433,12 @@ func TestRestartConsumer(t *testing.T) {
 	evts = append(evts, events3...)
 	r.SetEvents(evts)
 
-	time.Sleep(time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	cancel()
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, len(events1)-2+len(events2)+len(events3), len(firstCount), "First Count: %s", firstCount)
-	assert.Equal(t, len(events1)+len(events3)-1, len(secondCount), "Second Count: %s", secondCount)
+	assert.Equal(t, []string{"C", "D", "E", "F", "G", "H", "I", "J", "K", "L"}, firstIDs, "First IDs: %s", firstIDs)
+	assert.Equal(t, []string{"A", "B", "C", "D", "J", "K", "L"}, secondIDs, "Second IDs: %s", secondIDs)
 }
