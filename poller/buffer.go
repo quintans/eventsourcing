@@ -29,52 +29,52 @@ func NewBuffer(poller *Poller) *Buffer {
 	}
 }
 
-func (c *Buffer) Start(ctx context.Context, startAt string) error {
-	return c.poller.Handle(ctx, StartAt(startAt), func(ctx2 context.Context, e common.Event) error {
+func (n *Buffer) Start(ctx context.Context, startAt string) error {
+	return n.poller.Handle(ctx, StartAt(startAt), func(ctx2 context.Context, e common.Event) error {
 		defer func() {
 			if recover() != nil {
 				// don't care
 			}
 		}()
-		c.eventsCh <- e
+		n.eventsCh <- e
 		return nil
 	})
 }
 
-func (c *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (b *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	var n *list.Element
 	if e == nil {
-		n = c.events.Front()
+		n = b.events.Front()
 	} else {
 		n = e.Next()
 	}
 	if n == nil {
-		if c.wait == nil {
-			c.wait = make(chan struct{})
+		if b.wait == nil {
+			b.wait = make(chan struct{})
 
 			// wait for an available event
 			go func() {
-				evt := <-c.eventsCh
+				evt := <-b.eventsCh
 
-				c.mu.Lock()
-				c.events.PushBack(evt)
-				if c.wait != nil {
-					close(c.wait)
+				b.mu.Lock()
+				b.events.PushBack(evt)
+				if b.wait != nil {
+					close(b.wait)
 				}
-				c.wait = nil
-				c.mu.Unlock()
+				b.wait = nil
+				b.mu.Unlock()
 			}()
 		}
 
-		return nil, c.wait
+		return nil, b.wait
 	}
 
 	// tail event
 	tail := ""
-	for e := c.consumers.Front(); e != nil; e = e.Next() {
+	for e := b.consumers.Front(); e != nil; e = e.Next() {
 		v := e.Value.(*Consumer)
 		eID := v.EventID()
 		if tail == "" || eID < tail {
@@ -83,10 +83,10 @@ func (c *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
 	}
 
 	// trim buffer
-	for e := c.events.Front(); e != nil; e = e.Next() {
+	for e := b.events.Front(); e != nil; e = e.Next() {
 		evt := e.Value.(common.Event)
 		if evt.ID < tail {
-			c.events.Remove(e)
+			b.events.Remove(e)
 		} else {
 			break
 		}
@@ -95,11 +95,11 @@ func (c *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
 	return n, nil
 }
 
-func (c *Buffer) NewConsumer(name string, handler EventHandler) *Consumer {
+func (b *Buffer) NewConsumer(name string, handler EventHandler) *Consumer {
 	consu := &Consumer{
 		name:    name,
 		handler: handler,
-		buffer:  c,
+		buffer:  b,
 	}
 	return consu
 }
@@ -110,19 +110,42 @@ func (c *Buffer) Close() {
 	close(c.eventsCh)
 }
 
-func (c *Buffer) register(consu *Consumer) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	consu.fifo = c.events.Front()
-	consu.consumer = c.consumers.PushBack(consu)
-	c.consumers.PushBack(consu)
+func (b *Buffer) register(consu *Consumer) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	consu.fifo = b.events.Front()
+	consu.consumer = b.consumers.PushBack(consu)
+	b.consumers.PushBack(consu)
 }
 
-func (c *Buffer) unregister(consu *Consumer) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (b *Buffer) seek(consu *Consumer, startAt string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if consu.consumer == nil {
+		consu.consumer = b.consumers.PushBack(consu)
+	}
+
+	e := b.events.Front()
+
+	// skipping forward
+	if startAt != "" {
+		for elem := e; elem != nil; elem = elem.Next() {
+			evt := elem.Value.(common.Event)
+			if evt.ID >= startAt {
+				e = elem
+				break
+			}
+		}
+	}
+	consu.fifo = e
+}
+
+func (b *Buffer) unregister(consu *Consumer) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if consu.consumer != nil {
-		c.consumers.Remove(consu.consumer)
+		b.consumers.Remove(consu.consumer)
 		consu.consumer = nil
 	}
 }
@@ -131,11 +154,14 @@ type Consumer struct {
 	mu       sync.Mutex
 	buffer   *Buffer
 	name     string
-	startAt  string
 	fifo     *list.Element
 	handler  EventHandler
 	quit     chan struct{}
 	consumer *list.Element
+}
+
+func (c *Consumer) Name() string {
+	return c.name
 }
 
 func (c *Consumer) EventID() string {
@@ -151,6 +177,10 @@ func (c *Consumer) EventID() string {
 
 func (c *Consumer) Attach() {
 	c.buffer.register(c)
+}
+
+func (c *Consumer) Seek(startAt string) {
+	c.buffer.seek(c, startAt)
 }
 
 func (c *Consumer) Start() {
