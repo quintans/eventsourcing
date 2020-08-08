@@ -1,4 +1,4 @@
-package eventstore_test
+package repo_test
 
 import (
 	"github.com/quintans/eventstore"

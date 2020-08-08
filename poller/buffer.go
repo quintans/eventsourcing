@@ -5,7 +5,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore"
 )
 
 // Buffer manager a list of events.
@@ -15,7 +15,7 @@ type Buffer struct {
 	mu        sync.Mutex
 	events    *list.List
 	consumers *list.List
-	eventsCh  chan common.Event
+	eventsCh  chan eventstore.Event
 	poller    *Poller
 	wait      chan struct{}
 }
@@ -24,13 +24,13 @@ func NewBuffer(poller *Poller) *Buffer {
 	return &Buffer{
 		events:    list.New(),
 		consumers: list.New(),
-		eventsCh:  make(chan common.Event),
+		eventsCh:  make(chan eventstore.Event),
 		poller:    poller,
 	}
 }
 
 func (n *Buffer) Start(ctx context.Context, startAt string) error {
-	return n.poller.Handle(ctx, StartAt(startAt), func(ctx2 context.Context, e common.Event) error {
+	return n.poller.Handle(ctx, StartAt(startAt), func(ctx2 context.Context, e eventstore.Event) error {
 		defer func() {
 			if recover() != nil {
 				// don't care
@@ -84,7 +84,7 @@ func (b *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
 
 	// trim buffer
 	for e := b.events.Front(); e != nil; e = e.Next() {
-		evt := e.Value.(common.Event)
+		evt := e.Value.(eventstore.Event)
 		if evt.ID < tail {
 			b.events.Remove(e)
 		} else {
@@ -131,7 +131,7 @@ func (b *Buffer) seek(consu *Consumer, startAt string) {
 	// skipping forward
 	if startAt != "" {
 		for elem := e; elem != nil; elem = elem.Next() {
-			evt := elem.Value.(common.Event)
+			evt := elem.Value.(eventstore.Event)
 			if evt.ID >= startAt {
 				e = elem
 				break
@@ -171,7 +171,7 @@ func (c *Consumer) EventID() string {
 	if c.fifo == nil {
 		return ""
 	}
-	e := c.fifo.Value.(common.Event)
+	e := c.fifo.Value.(eventstore.Event)
 	return e.ID
 }
 
@@ -211,7 +211,7 @@ func (c *Consumer) Resume(startAt string) {
 				return
 			}
 		} else {
-			evt := e.Value.(common.Event)
+			evt := e.Value.(eventstore.Event)
 			if evt.ID > startAt {
 				c.handler(context.Background(), evt)
 			}

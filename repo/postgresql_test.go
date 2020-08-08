@@ -1,4 +1,4 @@
-package eventstore_test
+package repo_test
 
 import (
 	"context"
@@ -17,6 +17,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/poller"
+	"github.com/quintans/eventstore/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
@@ -132,9 +133,9 @@ func ping(dburl string) (*sqlx.DB, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r, err := eventstore.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewESPostgreSQL(r, 3)
+	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -156,7 +157,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
-	evts := []common.PgEvent{}
+	evts := []repo.PgEvent{}
 	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	require.Equal(t, 4, len(evts))
@@ -176,9 +177,9 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestListener(t *testing.T) {
 	ctx := context.Background()
-	r, err := eventstore.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewESPostgreSQL(r, 3)
+	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -192,7 +193,7 @@ func TestListener(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	tracker, err := poller.NewPgRepository(dbURL)
+	tracker, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
 	lm := poller.New(tracker)
 
@@ -205,7 +206,7 @@ func TestListener(t *testing.T) {
 		}
 		cancel()
 	}()
-	lm.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) error {
+	lm.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -225,9 +226,9 @@ func TestListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r, err := eventstore.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewESPostgreSQL(r, 3)
+	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -241,12 +242,12 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	tracker, err := poller.NewPgRepository(dbURL)
+	tracker, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
 	p := poller.New(tracker, poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
-	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) error {
+	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -270,9 +271,9 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r, err := eventstore.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewESPostgreSQL(r, 3)
+	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -295,12 +296,12 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := NewAccount()
 	counter := 0
 
-	tracker, err := poller.NewPgRepository(dbURL)
+	tracker, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	p := poller.New(tracker, poller.WithLabels(common.NewLabel("geo", "EU")))
+	p := poller.New(tracker, poller.WithLabels(eventstore.NewLabel("geo", "EU")))
 
 	done := make(chan struct{})
-	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e common.Event) error {
+	go p.Handle(ctx, poller.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -324,9 +325,9 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r, err := eventstore.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewESPostgreSQL(r, 3)
+	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
 	acc := CreateAccount("Paulo", id, 100)
@@ -403,8 +404,8 @@ func TestForget(t *testing.T) {
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
-	r, _ := eventstore.NewPgEsRepository(dbURL)
-	es := eventstore.NewESPostgreSQL(r, 50)
+	r, _ := repo.NewPgEsRepository(dbURL)
+	es := eventstore.NewEventStore(r, 50)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New().String()

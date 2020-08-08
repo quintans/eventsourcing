@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"strings"
-
-	"github.com/quintans/eventstore/common"
 )
 
 var methodHandlerPrefix = "Handle"
@@ -84,7 +82,7 @@ func (a *RootAggregate) ClearEvents() {
 	a.events = []interface{}{}
 }
 
-func (a *RootAggregate) ApplyChangeFromHistory(event common.Event) error {
+func (a *RootAggregate) ApplyChangeFromHistory(event Event) error {
 	h, ok := a.handlers[event.Kind]
 	if ok {
 		evtPtr := reflect.New(h.eventType)

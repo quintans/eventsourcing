@@ -4,20 +4,17 @@ import (
 	"context"
 	"time"
 
-	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore"
 	log "github.com/sirupsen/logrus"
 )
 
-var _ Repository = (*PgRepository)(nil)
-
 const (
 	maxWait = time.Minute
-	lag     = -200 * time.Millisecond
 )
 
 type Repository interface {
-	GetLastEventID(ctx context.Context, filter common.Filter) (string, error)
-	GetEvents(ctx context.Context, afterEventID string, limit int, filter common.Filter) ([]common.Event, error)
+	GetLastEventID(ctx context.Context, filter eventstore.Filter) (string, error)
+	GetEvents(ctx context.Context, afterEventID string, limit int, filter eventstore.Filter) ([]eventstore.Event, error)
 }
 
 type Start int
@@ -28,7 +25,7 @@ const (
 	SEQUENCE
 )
 
-type EventHandler func(ctx context.Context, e common.Event) error
+type EventHandler func(ctx context.Context, e eventstore.Event) error
 
 type Cancel func()
 
@@ -40,7 +37,7 @@ func WithPollInterval(pi time.Duration) Option {
 	}
 }
 
-func WithFilter(filter common.Filter) Option {
+func WithFilter(filter eventstore.Filter) Option {
 	return func(p *Poller) {
 		p.filter = filter
 	}
@@ -52,7 +49,7 @@ func WithAggregateTypes(at ...string) Option {
 	}
 }
 
-func WithLabels(labels ...common.Label) Option {
+func WithLabels(labels ...eventstore.Label) Option {
 	return func(p *Poller) {
 		p.filter.Labels = labels
 	}
@@ -71,7 +68,7 @@ func New(repo Repository, options ...Option) *Poller {
 		repo:         repo,
 		pollInterval: 500 * time.Millisecond,
 		limit:        20,
-		filter:       common.Filter{},
+		filter:       eventstore.Filter{},
 	}
 	for _, o := range options {
 		o(p)
@@ -82,7 +79,7 @@ func New(repo Repository, options ...Option) *Poller {
 type Poller struct {
 	repo         Repository
 	pollInterval time.Duration
-	filter       common.Filter
+	filter       eventstore.Filter
 	limit        int
 }
 
@@ -115,7 +112,7 @@ func (p *Poller) Handle(ctx context.Context, startOption StartOption, handler Ev
 	var err error
 	switch startOption.startFrom {
 	case END:
-		afterEventID, err = p.repo.GetLastEventID(ctx, common.Filter{})
+		afterEventID, err = p.repo.GetLastEventID(ctx, eventstore.Filter{})
 		if err != nil {
 			return err
 		}
@@ -153,7 +150,7 @@ func (p *Poller) handle(ctx context.Context, afterEventID string, handler EventH
 
 type Sink interface {
 	LastEventID(ctx context.Context) (string, error)
-	Send(ctx context.Context, e common.Event) error
+	Send(ctx context.Context, e eventstore.Event) error
 }
 
 // Forward forwars the handling to a sink.

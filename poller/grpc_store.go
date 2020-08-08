@@ -7,8 +7,8 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"github.com/quintans/eventstore"
 	pb "github.com/quintans/eventstore/api/proto"
-	"github.com/quintans/eventstore/common"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -23,7 +23,7 @@ func NewGrpcRepository(address string) Repository {
 	}
 }
 
-func (c GrpcRepository) GetLastEventID(ctx context.Context, filter common.Filter) (string, error) {
+func (c GrpcRepository) GetLastEventID(ctx context.Context, filter eventstore.Filter) (string, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return "", err
@@ -39,7 +39,7 @@ func (c GrpcRepository) GetLastEventID(ctx context.Context, filter common.Filter
 	return r.EventId, nil
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, filter common.Filter) ([]common.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, filter eventstore.Filter) ([]eventstore.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, err
@@ -59,14 +59,14 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 		return nil, fmt.Errorf("could not get events: %w", err)
 	}
 
-	events := make([]common.Event, len(r.Events))
+	events := make([]eventstore.Event, len(r.Events))
 	for k, v := range r.Events {
 		createdAt, err := tsToTime(v.CreatedAt)
 		if err != nil {
 			log.Fatal("could convert timestamp")
 		}
 
-		events[k] = common.Event{
+		events[k] = eventstore.Event{
 			ID:               v.Id,
 			AggregateID:      v.AggregateId,
 			AggregateVersion: int(v.AggregateVersion),
@@ -81,7 +81,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 	return events, nil
 }
 
-func filterToPbFilter(filter common.Filter) *pb.Filter {
+func filterToPbFilter(filter eventstore.Filter) *pb.Filter {
 	types := make([]string, len(filter.AggregateTypes))
 	for k, v := range filter.AggregateTypes {
 		types[k] = v

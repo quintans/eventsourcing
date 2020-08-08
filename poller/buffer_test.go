@@ -6,25 +6,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 var (
-	events1 = []common.Event{
+	events1 = []eventstore.Event{
 		{ID: "A", AggregateID: "1", AggregateType: "Test", Kind: "Created", Body: []byte(`{"message":"zero"}`)},
 		{ID: "B", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"one"}`)},
 		{ID: "C", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"two"}`)},
 		{ID: "D", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"three"}`)},
 	}
-	events2 = []common.Event{
+	events2 = []eventstore.Event{
 		{ID: "E", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"four"}`)},
 		{ID: "F", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"five"}`)},
 		{ID: "G", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"six"}`)},
 		{ID: "H", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"seven"}`)},
 	}
-	events3 = []common.Event{
+	events3 = []eventstore.Event{
 		{ID: "I", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"eight"}`)},
 		{ID: "J", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"nine"}`)},
 		{ID: "K", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"ten"}`)},
@@ -34,7 +34,7 @@ var (
 
 type MockRepo struct {
 	mu     sync.RWMutex
-	events []common.Event
+	events []eventstore.Event
 }
 
 func NewMockRepo() *MockRepo {
@@ -43,17 +43,17 @@ func NewMockRepo() *MockRepo {
 	}
 }
 
-func (r *MockRepo) GetLastEventID(ctx context.Context, filter common.Filter) (string, error) {
+func (r *MockRepo) GetLastEventID(ctx context.Context, filter eventstore.Filter) (string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.events[len(r.events)-1].ID, nil
 }
 
-func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int, filter common.Filter) ([]common.Event, error) {
+func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int, filter eventstore.Filter) ([]eventstore.Event, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	result := []common.Event{}
+	result := []eventstore.Event{}
 	for _, v := range r.events {
 		if v.ID > afterEventID {
 			result = append(result, v)
@@ -65,7 +65,7 @@ func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int
 	return result, nil
 }
 
-func (r *MockRepo) SetEvents(events []common.Event) {
+func (r *MockRepo) SetEvents(events []eventstore.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = events
@@ -81,7 +81,7 @@ func TestSingleConsumer(t *testing.T) {
 	var mu sync.Mutex
 	ids := []string{}
 	lastID := ""
-	single := c.NewConsumer("single", func(ctx context.Context, e common.Event) error {
+	single := c.NewConsumer("single", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 		assert.Greater(t, e.ID, lastID)
@@ -115,7 +115,7 @@ func TestBuffer(t *testing.T) {
 		slowIDs := []string{}
 
 		lastFastID := ""
-		fast := c.NewConsumer("fast", func(ctx context.Context, e common.Event) error {
+		fast := c.NewConsumer("fast", func(ctx context.Context, e eventstore.Event) error {
 			fastIDs = append(fastIDs, e.ID)
 			require.Greater(t, e.ID, lastFastID, "Fast %d - %s > %s", i, e.ID, lastFastID)
 			lastFastID = e.ID
@@ -124,7 +124,7 @@ func TestBuffer(t *testing.T) {
 		go fast.Start()
 
 		lastSlowID := ""
-		slow := c.NewConsumer("slow", func(ctx context.Context, e common.Event) error {
+		slow := c.NewConsumer("slow", func(ctx context.Context, e eventstore.Event) error {
 			time.Sleep(10 * time.Millisecond)
 			slowIDs = append(slowIDs, e.ID)
 			require.Greater(t, e.ID, lastSlowID, "Slow %d - %s > %s", i, e.ID, lastSlowID)
@@ -164,7 +164,7 @@ func TestSingleLateConsumer(t *testing.T) {
 
 	ids := []string{}
 	lastLateID := ""
-	late := c.NewConsumer("late", func(ctx context.Context, e common.Event) error {
+	late := c.NewConsumer("late", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -200,7 +200,7 @@ func TestLateConsumer(t *testing.T) {
 	var mu sync.Mutex
 
 	lastFirstID := ""
-	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
+	first := c.NewConsumer("first", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -223,7 +223,7 @@ func TestLateConsumer(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	lastLateID := ""
-	late := c.NewConsumer("late", func(ctx context.Context, e common.Event) error {
+	late := c.NewConsumer("late", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -260,7 +260,7 @@ func TestStopConsumer(t *testing.T) {
 
 	firstIDs := []string{}
 	lastFirstID := ""
-	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
+	first := c.NewConsumer("first", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -274,7 +274,7 @@ func TestStopConsumer(t *testing.T) {
 
 	lateIDs := []string{}
 	lastLateID := ""
-	late := c.NewConsumer("late", func(ctx context.Context, e common.Event) error {
+	late := c.NewConsumer("late", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -324,7 +324,7 @@ func TestRestartSingleConsumer(t *testing.T) {
 
 	ids := []string{}
 	lastID := ""
-	single := c.NewConsumer("single", func(ctx context.Context, e common.Event) error {
+	single := c.NewConsumer("single", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -385,7 +385,7 @@ func TestRestartConsumer(t *testing.T) {
 
 	firstIDs := []string{}
 	lastFirstID := ""
-	first := c.NewConsumer("first", func(ctx context.Context, e common.Event) error {
+	first := c.NewConsumer("first", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -398,7 +398,7 @@ func TestRestartConsumer(t *testing.T) {
 
 	secondIDs := []string{}
 	lastSecondID := ""
-	second := c.NewConsumer("second", func(ctx context.Context, e common.Event) error {
+	second := c.NewConsumer("second", func(ctx context.Context, e eventstore.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
