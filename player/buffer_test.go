@@ -77,8 +77,7 @@ func TestSingleConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
-	p := New(r, WithLimit(2))
-	c := NewBuffer(p)
+	c := NewBufferedPlayer(r, WithLimit(2))
 
 	var mu sync.Mutex
 	ids := []string{}
@@ -109,7 +108,7 @@ func TestSingleConsumer(t *testing.T) {
 func TestBuffer(t *testing.T) {
 	t.Parallel()
 
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 10; i++ {
 		r := NewMockRepo()
 		p := New(r, WithLimit(2))
 		c := NewBuffer(p)
@@ -118,6 +117,7 @@ func TestBuffer(t *testing.T) {
 
 		lastFastID := ""
 		fast := c.NewConsumer("fast", func(ctx context.Context, e eventstore.Event) error {
+			time.Sleep(10 * time.Millisecond)
 			fastIDs = append(fastIDs, e.ID)
 			require.Greater(t, e.ID, lastFastID, "Fast %d - %s > %s", i, e.ID, lastFastID)
 			lastFastID = e.ID
@@ -127,7 +127,7 @@ func TestBuffer(t *testing.T) {
 
 		lastSlowID := ""
 		slow := c.NewConsumer("slow", func(ctx context.Context, e eventstore.Event) error {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 			slowIDs = append(slowIDs, e.ID)
 			require.Greater(t, e.ID, lastSlowID, "Slow %d - %s > %s", i, e.ID, lastSlowID)
 			lastSlowID = e.ID
@@ -141,7 +141,7 @@ func TestBuffer(t *testing.T) {
 		err := c.Start(ctx, pollInterval, "")
 		require.NoError(t, err)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 
 		assert.Equal(t, []string{"A", "B", "C", "D"}, fastIDs, "Fast: %d - %s", i, fastIDs)
 		require.Equal(t, []string{"A", "B", "C", "D"}, slowIDs, "Slow: %d - %s", i, slowIDs)

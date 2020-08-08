@@ -194,21 +194,25 @@ CQRS is an application architecture pattern often used with event sourcing.
 
 ### Simple use
 
-For a simple architecture, where we have a small number of projectors, we could use only the data store poller. This poller polls the database for new events at a regular interval (should be less than 1 second), for events after a given event id.
+By using this library player, a simple architecture can be achieved. The player polls the database for new events at a regular interval (should be less than 1 second), for events after a given event id and fans out to registered consumers. So we have one player serving multiple consumers. Consumer can be stopped and restart on demand.
 The projectors should take care of persisting the last handled event, so that in the case of a restart it will pick from the last known event.
-It is also important to note that for each poller+projectors, there can only exist one instance working at a given time, to guarantee that for one aggregate the events are processed in order (if and event is not processed in order we might end up with corrupt data).
-
-> we could partition the events over a know number of projector instances, manually scaling up or down according to the volume of traffic.
+It is also important to note that for each projectors, can only be working in one instance at a given time, to guarantee that the events are processed in order (if and event is not processed in order we might end up with corrupt data).
 
 ![CQRS](cqrs-es-simple.png)
 
+#### Replay
+Replaying all the events fo a projection is very easy to achieve. 
+1) Stop the respective consumer
+2) retrieve all the events using the player
+3) Reattach the consumer to lock to a buffer position
+4) retrieve any event from the last position returned in 2)
+5) resume consuming
 
-### Scalability
+### Alternative (Deprecated)
 
-As the number of projectors increase, so the number of pollers increase and this will lead to an increase load of the database, due to the polling of the database at short intervals.
-At some point the database becomes overloaded with so many queries, that we need a new strategy.
+> I no longer see this approach as an advantage, since now we can have a poller serving multiple consumers.
 
-The offload of the database is accomplished by placing an event bus after the data store poller, and let the event bus deliver the events to the projectors, as depicted in the following picture:
+Another approach is to have an event bus after the data store poller, and let the event bus deliver the events to the projectors, as depicted in the following picture:
 
 ![CQRS](cqrs-es.png)
 
@@ -228,7 +232,7 @@ What this metadata can be and how it is stored will depend in your business case
 A good example is to have a poller per set of aggregates types of per aggregate type.
 As an implementation example, for a very broad spectrum of problem, events can be stored with with generic labels, that in turn can be used to filter the events. Each poller would then be sending events into its own event bus topic.
 
-### Replay
+#### Replay
 
 Considering that the event bus should have a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
 1) get the position of the last message from the event bus

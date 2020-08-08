@@ -21,12 +21,16 @@ type Buffer struct {
 	wait      chan struct{}
 }
 
-func NewBuffer(player *Player) *Buffer {
+func NewBufferedPlayer(r Repository, options ...Option) *Buffer {
+	return NewBuffer(New(r, options...))
+}
+
+func NewBuffer(p *Player) *Buffer {
 	return &Buffer{
 		events:    list.New(),
 		consumers: list.New(),
-		eventsCh:  make(chan eventstore.Event),
-		player:    player,
+		eventsCh:  make(chan eventstore.Event, 1),
+		player:    p,
 	}
 }
 
