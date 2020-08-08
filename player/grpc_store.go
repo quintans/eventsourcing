@@ -1,4 +1,4 @@
-package poller
+package player
 
 import (
 	"context"
@@ -23,7 +23,7 @@ func NewGrpcRepository(address string) Repository {
 	}
 }
 
-func (c GrpcRepository) GetLastEventID(ctx context.Context, filter eventstore.Filter) (string, error) {
+func (c GrpcRepository) GetLastEventID(ctx context.Context, filter Filter) (string, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return "", err
@@ -39,7 +39,7 @@ func (c GrpcRepository) GetLastEventID(ctx context.Context, filter eventstore.Fi
 	return r.EventId, nil
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, filter eventstore.Filter) ([]eventstore.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, filter Filter) ([]eventstore.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, err
@@ -81,7 +81,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 	return events, nil
 }
 
-func filterToPbFilter(filter eventstore.Filter) *pb.Filter {
+func filterToPbFilter(filter Filter) *pb.Filter {
 	types := make([]string, len(filter.AggregateTypes))
 	for k, v := range filter.AggregateTypes {
 		types[k] = v

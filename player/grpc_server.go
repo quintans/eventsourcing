@@ -1,4 +1,4 @@
-package poller
+package player
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	_ "github.com/lib/pq"
-	"github.com/quintans/eventstore"
 	pb "github.com/quintans/eventstore/api/proto"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -54,16 +53,16 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 	return &pb.GetEventsReply{Events: pbEvents}, nil
 }
 
-func pbFilterToFilter(pbFilter *pb.Filter) eventstore.Filter {
+func pbFilterToFilter(pbFilter *pb.Filter) Filter {
 	types := make([]string, len(pbFilter.AggregateTypes))
 	for k, v := range pbFilter.AggregateTypes {
 		types[k] = v
 	}
-	labels := make([]eventstore.Label, len(pbFilter.Labels))
+	labels := make([]Label, len(pbFilter.Labels))
 	for k, v := range pbFilter.Labels {
-		labels[k] = eventstore.NewLabel(v.Key, v.Value)
+		labels[k] = NewLabel(v.Key, v.Value)
 	}
-	return eventstore.Filter{AggregateTypes: types, Labels: labels}
+	return Filter{AggregateTypes: types, Labels: labels}
 }
 
 func StartGrpcServer(ctx context.Context, address string, repo Repository) error {

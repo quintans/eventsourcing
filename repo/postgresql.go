@@ -13,7 +13,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/poller"
+	"github.com/quintans/eventstore/player"
 	"github.com/rs/xid"
 	log "github.com/sirupsen/logrus"
 )
@@ -41,7 +41,7 @@ type PgEsRepository struct {
 }
 
 var _ eventstore.EsRepository = (*PgEsRepository)(nil)
-var _ poller.Repository = (*PgEsRepository)(nil)
+var _ player.Repository = (*PgEsRepository)(nil)
 
 func NewPgEsRepository(dburl string) (*PgEsRepository, error) {
 	db, err := sql.Open("postgres", dburl)
@@ -230,7 +230,7 @@ type PgSnapshot struct {
 
 //==============================
 
-func (es *PgEsRepository) GetLastEventID(ctx context.Context, filter eventstore.Filter) (string, error) {
+func (es *PgEsRepository) GetLastEventID(ctx context.Context, filter player.Filter) (string, error) {
 	var eventID string
 	safetyMargin := time.Now().Add(lag)
 	args := []interface{}{safetyMargin}
@@ -246,7 +246,7 @@ func (es *PgEsRepository) GetLastEventID(ctx context.Context, filter eventstore.
 	return eventID, nil
 }
 
-func (es *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, filter eventstore.Filter) ([]eventstore.Event, error) {
+func (es *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, filter player.Filter) ([]eventstore.Event, error) {
 	safetyMargin := time.Now().Add(lag)
 	args := []interface{}{afterEventID, safetyMargin}
 	var query bytes.Buffer
@@ -264,7 +264,7 @@ func (es *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, ba
 	return rows, nil
 }
 
-func writeFilter(filter eventstore.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
+func writeFilter(filter player.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
 	if len(filter.AggregateTypes) > 0 {
 		query.WriteString(" AND (")
 		first := true

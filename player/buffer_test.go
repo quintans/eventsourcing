@@ -1,4 +1,4 @@
-package poller
+package player
 
 import (
 	"context"
@@ -32,6 +32,8 @@ var (
 	}
 )
 
+const pollInterval = 200 * time.Millisecond
+
 type MockRepo struct {
 	mu     sync.RWMutex
 	events []eventstore.Event
@@ -43,13 +45,13 @@ func NewMockRepo() *MockRepo {
 	}
 }
 
-func (r *MockRepo) GetLastEventID(ctx context.Context, filter eventstore.Filter) (string, error) {
+func (r *MockRepo) GetLastEventID(ctx context.Context, filter Filter) (string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.events[len(r.events)-1].ID, nil
 }
 
-func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int, filter eventstore.Filter) ([]eventstore.Event, error) {
+func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int, filter Filter) ([]eventstore.Event, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -94,7 +96,7 @@ func TestSingleConsumer(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	ctx, _ := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	err := c.Start(ctx, "")
+	err := c.Start(ctx, pollInterval, "")
 	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)
@@ -109,7 +111,7 @@ func TestBuffer(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		r := NewMockRepo()
-		p := New(r, WithLimit(2), WithPollInterval(200*time.Millisecond))
+		p := New(r, WithLimit(2))
 		c := NewBuffer(p)
 		fastIDs := []string{}
 		slowIDs := []string{}
@@ -136,7 +138,7 @@ func TestBuffer(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		ctx, _ := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		err := c.Start(ctx, "")
+		err := c.Start(ctx, pollInterval, "")
 		require.NoError(t, err)
 
 		time.Sleep(50 * time.Millisecond)
@@ -156,7 +158,7 @@ func TestSingleLateConsumer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		err := c.Start(ctx, "")
+		err := c.Start(ctx, pollInterval, "")
 		require.NoError(t, err)
 	}()
 
@@ -216,7 +218,7 @@ func TestLateConsumer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		err := c.Start(ctx, "")
+		err := c.Start(ctx, pollInterval, "")
 		require.NoError(t, err)
 	}()
 
@@ -290,7 +292,7 @@ func TestStopConsumer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		err := c.Start(ctx, "")
+		err := c.Start(ctx, pollInterval, "")
 		require.NoError(t, err)
 	}()
 
@@ -340,7 +342,7 @@ func TestRestartSingleConsumer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		err := c.Start(ctx, "")
+		err := c.Start(ctx, pollInterval, "")
 		require.NoError(t, err)
 	}()
 
@@ -413,7 +415,7 @@ func TestRestartConsumer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		err := c.Start(ctx, "")
+		err := c.Start(ctx, pollInterval, "")
 		require.NoError(t, err)
 	}()
 

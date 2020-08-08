@@ -1,9 +1,10 @@
-package poller
+package player
 
 import (
 	"container/list"
 	"context"
 	"sync"
+	"time"
 
 	"github.com/quintans/eventstore"
 )
@@ -16,21 +17,21 @@ type Buffer struct {
 	events    *list.List
 	consumers *list.List
 	eventsCh  chan eventstore.Event
-	poller    *Poller
+	player    *Player
 	wait      chan struct{}
 }
 
-func NewBuffer(poller *Poller) *Buffer {
+func NewBuffer(player *Player) *Buffer {
 	return &Buffer{
 		events:    list.New(),
 		consumers: list.New(),
 		eventsCh:  make(chan eventstore.Event),
-		poller:    poller,
+		player:    player,
 	}
 }
 
-func (n *Buffer) Start(ctx context.Context, startAt string) error {
-	return n.poller.Handle(ctx, StartAt(startAt), func(ctx2 context.Context, e eventstore.Event) error {
+func (n *Buffer) Start(ctx context.Context, pollInterval time.Duration, startAt string, filters ...FilterOption) error {
+	return n.player.Poll(ctx, pollInterval, StartAt(startAt), func(ctx2 context.Context, e eventstore.Event) error {
 		defer func() {
 			if recover() != nil {
 				// don't care
@@ -38,7 +39,7 @@ func (n *Buffer) Start(ctx context.Context, startAt string) error {
 		}()
 		n.eventsCh <- e
 		return nil
-	})
+	}, filters...)
 }
 
 func (b *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
@@ -237,4 +238,16 @@ func (c *Consumer) IsActive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.quit == nil
+}
+
+func skipEvent(evt eventstore.Event, aggregateTypes []string) bool {
+	if len(aggregateTypes) == 0 {
+		return false
+	}
+	for _, v := range aggregateTypes {
+		if v == evt.AggregateType {
+			return false
+		}
+	}
+	return true
 }
