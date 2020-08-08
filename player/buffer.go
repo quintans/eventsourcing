@@ -96,11 +96,12 @@ func (b *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
 	return n, nil
 }
 
-func (b *Buffer) NewConsumer(name string, handler EventHandler) *Consumer {
+func (b *Buffer) NewConsumer(name string, handler EventHandler, aggregateFilter ...string) *Consumer {
 	consu := &Consumer{
-		name:    name,
-		handler: handler,
-		buffer:  b,
+		name:            name,
+		handler:         handler,
+		buffer:          b,
+		aggregateFilter: aggregateFilter,
 	}
 	return consu
 }
@@ -152,13 +153,14 @@ func (b *Buffer) unregister(consu *Consumer) {
 }
 
 type Consumer struct {
-	mu       sync.Mutex
-	buffer   *Buffer
-	name     string
-	fifo     *list.Element
-	handler  EventHandler
-	quit     chan struct{}
-	consumer *list.Element
+	mu              sync.Mutex
+	buffer          *Buffer
+	name            string
+	fifo            *list.Element
+	handler         EventHandler
+	quit            chan struct{}
+	consumer        *list.Element
+	aggregateFilter []string
 }
 
 func (c *Consumer) Name() string {
@@ -213,7 +215,7 @@ func (c *Consumer) Resume(startAt string) {
 			}
 		} else {
 			evt := e.Value.(eventstore.Event)
-			if evt.ID > startAt {
+			if evt.ID > startAt && allowEvent(evt, c.aggregateFilter) {
 				c.handler(context.Background(), evt)
 			}
 			c.mu.Lock()
@@ -240,14 +242,14 @@ func (c *Consumer) IsActive() bool {
 	return c.quit == nil
 }
 
-func skipEvent(evt eventstore.Event, aggregateTypes []string) bool {
+func allowEvent(evt eventstore.Event, aggregateTypes []string) bool {
 	if len(aggregateTypes) == 0 {
-		return false
+		return true
 	}
 	for _, v := range aggregateTypes {
 		if v == evt.AggregateType {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
