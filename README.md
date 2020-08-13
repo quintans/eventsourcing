@@ -44,7 +44,13 @@ LIMIT 100
 This polling strategy can be used both with SQL and NoSQL databases, like Postgresql, Cockroach or MongoDB, to name a few.
 
 As a side note I would like to say that I went for the polling strategy because it fits well for SQL and NoSQL generic databases and it is simple to understand and straight forward to implement.
-There are other solutions that might work better if we took advantage of specific features that some database vendors provide. 
+There are other solutions that might work better if we took advantage of specific features that some database vendors provide, like change streams from MongoDB.
+
+Advantages:
+* Easy to implement
+
+Disadvantages
+* Network costs. If the data is updated infrequently we will be polling with no results, otherwise if the data change frequency is hight then there will be no difference.
 
 ### IDs
 
@@ -78,15 +84,13 @@ Snapshots is a technique used to improve the performance of the event store, whe
 
 When saving an aggregate, we have the option to supply an idempotent key. Later, we can check the presence of the idempotency key, to see if we are repeating an action. This can be useful when used in process manager reactors.
 
-In most the examples I've seen, about implementing a process manager, it is not clear what is the value in breaking into several subscribers to handle every step of the process, and I think this is because they only consider the happy paths.
-If the process is only considering the happy path, there is no advantage in having several subscribers, by the contrary.
-If we introduce compensation actions, it becomes clear that there is an advantage in using a several subscribers to manage the "transaction" involving multiple aggregates.
-
-In the following example I exemplify a money transfer with rollback actions, leveraging idempotent keys.
+the following example I exemplify a money transfer with rollback actions, leveraging idempotent keys.
 
 Here, Withdraw and Deposit need to be idempotent, but setting the transfer state does not. The latter is idempotent action while the former is not. 
 
 > I don't see the need to use command handlers in the following examples
+
+Some pseudo code:
 
 ```go
 func NewTransferReactor(es EventStore) {
@@ -133,6 +137,10 @@ func OnTransferStarted(ctx context.Context, es EventStore, e Event) {
 
 func OnMoneyWithdrawn(ctx context.Context, es EventStore, e Event) {
     event := NewMoneyWithdrawnEvent(e)
+    if event.Transaction == "" {
+        return
+    }
+
     transfer := NewTransfer()
     es.GetByID(ctx, event.Transaction, &transfer)
     if !transfer.IsRunning() {
@@ -159,13 +167,16 @@ func OnMoneyWithdrawn(ctx context.Context, es EventStore, e Event) {
 
 func OnMoneyDeposited(ctx context.Context, es EventStore, e Event) {
     event := NewMoneyDepositedEvent(e)
+    if event.Transaction == "" {
+        return
+    }
 
     transfer = NewTransfer()
     es.GetByID(ctx, event.Transaction, &transfer)
 
     transfer.Credited()
     es.Save(ctx, transfer, Options{
-        IdempotencyKey: idempotentKey,
+        IdempotencyKey: event.Transaction,
     })
 }
 
@@ -208,9 +219,7 @@ Replaying all the events fo a projection is very easy to achieve.
 4) retrieve any event from the last position returned in 2)
 5) resume consuming
 
-### Alternative (Deprecated)
-
-> I no longer see this approach as an advantage, since now we can have a poller serving multiple consumers.
+### Alternative
 
 Another approach is to have an event bus after the data store poller, and let the event bus deliver the events to the projectors, as depicted in the following picture:
 
@@ -223,10 +232,9 @@ If the poller service restarts, it will do the same as before, querying the even
 > Writing repeated messages to the event bus is not a concern, since the used event bus must guarantee `at least once` delivery. It is the job of the projector to be idempotent, discarding repeated messages.
 
 On the projection side it is pretty much the same as in the Simple use, but now we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages.
-Improving even further, we could lift the restriction of a projector single instance by using a message bus with an ordered keyed partition, like Apache Kafka. This would avoid different instances handle events for the same aggregate, because the same projector instance would be used for the same aggregate.
 
 Depending on the rate of events being written in the event store, the poller may not be able to keep up and becomes a bottleneck.
-When this happens we need to create more polling services that don't overlap when polling event.
+When this happens we need to create more polling services that don't overlap when polling events.
 Overlapping can be avoided by filtering over metadata.
 What this metadata can be and how it is stored will depend in your business case.
 A good example is to have a poller per set of aggregates types of per aggregate type.

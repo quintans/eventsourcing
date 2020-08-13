@@ -102,3 +102,7 @@ func (a *RootAggregate) ApplyChange(event interface{}) {
 	}
 	a.events = append(a.events, event)
 }
+
+func (a RootAggregate) IsZero() bool {
+	return a.ID == ""
+}
