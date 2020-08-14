@@ -67,10 +67,10 @@ func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int
 	return result, nil
 }
 
-func (r *MockRepo) SetEvents(events []eventstore.Event) {
+func (r *MockRepo) AddEvents(events []eventstore.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.events = events
+	r.events = append(r.events, events...)
 }
 
 func TestSingleConsumer(t *testing.T) {
@@ -78,6 +78,8 @@ func TestSingleConsumer(t *testing.T) {
 
 	r := NewMockRepo()
 	c := NewBufferedPlayer(r, WithLimit(2))
+
+	time.Sleep(100 * time.Millisecond)
 
 	var mu sync.Mutex
 	ids := []string{}
@@ -94,15 +96,29 @@ func TestSingleConsumer(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	ctx, _ := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	err := c.Start(ctx, pollInterval, "")
-	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := c.Start(ctx, pollInterval, "")
+		require.NoError(t, err)
+	}()
 
+	time.Sleep(100 * time.Millisecond)
+
+	single.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	r.AddEvents(events2)
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
 	time.Sleep(100 * time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, []string{"A", "B", "C", "D"}, ids, "Consumer IDs", ids)
+
+	assert.Equal(t, "H", c.CurrentEvent().ID, "Current ID")
 }
 
 func TestBuffer(t *testing.T) {
@@ -179,7 +195,7 @@ func TestSingleLateConsumer(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	r.SetEvents(append(events1, events2...))
+	r.AddEvents(events2)
 
 	time.Sleep(time.Second)
 	cancel()
@@ -239,7 +255,7 @@ func TestLateConsumer(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	r.SetEvents(append(events1, events2...))
+	r.AddEvents(events2)
 
 	time.Sleep(time.Second)
 	cancel()
@@ -302,7 +318,7 @@ func TestStopConsumer(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	r.SetEvents(append(events1, events2...))
+	r.AddEvents(events2)
 
 	time.Sleep(time.Second)
 	cancel()
@@ -357,16 +373,14 @@ func TestRestartSingleConsumer(t *testing.T) {
 	mu.Unlock()
 
 	time.Sleep(100 * time.Millisecond)
-	evts := append(events1, events2...)
-	r.SetEvents(evts)
+	r.AddEvents(events2)
 
 	time.Sleep(time.Second)
 
 	go single.Resume(events3[0].ID)
 	time.Sleep(100 * time.Millisecond)
 
-	evts = append(evts, events3...)
-	r.SetEvents(evts)
+	r.AddEvents(events3)
 
 	time.Sleep(3 * time.Second)
 
@@ -426,14 +440,12 @@ func TestRestartConsumer(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	second.Attach()
-	evts := append(events1, events2...)
-	r.SetEvents(evts)
+	r.AddEvents(events2)
 
 	time.Sleep(time.Second)
 
 	go second.Resume(events3[0].ID)
-	evts = append(evts, events3...)
-	r.SetEvents(evts)
+	r.AddEvents(events3)
 
 	time.Sleep(500 * time.Millisecond)
 

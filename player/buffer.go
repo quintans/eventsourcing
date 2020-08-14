@@ -19,6 +19,7 @@ type Buffer struct {
 	eventsCh  chan eventstore.Event
 	player    *Player
 	wait      chan struct{}
+	drainer   *Consumer
 }
 
 func NewBufferedPlayer(r Repository, options ...Option) *Buffer {
@@ -26,12 +27,18 @@ func NewBufferedPlayer(r Repository, options ...Option) *Buffer {
 }
 
 func NewBuffer(p *Player) *Buffer {
-	return &Buffer{
+	b := &Buffer{
 		events:    list.New(),
 		consumers: list.New(),
 		eventsCh:  make(chan eventstore.Event, 1),
 		player:    p,
 	}
+	// when there are no other consumers, the drainer consumer kicks in to move the events forward
+	b.drainer = b.NewConsumer("__drainer__", func(ctx context.Context, e eventstore.Event) error {
+		return nil
+	})
+	go b.drainer.Start()
+	return b
 }
 
 func (n *Buffer) Start(ctx context.Context, pollInterval time.Duration, startAt string, filters ...FilterOption) error {
@@ -46,6 +53,16 @@ func (n *Buffer) Start(ctx context.Context, pollInterval time.Duration, startAt 
 	}, filters...)
 }
 
+func (n *Buffer) CurrentEvent() eventstore.Event {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	elem := n.events.Back()
+	if elem == nil {
+		return eventstore.Event{}
+	}
+	return elem.Value.(eventstore.Event)
+}
+
 func (b *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -56,25 +73,29 @@ func (b *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
 	} else {
 		n = e.Next()
 	}
+
 	if n == nil {
-		if b.wait == nil {
-			b.wait = make(chan struct{})
+		select {
+		case evt := <-b.eventsCh:
+			n = b.pushEvent(evt)
+		default:
+		}
+	}
 
-			// wait for an available event
-			go func() {
-				evt := <-b.eventsCh
-
-				b.mu.Lock()
-				b.events.PushBack(evt)
-				if b.wait != nil {
-					close(b.wait)
-				}
-				b.wait = nil
-				b.mu.Unlock()
-			}()
+	if n == nil {
+		if b.wait != nil {
+			return nil, b.wait
 		}
 
-		return nil, b.wait
+		b.wait = make(chan struct{})
+		// wait for an available event
+		go func() {
+			evt := <-b.eventsCh
+
+			b.mu.Lock()
+			b.pushEvent(evt)
+			b.mu.Unlock()
+		}()
 	}
 
 	// tail event
@@ -97,7 +118,16 @@ func (b *Buffer) next(e *list.Element) (*list.Element, chan struct{}) {
 		}
 	}
 
-	return n, nil
+	return n, b.wait
+}
+
+func (b *Buffer) pushEvent(evt eventstore.Event) *list.Element {
+	e := b.events.PushBack(evt)
+	if b.wait != nil {
+		close(b.wait)
+	}
+	b.wait = nil
+	return e
 }
 
 func (b *Buffer) NewConsumer(name string, handler EventHandler, aggregateFilter ...string) *Consumer {
@@ -118,10 +148,16 @@ func (c *Buffer) Close() {
 
 func (b *Buffer) register(consu *Consumer) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+
 	consu.fifo = b.events.Front()
 	consu.consumer = b.consumers.PushBack(consu)
-	b.consumers.PushBack(consu)
+
+	first := b.consumers.Len() == 2
+	b.mu.Unlock()
+
+	if first {
+		go b.drainer.Stop()
+	}
 }
 
 func (b *Buffer) seek(consu *Consumer, startAt string) {
@@ -149,10 +185,16 @@ func (b *Buffer) seek(consu *Consumer, startAt string) {
 
 func (b *Buffer) unregister(consu *Consumer) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+
 	if consu.consumer != nil {
 		b.consumers.Remove(consu.consumer)
 		consu.consumer = nil
+	}
+	last := b.consumers.Len() == 0
+	b.mu.Unlock()
+
+	if last {
+		go b.drainer.Start()
 	}
 }
 
@@ -231,9 +273,9 @@ func (c *Consumer) Resume(startAt string) {
 
 // Stop stops collecting
 func (c *Consumer) Stop() {
+	c.buffer.unregister(c)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.buffer.unregister(c)
 	if c.quit != nil {
 		close(c.quit)
 		c.quit = nil

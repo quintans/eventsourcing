@@ -11,7 +11,7 @@ require (
 	github.com/lib/pq v1.3.0
 	github.com/rs/xid v1.2.1
 	github.com/sirupsen/logrus v1.4.2
-	github.com/stretchr/testify v1.4.0
+	github.com/stretchr/testify v1.6.1
 	github.com/testcontainers/testcontainers-go v0.5.1
 	google.golang.org/grpc v1.27.1
 )
