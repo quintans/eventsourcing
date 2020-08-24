@@ -5,7 +5,7 @@ This an exercise on how I could implement a event store and how this could be us
 
 ## Introduction
 
-The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture pattern.
+The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture.
 
 ### Event Bus
 
@@ -15,7 +15,7 @@ In most of the implementations that I have seen, some sort of event bus is used 
 
 ### Polling
 
-The solution for this challenge is to store events with a incremental key. With this we can then poll for events after the last polled event.
+A solution for this challenge is to store events with a incremental key. With this we can then poll for events after the last polled event.
 Most databases have the capability of generating more or less incremental keys, that can be used for events IDs.
 
 > What is important is that for a given aggregate the events IDs are ordered, so strict ordering between aggregates is not important.
@@ -44,13 +44,13 @@ LIMIT 100
 This polling strategy can be used both with SQL and NoSQL databases, like Postgresql, Cockroach or MongoDB, to name a few.
 
 As a side note I would like to say that I went for the polling strategy because it fits well for SQL and NoSQL generic databases and it is simple to understand and straight forward to implement.
-There are other solutions that might work better if we took advantage of specific features that some database vendors provide, like change streams from MongoDB.
+There are other solutions that might work better if we take advantage of specific features that some database vendors provide, like change streams from MongoDB.
 
 Advantages:
 * Easy to implement
 
 Disadvantages
-* Network costs. If the data is updated infrequently we will be polling with no results, otherwise if the data change frequency is hight then there will be no difference.
+* Network costs. If the data is updated infrequently we will be polling with no results. On the other hand, if the data change frequency is hight then there will be no difference.
 
 ### IDs
 
@@ -203,11 +203,21 @@ This pattern essentially is modelling the changes to the application as a series
 
 CQRS is an application architecture pattern often used with event sourcing.
 
+### Idempotent Consumers
+
+Since there is no guarantee that an event is only delivered once, it is important to make projections are Idempotent,
+meaning they will not process the same event twice. That is why that the event IDs is always incremental, allowing us to use a simple rule
+to check for the idempotency.
+
+Rule: For an aggregate, the current event ID must always be greater than the last one processed.
+
+We store the last processed event in the same record of the projection for that aggregate.
+
 ### Simple use
 
 By using this library player, a simple architecture can be achieved. The player polls the database for new events at a regular interval (should be less than 1 second), for events after a given event id and fans out to registered consumers. So we have one player serving multiple consumers. Consumer can be stopped and restart on demand.
 The projectors should take care of persisting the last handled event, so that in the case of a restart it will pick from the last known event.
-It is also important to note that for each projectors, can only be working in one instance at a given time, to guarantee that the events are processed in order (if and event is not processed in order we might end up with corrupt data).
+It is also important to note that for each projectors, can only be working in one instance at a given time, to guarantee that the events are processed in order (if an event is not processed in order we might end up with corrupt data).
 
 ![CQRS](cqrs-es-simple.png)
 
@@ -219,7 +229,7 @@ Replaying all the events fo a projection is very easy to achieve.
 4) retrieve any event from the last position returned in 2)
 5) resume consuming
 
-### Alternative
+### Scalability
 
 Another approach is to have an event bus after the data store poller, and let the event bus deliver the events to the projectors, as depicted in the following picture:
 
@@ -233,19 +243,69 @@ If the poller service restarts, it will do the same as before, querying the even
 
 On the projection side it is pretty much the same as in the Simple use, but now we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages.
 
+#### Polling
+
 Depending on the rate of events being written in the event store, the poller may not be able to keep up and becomes a bottleneck.
-When this happens we need to create more polling services that don't overlap when polling events.
+When this happens we need to create more polling instances, in other threads or in another service instances, that don't overlap when polling events.
 Overlapping can be avoided by filtering over metadata.
 What this metadata can be and how it is stored will depend in your business case.
 A good example is to have a poller per set of aggregates types of per aggregate type.
 As an implementation example, for a very broad spectrum of problem, events can be stored with with generic labels, that in turn can be used to filter the events. Each poller would then be sending events into its own event bus topic.
+
+
+#### Key Partition
+
+It is more likely that the read side may suffer more from a bottleneck since it has to handle more aggregates and do more database operations to create a consistent projection. An approach to evenly distribute this load over the existing services instances is to use key partitioning.
+
+> I could not find any stream messaging solution that would give key partition in dynamic way, where the rebalancing of the partitions would automatically as the nodes come and go.
+
+So, on the read side, consider that we are interested in creating 12 partitions (it a good idea to create a reasonable amount of partitions from the start so that when we add more services instances we can spread them easily). In the poller side we would publish events into 12 topics, `topic.1`, `topic.2` ... `topic.12` each representing a partition. To select what event goes on what topic, we would mod over the hash of the event ID.
+
+```go
+topicNr := hash(event.ID)%12
+```
+
+On the consumer side each service would only consume its assigned range partition defined by an environment variable. For example, if had 3 instances running, we could say `PARTITIONS=1-4`.
+
+A downside is if an instance goes down, no other will pick this up. Of course this is not a big problem in the cloud since the instance is automatically restarted.
+Another downside is that this approach is not "elastic", in the sense that adding or removing a partition instance is a manual process.
+Starting with a reasonable large enough partitions will minimize the this impact.
+
+eg: 12 partitions
+2 instances
+instance #1 - 1-6
+instance #2 - 7-12
+
+3 instances
+instance #1 - 1-4
+instance #2 - 5-8
+instance #3 - 9-12
+
+The idempotency is still guaranteed for each aggregate.
 
 #### Replay
 
 Considering that the event bus should have a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
 1) get the position of the last message from the event bus
 2) consume events from the event store until we reach the event matching the previous event bus position
-3) resume listening the event bus from the position of 1)  
+3) resume listening the event bus from the position of 1)
+
+#### Synchronisation
+
+Synchronisation is very similar to replay, but instead of starting from the beginning we start from the last processed event ID.
+That is simple enough when we have just one consumer handling all the events, we just start form the highest event ID in the projection.
+
+In a partitioned approach, we can't just pick the highest, because we can have partitions that are far behind.
+What we need to do is track the last event IDs in a separate table.
+
+```
+Partition_ID | event_ID
+           1 | aaa
+           2 | bbb
+```
+
+It is ok if this table can be updated outside of a transaction. Even if we have a crash between the persistence of the projection and the persistence of the last event,
+what will happen is that probably the last event will processed, but thanks to the idempotency rule, it will just be ignored.
 
 ### GDPR
 

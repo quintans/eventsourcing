@@ -14,4 +14,5 @@ require (
 	github.com/stretchr/testify v1.6.1
 	github.com/testcontainers/testcontainers-go v0.5.1
 	google.golang.org/grpc v1.27.1
+	github.com/nats-io/stan.go v0.7.0
 )

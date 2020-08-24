@@ -2,15 +2,13 @@ package player
 
 import (
 	"context"
-	"time"
 
 	"github.com/quintans/eventstore"
-	log "github.com/sirupsen/logrus"
 )
 
-const (
-	maxWait = time.Minute
-)
+type Connector interface {
+	Play(ctx context.Context, startOption StartOption, handler EventHandler, filters ...FilterOption) error
+}
 
 type Repository interface {
 	GetLastEventID(ctx context.Context, filter Filter) (string, error)
@@ -48,36 +46,34 @@ type EventHandler func(ctx context.Context, e eventstore.Event) error
 
 type Cancel func()
 
-type Option func(*Player)
 type FilterOption func(*Filter)
 
-func WithLimit(limit int) Option {
-	return func(p *Player) {
-		if limit > 0 {
-			p.limit = limit
-		}
-	}
-}
-
-func New(repo Repository, options ...Option) *Player {
-	p := &Player{
-		repo:  repo,
-		limit: 20,
-	}
-	for _, o := range options {
-		o(p)
-	}
-	return p
-}
-
 type Player struct {
-	repo  Repository
-	limit int
+	repo      Repository
+	batchSize int
+}
+
+func New(repo Repository, batchSize int) Player {
+	if batchSize == 0 {
+		batchSize = 20
+	}
+	return Player{
+		repo:      repo,
+		batchSize: batchSize,
+	}
 }
 
 type StartOption struct {
 	startFrom    Start
 	afterEventID string
+}
+
+func (so StartOption) StartFrom() Start {
+	return so.startFrom
+}
+
+func (so StartOption) AfterEventID() string {
+	return so.afterEventID
 }
 
 func StartEnd() StartOption {
@@ -133,92 +129,26 @@ func WithLabels(labels Labels) FilterOption {
 	}
 }
 
-func (p *Player) Poll(ctx context.Context, pollInterval time.Duration, startOption StartOption, handler EventHandler, filters ...FilterOption) error {
+func (p Player) ReplayUntil(ctx context.Context, handler EventHandler, untilEventID string, filters ...FilterOption) (string, error) {
 	filter := Filter{}
 	for _, f := range filters {
 		f(&filter)
 	}
-
-	var afterEventID string
-	var err error
-	switch startOption.startFrom {
-	case END:
-		afterEventID, err = p.repo.GetLastEventID(ctx, Filter{})
-		if err != nil {
-			return err
-		}
-	case BEGINNING:
-	case SEQUENCE:
-		afterEventID = startOption.afterEventID
-	}
-	return p.handle(ctx, pollInterval, afterEventID, handler, filter)
+	return p.Replay(ctx, filter, handler, "", untilEventID)
 }
 
-func (p *Player) handle(ctx context.Context, pollInterval time.Duration, afterEventID string, handler EventHandler, filter Filter) error {
-	wait := pollInterval
-	for {
-		eid, err := p.retrieve(ctx, filter, handler, afterEventID, "")
-		if err != nil {
-			wait += 2 * wait
-			if wait > maxWait {
-				wait = maxWait
-			}
-			log.WithField("backoff", wait).
-				WithError(err).
-				Error("Failure retrieving events. Backing off.")
-		} else {
-			afterEventID = eid
-			wait = pollInterval
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil
-		case _ = <-time.After(pollInterval):
-		}
-	}
-}
-
-type Sink interface {
-	LastEventID(ctx context.Context) (string, error)
-	Send(ctx context.Context, e eventstore.Event) error
-}
-
-// Forward forwars the handling to a sink.
-// eg: a message queue
-func (p *Player) Forward(ctx context.Context, pollInterval time.Duration, sink Sink, filters ...FilterOption) error {
+func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, afterEventID, untilEventID string, filters ...FilterOption) (string, error) {
 	filter := Filter{}
 	for _, f := range filters {
 		f(&filter)
 	}
-
-	id, err := sink.LastEventID(ctx)
-	if err != nil {
-		return err
-	}
-	return p.handle(ctx, pollInterval, id, sink.Send, filter)
+	return p.Replay(ctx, filter, handler, afterEventID, untilEventID)
 }
 
-func (p *Player) ReplayUntil(ctx context.Context, handler EventHandler, untilEventID string, filters ...FilterOption) (string, error) {
-	filter := Filter{}
-	for _, f := range filters {
-		f(&filter)
-	}
-	return p.retrieve(ctx, filter, handler, "", untilEventID)
-}
-
-func (p *Player) ReplayFromUntil(ctx context.Context, handler EventHandler, afterEventID, untilEventID string, filters ...FilterOption) (string, error) {
-	filter := Filter{}
-	for _, f := range filters {
-		f(&filter)
-	}
-	return p.retrieve(ctx, filter, handler, afterEventID, untilEventID)
-}
-
-func (p *Player) retrieve(ctx context.Context, filter Filter, handler EventHandler, afterEventID, untilEventID string) (string, error) {
+func (p Player) Replay(ctx context.Context, filter Filter, handler EventHandler, afterEventID, untilEventID string) (string, error) {
 	loop := true
 	for loop {
-		events, err := p.repo.GetEvents(ctx, afterEventID, p.limit, filter)
+		events, err := p.repo.GetEvents(ctx, afterEventID, p.batchSize, filter)
 		if err != nil {
 			return "", err
 		}
