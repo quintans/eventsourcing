@@ -1,4 +1,4 @@
-package player
+package poller
 
 import (
 	"container/list"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/player"
 )
 
 // Buffer manager a list of events.
@@ -17,21 +18,21 @@ type Buffer struct {
 	events    *list.List
 	consumers *list.List
 	eventsCh  chan eventstore.Event
-	player    *Player
+	poller    Poller
 	wait      chan struct{}
 	drainer   *Consumer
 }
 
-func NewBufferedPlayer(r Repository, options ...Option) *Buffer {
+func NewBufferedPoller(r player.Repository, options ...Option) *Buffer {
 	return NewBuffer(New(r, options...))
 }
 
-func NewBuffer(p *Player) *Buffer {
+func NewBuffer(p Poller) *Buffer {
 	b := &Buffer{
 		events:    list.New(),
 		consumers: list.New(),
 		eventsCh:  make(chan eventstore.Event, 1),
-		player:    p,
+		poller:    p,
 	}
 	// when there are no other consumers, the drainer consumer kicks in to move the events forward
 	b.drainer = b.NewConsumer("__drainer__", func(ctx context.Context, e eventstore.Event) error {
@@ -41,8 +42,8 @@ func NewBuffer(p *Player) *Buffer {
 	return b
 }
 
-func (n *Buffer) Start(ctx context.Context, pollInterval time.Duration, startAt string, filters ...FilterOption) error {
-	return n.player.Poll(ctx, pollInterval, StartAt(startAt), func(ctx2 context.Context, e eventstore.Event) error {
+func (n *Buffer) Start(ctx context.Context, pollInterval time.Duration, startAt string, filters ...player.FilterOption) error {
+	return n.poller.Poll(ctx, player.StartAt(startAt), func(ctx2 context.Context, e eventstore.Event) error {
 		defer func() {
 			if recover() != nil {
 				// don't care
@@ -130,7 +131,7 @@ func (b *Buffer) pushEvent(evt eventstore.Event) *list.Element {
 	return e
 }
 
-func (b *Buffer) NewConsumer(name string, handler EventHandler, aggregateFilter ...string) *Consumer {
+func (b *Buffer) NewConsumer(name string, handler player.EventHandler, aggregateFilter ...string) *Consumer {
 	consu := &Consumer{
 		name:            name,
 		handler:         handler,
@@ -203,7 +204,7 @@ type Consumer struct {
 	buffer          *Buffer
 	name            string
 	fifo            *list.Element
-	handler         EventHandler
+	handler         player.EventHandler
 	quit            chan struct{}
 	consumer        *list.Element
 	aggregateFilter []string

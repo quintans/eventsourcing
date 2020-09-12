@@ -1,4 +1,4 @@
-package player
+package poller
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/player"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,13 +46,13 @@ func NewMockRepo() *MockRepo {
 	}
 }
 
-func (r *MockRepo) GetLastEventID(ctx context.Context, filter Filter) (string, error) {
+func (r *MockRepo) GetLastEventID(ctx context.Context, filter player.Filter) (string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.events[len(r.events)-1].ID, nil
 }
 
-func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int, filter Filter) ([]eventstore.Event, error) {
+func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int, filter player.Filter) ([]eventstore.Event, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -77,7 +78,7 @@ func TestSingleConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
-	c := NewBufferedPlayer(r, WithLimit(2))
+	c := NewBufferedPoller(r, WithLimit(2))
 
 	time.Sleep(100 * time.Millisecond)
 

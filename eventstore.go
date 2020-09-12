@@ -80,23 +80,23 @@ type EventStorer interface {
 	Forget(ctx context.Context, request ForgetRequest) error
 }
 
-var _ EventStorer = (*EventSore)(nil)
+var _ EventStorer = (*EventStore)(nil)
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, snapshotThreshold int) *EventSore {
-	return &EventSore{
+func NewEventStore(repo EsRepository, snapshotThreshold int) EventStore {
+	return EventStore{
 		repo:              repo,
 		snapshotThreshold: snapshotThreshold,
 	}
 }
 
 // EventSore -
-type EventSore struct {
+type EventStore struct {
 	repo              EsRepository
 	snapshotThreshold int
 }
 
-func (es *EventSore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
+func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
 	snap, err := es.repo.GetSnapshot(ctx, aggregateID)
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func (es *EventSore) GetByID(ctx context.Context, aggregateID string, aggregate 
 	return nil
 }
 
-func (es *EventSore) Save(ctx context.Context, aggregate Aggregater, options Options) (err error) {
+func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Options) (err error) {
 	events := aggregate.GetEvents()
 	if len(events) == 0 {
 		return nil
@@ -197,7 +197,7 @@ func nameFor(x interface{}) string {
 	return t.Name()
 }
 
-func (es *EventSore) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
+func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
 	return es.repo.HasIdempotencyKey(ctx, aggregateID, idempotencyKey)
 }
 
@@ -212,6 +212,6 @@ type EventKind struct {
 	Fields []string
 }
 
-func (es *EventSore) Forget(ctx context.Context, request ForgetRequest) error {
+func (es EventStore) Forget(ctx context.Context, request ForgetRequest) error {
 	return es.repo.Forget(ctx, request)
 }

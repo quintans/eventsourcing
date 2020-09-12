@@ -16,6 +16,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/feed/poller"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/repo"
 	"github.com/stretchr/testify/assert"
@@ -27,8 +28,6 @@ import (
 var (
 	dbURL string
 )
-
-const pollInterval = 200 * time.Millisecond
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -195,9 +194,9 @@ func TestListener(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	tracker, err := repo.NewPgEsRepository(dbURL)
+	repo, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	lm := player.New(tracker)
+	lm := poller.New(repo)
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -208,7 +207,7 @@ func TestListener(t *testing.T) {
 		}
 		cancel()
 	}()
-	lm.Poll(ctx, pollInterval, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
+	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -244,12 +243,12 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	tracker, err := repo.NewPgEsRepository(dbURL)
+	repo, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	p := player.New(tracker)
+	p := poller.New(repo)
 
 	done := make(chan struct{})
-	go p.Poll(ctx, pollInterval, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
@@ -298,12 +297,12 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := NewAccount()
 	counter := 0
 
-	tracker, err := repo.NewPgEsRepository(dbURL)
+	repo, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	p := player.New(tracker)
+	p := poller.New(repo)
 
 	done := make(chan struct{})
-	go p.Poll(ctx, pollInterval, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
