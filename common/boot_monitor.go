@@ -1,8 +1,10 @@
-package projection
+package common
 
 import (
 	"context"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type Booter interface {
@@ -24,28 +26,29 @@ const (
 	Released
 )
 
-type Looper struct {
+// BootMonitor is responsible for refreshing the lease
+type BootMonitor struct {
 	refresh  time.Duration
 	locker   Locker
 	lockable Booter
 }
 
-type Option func(r *Looper)
+type Option func(r *BootMonitor)
 
-func WithLock(locker Locker) func(r *Looper) {
-	return func(r *Looper) {
+func WithLock(locker Locker) func(r *BootMonitor) {
+	return func(r *BootMonitor) {
 		r.locker = locker
 	}
 }
 
-func WithRefreshInterval(refresh time.Duration) func(r *Looper) {
-	return func(r *Looper) {
+func WithRefreshInterval(refresh time.Duration) func(r *BootMonitor) {
+	return func(r *BootMonitor) {
 		r.refresh = refresh
 	}
 }
 
-func NewLooper(lockable Booter, options ...Option) Looper {
-	l := Looper{
+func NewBootMonitor(lockable Booter, options ...Option) BootMonitor {
+	l := BootMonitor{
 		refresh:  10 * time.Second,
 		lockable: lockable,
 	}
@@ -57,7 +60,7 @@ func NewLooper(lockable Booter, options ...Option) Looper {
 	return l
 }
 
-func (l Looper) Start(ctx context.Context) {
+func (l BootMonitor) Start(ctx context.Context) {
 	for {
 		release := l.lockable.Wait()
 		ok := true
@@ -66,13 +69,14 @@ func (l Looper) Start(ctx context.Context) {
 		}
 		if ok {
 			// acquired lock
-			ctx, cancel := context.WithCancel(ctx)
-			_ = l.lockable.OnBoot(ctx)
+			err := l.lockable.OnBoot(ctx)
+			if err != nil {
+				log.Error("Error booting:", err)
+			}
 			loop := true
 			for loop {
 				switch l.waitOn(ctx.Done(), release) {
 				case Done:
-					cancel()
 					return
 				case Timedout:
 					loop, _ = l.locker.Extend()
@@ -81,14 +85,13 @@ func (l Looper) Start(ctx context.Context) {
 					loop = false
 				}
 			}
-			cancel()
 		} else if choice := l.waitOn(ctx.Done(), release); choice == Done {
 			return
 		}
 	}
 }
 
-func (l Looper) waitOn(done <-chan struct{}, release <-chan struct{}) WaitResult {
+func (l BootMonitor) waitOn(done <-chan struct{}, release <-chan struct{}) WaitResult {
 	if l.locker != nil {
 		timer := time.NewTimer(l.refresh)
 		defer timer.Stop()

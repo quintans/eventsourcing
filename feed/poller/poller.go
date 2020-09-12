@@ -62,11 +62,6 @@ func New(repo player.Repository, options ...Option) Poller {
 }
 
 func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler player.EventHandler, filters ...player.FilterOption) error {
-	filter := player.Filter{}
-	for _, f := range filters {
-		f(&filter)
-	}
-
 	var afterEventID string
 	var err error
 	switch startOption.StartFrom() {
@@ -79,13 +74,13 @@ func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handle
 	case player.SEQUENCE:
 		afterEventID = startOption.AfterEventID()
 	}
-	return p.handle(ctx, afterEventID, handler, filter)
+	return p.handle(ctx, afterEventID, handler, filters...)
 }
 
-func (p Poller) handle(ctx context.Context, afterEventID string, handler player.EventHandler, filter player.Filter) error {
+func (p Poller) handle(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...player.FilterOption) error {
 	wait := p.pollInterval
 	for {
-		eid, err := p.play.Replay(ctx, filter, handler, afterEventID, "")
+		eid, err := p.play.Replay(ctx, handler, afterEventID, filters...)
 		if err != nil {
 			wait += 2 * wait
 			if wait > maxWait {
@@ -107,46 +102,34 @@ func (p Poller) handle(ctx context.Context, afterEventID string, handler player.
 	}
 }
 
-// Forward forwars the handling to a sink.
+// Feed forwars the handling to a sink.
 // eg: a message queue
-func (p Poller) Forward(ctx context.Context, sink sink.Sink, filters ...player.FilterOption) error {
+func (p Poller) Feed(ctx context.Context, sinker sink.Sinker, filters ...player.FilterOption) error {
 	// looking for the lowest ID in all partitions
 	var afterEventID string
-	var err error
 	if p.partitions == 0 {
-		afterEventID, err = lastEventID(ctx, sink, 0)
+		message, err := sinker.LastMessage(ctx, 0)
 		if err != nil {
 			return err
 		}
+		if message != nil {
+			afterEventID = message.Event.ID
+		}
 	} else {
+		afterEventID = "-"
 		for i := 1; i <= p.partitions; i++ {
-			afterEventID, err = lastEventID(ctx, sink, i)
+			message, err := sinker.LastMessage(ctx, i)
 			if err != nil {
 				return err
+			}
+			if message != nil && (afterEventID == "-" || message.Event.ID < afterEventID) {
+				afterEventID = message.Event.ID
+			} else {
+				afterEventID = ""
 			}
 		}
 	}
 
-	filter := player.Filter{}
-	for _, f := range filters {
-		f(&filter)
-	}
-
-	return p.handle(ctx, afterEventID, sink.Send, filter)
-}
-
-func lastEventID(ctx context.Context, sink sink.Sink, partition int) (string, error) {
-	afterEventID := "-"
-	message, err := sink.LastMessage(ctx, partition)
-	if err != nil {
-		return "", err
-	}
-	eID := message.Event.ID
-	if message != nil && (afterEventID == "-" || eID < afterEventID) {
-		afterEventID = eID
-	} else {
-		afterEventID = ""
-	}
-
-	return afterEventID, nil
+	log.Println("Starting to feed from event ID:", afterEventID)
+	return p.handle(ctx, afterEventID, sinker.Sink, filters...)
 }

@@ -12,19 +12,21 @@ import (
 )
 
 type NatsSink struct {
-	topic  string
-	client stan.Conn
+	topic      string
+	client     stan.Conn
+	partitions uint32
 }
 
 // NewNatsSink instantiate PulsarSink
-func NewNatsSink(topic string, stanClusterID, clientID string, options ...stan.Option) (*NatsSink, error) {
+func NewNatsSink(topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) (*NatsSink, error) {
 	c, err := stan.Connect(stanClusterID, clientID, options...)
 	if err != nil {
 		return nil, fmt.Errorf("Could not instantiate Nats connection: %w", err)
 	}
 	return &NatsSink{
-		topic:  topic,
-		client: c,
+		topic:      topic,
+		client:     c,
+		partitions: partitions,
 	}, nil
 }
 
@@ -73,13 +75,15 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition int) (*Message, er
 	}, nil
 }
 
-// Send sends the event to pulsar
-func (p *NatsSink) Send(ctx context.Context, e eventstore.Event) error {
+// Sink sends the event to pulsar
+func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
 	b, err := json.Marshal(e)
 	if err != nil {
 		return nil
 	}
-	err = p.client.Publish(p.topic, b)
+
+	topic := PartitionTopic(e.AggregateID, p.topic, p.partitions)
+	err = p.client.Publish(topic, b)
 	if err != nil {
 		return fmt.Errorf("Failed to send message: %w", err)
 	}

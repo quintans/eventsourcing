@@ -6,8 +6,8 @@ import (
 	"github.com/quintans/eventstore"
 )
 
-type Connector interface {
-	Play(ctx context.Context, startOption StartOption, handler EventHandler, filters ...FilterOption) error
+type Replayer interface {
+	Replay(ctx context.Context, handler EventHandler, afterEventID string, filters ...FilterOption) (string, error)
 }
 
 type Repository interface {
@@ -130,11 +130,11 @@ func WithLabels(labels Labels) FilterOption {
 }
 
 func (p Player) ReplayUntil(ctx context.Context, handler EventHandler, untilEventID string, filters ...FilterOption) (string, error) {
-	filter := Filter{}
-	for _, f := range filters {
-		f(&filter)
-	}
-	return p.Replay(ctx, filter, handler, "", untilEventID)
+	return p.ReplayFromUntil(ctx, handler, "", untilEventID, filters...)
+}
+
+func (p Player) Replay(ctx context.Context, handler EventHandler, afterEventID string, filters ...FilterOption) (string, error) {
+	return p.ReplayFromUntil(ctx, handler, afterEventID, "", filters...)
 }
 
 func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, afterEventID, untilEventID string, filters ...FilterOption) (string, error) {
@@ -142,10 +142,6 @@ func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, after
 	for _, f := range filters {
 		f(&filter)
 	}
-	return p.Replay(ctx, filter, handler, afterEventID, untilEventID)
-}
-
-func (p Player) Replay(ctx context.Context, filter Filter, handler EventHandler, afterEventID, untilEventID string) (string, error) {
 	loop := true
 	for loop {
 		events, err := p.repo.GetEvents(ctx, afterEventID, p.batchSize, filter)

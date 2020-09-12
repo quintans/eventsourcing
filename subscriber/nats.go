@@ -71,41 +71,50 @@ func (c NatsSubscriber) GetResumeToken(ctx context.Context, topic string, partit
 	return strconv.FormatUint(sequence, 10), nil
 }
 
-func (c NatsSubscriber) Consume(ctx context.Context, topic string, partition int, resumeToken string, aggregateTypes []string, handler projection.EventHandler) error {
+func (c NatsSubscriber) StartConsumer(ctx context.Context, topic string, partition int, resumeToken string, projection projection.Projection) (chan struct{}, error) {
 	start := stan.DeliverAllAvailable()
+	var seq uint64
 	if resumeToken != "" {
-		seq, err := strconv.ParseUint(resumeToken, 10, 64)
+		var err error
+		seq, err = strconv.ParseUint(resumeToken, 10, 64)
 		if err != nil {
-			return fmt.Errorf("Unable to parse resume token %s: %w", resumeToken, err)
+			return nil, fmt.Errorf("Unable to parse resume token %s: %w", resumeToken, err)
 		}
 		start = stan.StartAtSequence(seq)
 	}
 	topic = sink.TopicWithPartition(topic, partition)
 	sub, err := c.stream.Subscribe(topic, func(m *stan.Msg) {
+		if seq >= m.Sequence {
+			// ignore seq
+			return
+		}
 		e := eventstore.Event{}
 		err := json.Unmarshal(m.Data, &e)
 		if err != nil {
 			log.WithError(err).Errorf("Unable to unmarshal event '%s'", string(m.Data))
 		}
-		if !in(e.AggregateType, aggregateTypes...) {
+		if !in(e.AggregateType, projection.GetAggregateTypes()...) {
 			// ignore
 			return
 		}
-		err = handler(ctx, e)
+		err = projection.Handler(ctx, e)
 		if err != nil {
 			log.WithError(err).Errorf("Error when handling event with ID '%s'", e.ID)
 		}
 	}, start, stan.MaxInflight(1))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	stopped := make(chan struct{})
 	go func() {
 		<-ctx.Done()
 		sub.Close()
+		close(stopped)
+		log.Infof("Stoping handling events for %s", projection.GetName())
 	}()
 
-	return nil
+	return stopped, nil
 }
 
 func in(test string, values ...string) bool {
@@ -117,7 +126,7 @@ func in(test string, values ...string) bool {
 	return false
 }
 
-func (p NatsSubscriber) Notifier(ctx context.Context, managerTopic string, bootManager *projection.BootableManager) error {
+func (p NatsSubscriber) StartNotifier(ctx context.Context, managerTopic string, freezer projection.Freezer) error {
 	sub, err := p.queue.Subscribe(managerTopic, func(msg *nats.Msg) {
 		n := projection.Notification{}
 		err := json.Unmarshal(msg.Data, &n)
@@ -125,21 +134,21 @@ func (p NatsSubscriber) Notifier(ctx context.Context, managerTopic string, bootM
 			log.Errorf("Unable to unmarshal %v", err)
 			return
 		}
-		if n.Projection != bootManager.Name() {
+		if n.Projection != freezer.Name() {
 			return
 		}
 
 		switch n.Action {
 		case projection.Freeze:
-			if bootManager.IsLocked() {
-				bootManager.Freeze()
+			if freezer.IsLocked() {
+				freezer.Freeze()
 				err := msg.Respond([]byte("..."))
 				if err != nil {
 					log.WithError(err).Error("Unable to respond to notification")
 				}
 			}
 		case projection.Unfreeze:
-			bootManager.Unfreeze()
+			freezer.Unfreeze()
 		default:
 			log.WithField("notification", n).Error("Unknown notification")
 		}
