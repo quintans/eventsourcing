@@ -12,9 +12,8 @@ import (
 
 type Freezer interface {
 	Name() string
-	Freeze()
+	Freeze() bool
 	Unfreeze()
-	IsLocked() bool
 }
 
 type Projection interface {
@@ -25,28 +24,28 @@ type Projection interface {
 }
 
 type Subscriber interface {
-	GetResumeToken(ctx context.Context, topic string, partition int) (string, error)
-	StartConsumer(ctx context.Context, topic string, partition int, resumeToken string, projection Projection) (chan struct{}, error)
-	StartNotifier(ctx context.Context, managerTopic string, freezer Freezer) error
+	StartConsumer(ctx context.Context, partition int, resumeToken string, projection Projection) (chan struct{}, error)
+	StartNotifier(ctx context.Context, freezer Freezer) error
+	GetResumeToken(ctx context.Context, partition int) (string, error)
+	FreezeProjection(ctx context.Context, projectionName string) error
+	UnfreezeProjection(ctx context.Context, projectionName string) error
 }
 
 type EventHandler func(ctx context.Context, e eventstore.Event) error
 
 type BootableManager struct {
-	projection   Projection
-	subscriber   Subscriber
-	replayer     player.Replayer
-	topic        string
-	partitionLo  int
-	partitionHi  int
-	managerTopic string
+	projection  Projection
+	subscriber  Subscriber
+	replayer    player.Replayer
+	partitionLo int
+	partitionHi int
 
 	cancel  context.CancelFunc
 	wait    chan struct{}
 	release chan struct{}
 	closed  bool
-	locked  bool // has the dist lock
 	frozen  []chan struct{}
+	hasLock bool // acquired the lock
 	mu      sync.RWMutex
 }
 
@@ -63,22 +62,18 @@ func NewBootableManager(
 	projection Projection,
 	subscriber Subscriber,
 	replayer player.Replayer,
-	topic string,
 	partitionLo, partitionHi int,
-	managerTopic string,
 ) *BootableManager {
 	c := make(chan struct{})
 	close(c)
 	mc := &BootableManager{
-		projection:   projection,
-		subscriber:   subscriber,
-		replayer:     replayer,
-		topic:        topic,
-		partitionLo:  partitionLo,
-		partitionHi:  partitionHi,
-		managerTopic: managerTopic,
-		wait:         c,
-		release:      make(chan struct{}),
+		projection:  projection,
+		subscriber:  subscriber,
+		replayer:    replayer,
+		partitionLo: partitionLo,
+		partitionHi: partitionHi,
+		wait:        c,
+		release:     make(chan struct{}),
 	}
 	return mc
 }
@@ -107,15 +102,17 @@ func (m *BootableManager) OnBoot(ctx context.Context) error {
 	ctx2, m.cancel = context.WithCancel(ctx)
 	err := m.boot(ctx2)
 	if err != nil {
+		m.cancel()
 		return err
 	}
 
-	err = m.subscriber.StartNotifier(ctx, m.managerTopic, m)
+	err = m.subscriber.StartNotifier(ctx, m)
 	if err != nil {
+		m.cancel()
 		return err
 	}
 
-	m.locked = true
+	m.hasLock = true
 	return nil
 }
 
@@ -148,7 +145,7 @@ func (m *BootableManager) boot(ctx context.Context) error {
 	partitionSize := m.partitionHi - m.partitionLo + 1
 	tokens := make([]string, partitionSize)
 	for i := 0; i < partitionSize; i++ {
-		tokens[i], err = m.subscriber.GetResumeToken(ctx, m.topic, m.partitionLo+i)
+		tokens[i], err = m.subscriber.GetResumeToken(ctx, m.partitionLo+i)
 		if err != nil {
 			return fmt.Errorf("Could not retrieve resume token: %w", err)
 		}
@@ -163,7 +160,7 @@ func (m *BootableManager) boot(ctx context.Context) error {
 	// start consuming events from the last available position
 	frozen := make([]chan struct{}, partitionSize)
 	for i := 0; i < partitionSize; i++ {
-		ch, err := m.subscriber.StartConsumer(ctx, m.topic, m.partitionLo+i, tokens[i], m.projection)
+		ch, err := m.subscriber.StartConsumer(ctx, m.partitionLo+i, tokens[i], m.projection)
 		if err != nil {
 			return fmt.Errorf("Unable to start consumer: %w", err)
 		}
@@ -177,29 +174,37 @@ func (m *BootableManager) boot(ctx context.Context) error {
 	return nil
 }
 
-// IsLocked return if this instance is locked
-func (m *BootableManager) IsLocked() bool {
+func (m *BootableManager) Cancel() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.locked
+	if m.cancel != nil {
+		m.cancel()
+	}
+	m.mu.Unlock()
 }
 
-// Freeze blocks calls to Wait()
-func (m *BootableManager) Freeze() {
+// Freeze blocks calls to Wait() return true if this instance was locked
+func (m *BootableManager) Freeze() bool {
 	m.mu.Lock()
-	m.cancel()
+	if m.cancel != nil {
+		m.cancel()
+	}
 	m.wait = make(chan struct{})
 	m.closed = false
 	close(m.release)
 	m.release = make(chan struct{})
-	m.locked = false
 
-	// wait for the closing subscriber
-	for _, ch := range m.frozen {
-		<-ch
+	if m.hasLock {
+		// wait for the closing subscriber
+		for _, ch := range m.frozen {
+			<-ch
+		}
 	}
+	locked := m.hasLock
+	m.hasLock = false
 
 	m.mu.Unlock()
+
+	return locked
 }
 
 // Unfreeze releases any blocking call to Wait()

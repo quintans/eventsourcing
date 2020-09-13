@@ -10,6 +10,7 @@ import (
 type Booter interface {
 	OnBoot(context.Context) error
 	Wait() <-chan struct{} // block if not ready
+	Cancel()
 }
 
 type Locker interface {
@@ -69,10 +70,13 @@ func (l BootMonitor) Start(ctx context.Context) {
 		}
 		if ok {
 			// acquired lock
-			err := l.lockable.OnBoot(ctx)
-			if err != nil {
-				log.Error("Error booting:", err)
-			}
+			// OnBoot may take some time (minutes) to finish since it will be doing synchronisation
+			go func() {
+				err := l.lockable.OnBoot(ctx)
+				if err != nil {
+					log.Error("Error booting:", err)
+				}
+			}()
 			loop := true
 			for loop {
 				switch l.waitOn(ctx.Done(), release) {
@@ -80,6 +84,9 @@ func (l BootMonitor) Start(ctx context.Context) {
 					return
 				case Timedout:
 					loop, _ = l.locker.Extend()
+					if !loop {
+						l.lockable.Cancel()
+					}
 				case Released:
 					l.locker.Unlock()
 					loop = false

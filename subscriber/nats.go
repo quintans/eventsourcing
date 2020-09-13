@@ -16,11 +16,13 @@ import (
 )
 
 type NatsSubscriber struct {
-	queue  *nats.Conn
-	stream stan.Conn
+	queue        *nats.Conn
+	stream       stan.Conn
+	topic        string
+	managerTopic string
 }
 
-func NewNatsSubscriber(ctx context.Context, addresses string, topic string, stanClusterID, clientID string) (*NatsSubscriber, error) {
+func NewNatsSubscriber(ctx context.Context, addresses string, stanClusterID, clientID string, topic, managerTopic string) (*NatsSubscriber, error) {
 	nc, err := nats.Connect(addresses)
 	if err != nil {
 		return nil, fmt.Errorf("Could not instantiate NATS client: %w", err)
@@ -38,23 +40,25 @@ func NewNatsSubscriber(ctx context.Context, addresses string, topic string, stan
 	}()
 
 	return &NatsSubscriber{
-		queue:  nc,
-		stream: stream,
+		queue:        nc,
+		stream:       stream,
+		topic:        topic,
+		managerTopic: managerTopic,
 	}, nil
 }
 
-func (c NatsSubscriber) GetQueue() *nats.Conn {
-	return c.queue
+func (s NatsSubscriber) GetQueue() *nats.Conn {
+	return s.queue
 }
 
-func (c NatsSubscriber) GetStream() stan.Conn {
-	return c.stream
+func (s NatsSubscriber) GetStream() stan.Conn {
+	return s.stream
 }
 
-func (c NatsSubscriber) GetResumeToken(ctx context.Context, topic string, partition int) (string, error) {
+func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition int) (string, error) {
 	ch := make(chan uint64)
-	topic = sink.TopicWithPartition(topic, partition)
-	sub, err := c.stream.Subscribe(topic, func(m *stan.Msg) {
+	topic := sink.TopicWithPartition(s.topic, partition)
+	sub, err := s.stream.Subscribe(topic, func(m *stan.Msg) {
 		ch <- m.Sequence
 	}, stan.StartWithLastReceived())
 	if err != nil {
@@ -71,7 +75,7 @@ func (c NatsSubscriber) GetResumeToken(ctx context.Context, topic string, partit
 	return strconv.FormatUint(sequence, 10), nil
 }
 
-func (c NatsSubscriber) StartConsumer(ctx context.Context, topic string, partition int, resumeToken string, projection projection.Projection) (chan struct{}, error) {
+func (s NatsSubscriber) StartConsumer(ctx context.Context, partition int, resumeToken string, projection projection.Projection) (chan struct{}, error) {
 	start := stan.DeliverAllAvailable()
 	var seq uint64
 	if resumeToken != "" {
@@ -82,8 +86,8 @@ func (c NatsSubscriber) StartConsumer(ctx context.Context, topic string, partiti
 		}
 		start = stan.StartAtSequence(seq)
 	}
-	topic = sink.TopicWithPartition(topic, partition)
-	sub, err := c.stream.Subscribe(topic, func(m *stan.Msg) {
+	topic := sink.TopicWithPartition(s.topic, partition)
+	sub, err := s.stream.Subscribe(topic, func(m *stan.Msg) {
 		if seq >= m.Sequence {
 			// ignore seq
 			return
@@ -126,8 +130,8 @@ func in(test string, values ...string) bool {
 	return false
 }
 
-func (p NatsSubscriber) StartNotifier(ctx context.Context, managerTopic string, freezer projection.Freezer) error {
-	sub, err := p.queue.Subscribe(managerTopic, func(msg *nats.Msg) {
+func (s NatsSubscriber) StartNotifier(ctx context.Context, freezer projection.Freezer) error {
+	sub, err := s.queue.Subscribe(s.managerTopic, func(msg *nats.Msg) {
 		n := projection.Notification{}
 		err := json.Unmarshal(msg.Data, &n)
 		if err != nil {
@@ -140,8 +144,7 @@ func (p NatsSubscriber) StartNotifier(ctx context.Context, managerTopic string, 
 
 		switch n.Action {
 		case projection.Freeze:
-			if freezer.IsLocked() {
-				freezer.Freeze()
+			if freezer.Freeze() {
 				err := msg.Respond([]byte("..."))
 				if err != nil {
 					log.WithError(err).Error("Unable to respond to notification")
@@ -164,4 +167,29 @@ func (p NatsSubscriber) StartNotifier(ctx context.Context, managerTopic string, 
 	}()
 
 	return nil
+}
+
+func (s NatsSubscriber) FreezeProjection(ctx context.Context, projectionName string) error {
+	log.WithField("projection", projectionName).Info("Freezing projection")
+	payload, err := json.Marshal(projection.Notification{
+		Projection: projectionName,
+		Action:     projection.Freeze,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.queue.Request(s.managerTopic, payload, 500*time.Millisecond)
+	return err
+}
+
+func (s NatsSubscriber) UnfreezeProjection(ctx context.Context, projectionName string) error {
+	log.WithField("projection", projectionName).Info("Unfreezing projection")
+	payload, err := json.Marshal(projection.Notification{
+		Projection: projectionName,
+		Action:     projection.Unfreeze,
+	})
+	if err != nil {
+		return err
+	}
+	return s.queue.Publish(s.managerTopic, payload)
 }

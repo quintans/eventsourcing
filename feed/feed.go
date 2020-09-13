@@ -35,3 +35,5 @@ func (f Feed) OnBoot(ctx context.Context) error {
 func (f Feed) Wait() <-chan struct{} {
 	return nil
 }
+
+func (f Feed) Cancel() {}
