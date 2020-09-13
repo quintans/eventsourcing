@@ -235,13 +235,10 @@ If the poller service restarts, it will do the same as before, querying the even
 
 On the projection side it is pretty much the same as in the Simple use, but now we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages.
 
-<<<<<<< Updated upstream
-=======
 Here we refer to a poller because it is easy to implement, but any other implementation that is able to forward events starting at a given point resume point would also work. 
 
 #### Polling
 
->>>>>>> Stashed changes
 Depending on the rate of events being written in the event store, the poller may not be able to keep up and becomes a bottleneck.
 When this happens we need to create more polling services that don't overlap when polling events.
 Overlapping can be avoided by filtering over metadata.
