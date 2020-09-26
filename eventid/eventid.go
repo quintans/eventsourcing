@@ -53,7 +53,7 @@ func Parse(encoded string) (EventID, error) {
 	}
 
 	// aggregate uuid - check if is parsable
-	_, err = uuid.ParseBytes(a[TimestampSize : TimestampSize+UuidSize])
+	_, err = uuid.FromBytes(a[TimestampSize : TimestampSize+UuidSize])
 	if err != nil {
 		return EventID{}, err
 	}
@@ -79,7 +79,8 @@ func (e *EventID) SetTime(instant time.Time) {
 }
 
 func (e EventID) AggregateID() uuid.UUID {
-	id, _ := uuid.ParseBytes(e[TimestampSize : TimestampSize+UuidSize])
+	// ignoring error because it was already successfully parsed
+	id, _ := uuid.FromBytes(e[TimestampSize : TimestampSize+UuidSize])
 
 	return id
 }
@@ -154,17 +155,30 @@ func Marshal(a []byte) string {
 }
 
 func Unmarshal(encoded string) ([]byte, error) {
-	decSize := ((len(encoded) - 1) * 5) / ByteSize
-	result := make([]byte, decSize)
-	for i := decSize - 1; i >= 0; i-- {
+	decSize := (len(encoded) * 5) / ByteSize
+	// added one byte more to be the feeder
+	result := make([]byte, decSize+1)
+	encodeSize := len(encoded)
+	shift2 := (ByteSize - bitShift)
+	for i := 0; i < encodeSize; i++ {
 		idx := strings.Index(Encoding, string(encoded[i]))
 		if idx < 0 {
 			return nil, ErrInvalidString
 		}
-		result[decSize] = result[decSize] | byte(idx)
-		result = shiftBytesLeft(result, bitShift)
+		b := byte(idx) << shift2
+		result[decSize] |= b
+		// ignore the last iteration
+		if i < encodeSize-1 {
+			result = shiftBytesLeft(result, bitShift)
+		}
 	}
-	return result, nil
+	// shifting the remaining bits
+	remainder := (decSize * ByteSize) % (bitShift * (encodeSize - 1))
+	if remainder > 0 {
+		result = shiftBytesLeft(result, remainder)
+	}
+	// discard last byte - feeder
+	return result[:decSize], nil
 }
 
 // shiftBytesLeft shift bytes left by shift amount.
@@ -183,4 +197,21 @@ func shiftBytesLeft(a []byte, shift int) (dst []byte) {
 	dst[n-1] = a[n-1] << shift
 
 	return dst
+}
+
+func DelayEventID(eventID string, offset time.Duration) (string, error) {
+	// if event ID is not empty, offset
+	if eventID != "" {
+		id, err := Parse(eventID)
+		if err != nil {
+			return "", err
+		}
+		t := id.Time()
+		// add a safety margin.
+		// afterEventID might have pointing to an ID that might have skipped other events
+		t = t.Add(-offset)
+		id.SetTime(t)
+		eventID = id.String()
+	}
+	return eventID, nil
 }
