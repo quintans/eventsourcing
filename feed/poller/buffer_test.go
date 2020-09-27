@@ -8,6 +8,7 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/player"
+	"github.com/quintans/eventstore/repo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ var (
 	}
 )
 
-const pollInterval = 200 * time.Millisecond
+const pollInterval = player.TrailingLag
 
 type MockRepo struct {
 	mu     sync.RWMutex
@@ -46,13 +47,13 @@ func NewMockRepo() *MockRepo {
 	}
 }
 
-func (r *MockRepo) GetLastEventID(ctx context.Context, filter player.Filter) (string, error) {
+func (r *MockRepo) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter repo.Filter) (string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.events[len(r.events)-1].ID, nil
 }
 
-func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int, filter player.Filter) ([]eventstore.Event, error) {
+func (r *MockRepo) GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter repo.Filter) ([]eventstore.Event, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 

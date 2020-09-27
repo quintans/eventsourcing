@@ -10,7 +10,8 @@ service Store {
 }
 
 message GetLastEventIDRequest {
-  Filter filter = 1;
+  int64 trailing_lag = 1;
+  Filter filter = 2;
 }
 
 message GetLastEventIDReply {
@@ -20,7 +21,8 @@ message GetLastEventIDReply {
 message GetEventsRequest {
   string after_event_id = 1;
   int32 limit = 2;
-  Filter filter = 3;
+  int64 trailing_lag = 3;
+  Filter filter = 4;
 }
 
 message Filter {
@@ -40,7 +42,7 @@ message GetEventsReply {
 message Event {
 	string id = 1;
 	string aggregate_id = 2;
-	int32 aggregate_version = 3;
+	uint32 aggregate_version = 3;
 	string aggregate_type = 4;
 	string kind = 5;
 	string body = 6;

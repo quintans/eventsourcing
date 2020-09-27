@@ -9,6 +9,7 @@ import (
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/quintans/eventstore"
 	pb "github.com/quintans/eventstore/api/proto"
+	"github.com/quintans/eventstore/repo"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -23,7 +24,7 @@ func NewGrpcRepository(address string) Repository {
 	}
 }
 
-func (c GrpcRepository) GetLastEventID(ctx context.Context, filter Filter) (string, error) {
+func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter repo.Filter) (string, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return "", err
@@ -32,14 +33,18 @@ func (c GrpcRepository) GetLastEventID(ctx context.Context, filter Filter) (stri
 
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	r, err := cli.GetLastEventID(ctx, &pb.GetLastEventIDRequest{})
+	pbFilter := filterToPbFilter(filter)
+	r, err := cli.GetLastEventID(ctx, &pb.GetLastEventIDRequest{
+		TrailingLag: trailingLag.Milliseconds(),
+		Filter:      pbFilter,
+	})
 	if err != nil {
 		return "", fmt.Errorf("could not get last event id: %w", err)
 	}
 	return r.EventId, nil
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, filter Filter) ([]eventstore.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter repo.Filter) ([]eventstore.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, err
@@ -53,6 +58,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 	r, err := cli.GetEvents(ctx, &pb.GetEventsRequest{
 		AfterEventId: afterEventID,
 		Limit:        int32(limit),
+		TrailingLag:  trailingLag.Milliseconds(),
 		Filter:       pbFilter,
 	})
 	if err != nil {
@@ -69,7 +75,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 		events[k] = eventstore.Event{
 			ID:               v.Id,
 			AggregateID:      v.AggregateId,
-			AggregateVersion: int(v.AggregateVersion),
+			AggregateVersion: v.AggregateVersion,
 			AggregateType:    v.AggregateType,
 			Kind:             v.Kind,
 			Body:             []byte(v.Body),
@@ -81,7 +87,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 	return events, nil
 }
 
-func filterToPbFilter(filter Filter) *pb.Filter {
+func filterToPbFilter(filter repo.Filter) *pb.Filter {
 	types := make([]string, len(filter.AggregateTypes))
 	for k, v := range filter.AggregateTypes {
 		types[k] = v

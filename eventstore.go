@@ -7,7 +7,9 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/eventid"
 )
 
 var (
@@ -15,19 +17,21 @@ var (
 )
 
 type Aggregater interface {
+	GetType() string
 	GetID() string
-	GetVersion() int
-	SetVersion(int)
+	GetVersion() uint32
+	SetVersion(uint32)
 	GetEvents() []interface{}
 	ClearEvents()
 	ApplyChangeFromHistory(event Event) error
+	UpdatedAt() time.Time
 }
 
 // Event represents the event data
 type Event struct {
 	ID               string      `json:"id,omitempty"`
 	AggregateID      string      `json:"aggregate_id,omitempty"`
-	AggregateVersion int         `json:"aggregate_version,omitempty"`
+	AggregateVersion uint32      `json:"aggregate_version,omitempty"`
 	AggregateType    string      `json:"aggregate_type,omitempty"`
 	Kind             string      `json:"kind,omitempty"`
 	Body             common.Json `json:"body,omitempty"`
@@ -41,7 +45,7 @@ func (e Event) IsZero() bool {
 }
 
 type EsRepository interface {
-	SaveEvent(ctx context.Context, tName string, eRec []EventRecord, idempotencyKey string, labels []byte) (string, error)
+	SaveEvent(ctx context.Context, eRec []EventRecord) error
 	GetSnapshot(ctx context.Context, aggregateID string) (Snapshot, error)
 	SaveSnapshot(ctx context.Context, agregate Aggregater, eventID string)
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
@@ -60,10 +64,20 @@ func (s Snapshot) IsValid() bool {
 }
 
 type EventRecord struct {
-	AggregateID string
-	Version     int
-	Name        string
-	Body        []byte
+	AggregateID    string
+	Version        uint32
+	AggregateType  string
+	Name           string
+	Body           []byte
+	IdempotencyKey string
+	Labels         []byte
+	CreatedAt      time.Time
+}
+
+func (e EventRecord) ID() string {
+	id, _ := uuid.Parse(e.AggregateID)
+	eid := eventid.New(e.CreatedAt, id, e.Version)
+	return eid.String()
 }
 
 type Options struct {
@@ -83,7 +97,7 @@ type EventStorer interface {
 var _ EventStorer = (*EventStore)(nil)
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, snapshotThreshold int) EventStore {
+func NewEventStore(repo EsRepository, snapshotThreshold uint32) EventStore {
 	return EventStore{
 		repo:              repo,
 		snapshotThreshold: snapshotThreshold,
@@ -93,7 +107,7 @@ func NewEventStore(repo EsRepository, snapshotThreshold int) EventStore {
 // EventSore -
 type EventStore struct {
 	repo              EsRepository
-	snapshotThreshold int
+	snapshotThreshold uint32
 }
 
 func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
@@ -132,40 +146,33 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 
 func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Options) (err error) {
 	events := aggregate.GetEvents()
-	if len(events) == 0 {
+	eventsLen := len(events)
+	if eventsLen == 0 {
 		return nil
 	}
-
-	tName := nameFor(aggregate)
-	version := aggregate.GetVersion()
-	oldVersion := version
-
-	var eventID string
-	defer func() {
-		if err != nil {
-			aggregate.SetVersion(oldVersion)
-			return
-		}
-		if version > es.snapshotThreshold-1 {
-			mod := oldVersion % es.snapshotThreshold
-			delta := version - oldVersion + mod
-			if delta >= es.snapshotThreshold {
-				es.repo.SaveSnapshot(ctx, aggregate, eventID)
-			}
-		}
-	}()
 
 	labels, err := json.Marshal(options.Labels)
 	if err != nil {
 		return err
 	}
 
-	size := len(events)
-	if size == 0 {
-		return nil
+	now := time.Now().UTC()
+	// we only need millisecond precision
+	now = now.Truncate(time.Millisecond)
+	// due to clock skews, now can be less than the last aggregate update
+	// so we make sure that it will be att least the same.
+	// Version will break the tie when generating the ID
+	if now.Before(aggregate.UpdatedAt()) {
+		now = aggregate.UpdatedAt()
 	}
-	ers := make([]EventRecord, size)
-	for i := 0; i < size; i++ {
+
+	tName := aggregate.GetType()
+	version := aggregate.GetVersion()
+	oldVersion := version
+
+	var eventID string
+	ers := make([]EventRecord, eventsLen)
+	for i := 0; i < eventsLen; i++ {
 		e := events[i]
 		version++
 		aggregate.SetVersion(version)
@@ -174,15 +181,30 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 			return err
 		}
 		ers[i] = EventRecord{
-			AggregateID: aggregate.GetID(),
-			Version:     aggregate.GetVersion(),
-			Name:        nameFor(e),
-			Body:        body,
+			AggregateID:    aggregate.GetID(),
+			Version:        aggregate.GetVersion(),
+			AggregateType:  tName,
+			Name:           nameFor(e),
+			Body:           body,
+			IdempotencyKey: options.IdempotencyKey,
+			Labels:         labels,
+			CreatedAt:      now,
 		}
+		eventID = ers[i].ID()
 	}
-	eventID, err = es.repo.SaveEvent(ctx, tName, ers, options.IdempotencyKey, labels)
+
+	err = es.repo.SaveEvent(ctx, ers)
 	if err != nil {
+		aggregate.SetVersion(oldVersion)
 		return err
+	}
+
+	if version > es.snapshotThreshold-1 {
+		mod := oldVersion % es.snapshotThreshold
+		delta := version - oldVersion + mod
+		if delta >= es.snapshotThreshold {
+			es.repo.SaveSnapshot(ctx, aggregate, eventID)
+		}
 	}
 
 	aggregate.ClearEvents()

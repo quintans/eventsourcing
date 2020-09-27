@@ -14,6 +14,7 @@ type Message struct {
 }
 
 type Sinker interface {
+	Init() error
 	Sink(ctx context.Context, e eventstore.Event) error
 	LastMessage(ctx context.Context, partition int) (*Message, error)
 	Close()

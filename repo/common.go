@@ -1,6 +1,8 @@
 package repo
 
-import "strings"
+import (
+	"strings"
+)
 
 func JoinAndEscape(s []string) string {
 	fields := strings.Join(s, ", ")

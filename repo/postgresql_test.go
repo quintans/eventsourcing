@@ -143,6 +143,7 @@ func TestSaveAndGet(t *testing.T) {
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{})
+	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
@@ -165,13 +166,13 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "AccountCreated", evts[0].Kind)
 	assert.Equal(t, "Account", evts[0].AggregateType)
 	assert.Equal(t, id, evts[0].AggregateID)
-	assert.Equal(t, 1, evts[0].AggregateVersion)
+	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
 
 	acc2 := NewAccount()
 	err = es.GetByID(ctx, id, acc2)
 	require.NoError(t, err)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, 4, acc2.Version)
+	assert.Equal(t, uint32(4), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, OPEN, acc2.Status)
 }
@@ -187,6 +188,7 @@ func TestListener(t *testing.T) {
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{})
+	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
@@ -220,7 +222,7 @@ func TestListener(t *testing.T) {
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, 4, acc2.Version)
+	assert.Equal(t, uint32(4), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, OPEN, acc2.Status)
 }
@@ -236,6 +238,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{})
+	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
@@ -243,9 +246,9 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := NewAccount()
 	counter := 0
-	repo, err := repo.NewPgEsRepository(dbURL)
+	repository, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	p := poller.New(repo)
+	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
@@ -257,7 +260,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 			}
 		}
 		return nil
-	}, player.WithAggregateTypes("Account"))
+	}, repo.WithAggregateTypes("Account"))
 
 	select {
 	case <-done:
@@ -265,7 +268,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	}
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, 4, acc2.Version)
+	assert.Equal(t, uint32(4), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, OPEN, acc2.Status)
 }
@@ -285,6 +288,7 @@ func TestListenerWithLabels(t *testing.T) {
 			"geo": "EU",
 		},
 	})
+	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc, eventstore.Options{
 		Labels: map[string]string{
@@ -297,9 +301,9 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := NewAccount()
 	counter := 0
 
-	repo, err := repo.NewPgEsRepository(dbURL)
+	repository, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	p := poller.New(repo)
+	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
@@ -311,7 +315,7 @@ func TestListenerWithLabels(t *testing.T) {
 			}
 		}
 		return nil
-	}, player.WithLabel("geo", "EU"))
+	}, repo.WithLabel("geo", "EU"))
 
 	select {
 	case <-done:
@@ -319,7 +323,7 @@ func TestListenerWithLabels(t *testing.T) {
 	}
 	assert.Equal(t, 3, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, 3, acc2.Version)
+	assert.Equal(t, uint32(3), acc2.Version)
 	assert.Equal(t, int64(130), acc2.Balance)
 	assert.Equal(t, OPEN, acc2.Status)
 }
@@ -336,6 +340,7 @@ func TestForget(t *testing.T) {
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{})
+	require.NoError(t, err)
 	acc.Deposit(5)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")

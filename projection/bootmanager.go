@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/player"
+	"github.com/quintans/eventstore/repo"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -37,6 +40,7 @@ type BootableManager struct {
 	projection  Projection
 	subscriber  Subscriber
 	replayer    player.Replayer
+	repository  player.Repository
 	partitionLo int
 	partitionHi int
 
@@ -53,7 +57,7 @@ type BootableManager struct {
 // Arguments:
 //   projection: the projection
 //   subscriber: handles all interaction with the message queue
-//   replayer: replays events from an event id
+//   repository: repository to the events
 //   topic: topic from where the events will be consumed
 //   partitionLo: first partition number. if zero, partitioning will ignored
 //   partitionHi: last partition number. if zero, partitioning will ignored
@@ -61,7 +65,7 @@ type BootableManager struct {
 func NewBootableManager(
 	projection Projection,
 	subscriber Subscriber,
-	replayer player.Replayer,
+	repository player.Repository,
 	partitionLo, partitionHi int,
 ) *BootableManager {
 	c := make(chan struct{})
@@ -69,12 +73,15 @@ func NewBootableManager(
 	mc := &BootableManager{
 		projection:  projection,
 		subscriber:  subscriber,
-		replayer:    replayer,
+		repository:  repository,
 		partitionLo: partitionLo,
 		partitionHi: partitionHi,
 		wait:        c,
 		release:     make(chan struct{}),
 	}
+
+	mc.replayer = player.New(repository)
+
 	return mc
 }
 
@@ -122,12 +129,11 @@ func (m *BootableManager) boot(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("Could not get last event ID from the projection: %w", err)
 	}
-	log.Printf("Booting %s from '%s'", m.projection.GetName(), prjEventID)
 
 	// To avoid the creation of  potential massive buffer size
 	// and to ensure that events are not lost, between the switch to the consumer,
 	// we execute the fetch in several steps.
-	// 1) Process all events from the ES from the begginning
+	// 1) Process all events from the ES from the begginning - it may be a long operation
 	// 2) start the consumer to track new events from now on
 	// 3) process any event that may have arrived between the switch
 	// 4) start consuming events from the last position
@@ -135,7 +141,13 @@ func (m *BootableManager) boot(ctx context.Context) error {
 
 	aggregateTypes := m.projection.GetAggregateTypes()
 	// replay oldest events
-	filter := player.WithAggregateTypes(aggregateTypes...)
+	prjEventID, err = eventid.DelayEventID(prjEventID, player.TrailingLag)
+	if err != nil {
+		return fmt.Errorf("Error delaying the eventID: %w", err)
+	}
+	log.Printf("Booting %s from '%s'", m.projection.GetName(), prjEventID)
+
+	filter := repo.WithAggregateTypes(aggregateTypes...)
 	lastEventID, err := m.replayer.Replay(ctx, handler, prjEventID, filter)
 	if err != nil {
 		return fmt.Errorf("Could not replay all events (first part): %w", err)
@@ -152,11 +164,18 @@ func (m *BootableManager) boot(ctx context.Context) error {
 	}
 
 	// consume potential missed events events between the switch to the consumer
-	lastEventID, err = m.replayer.Replay(ctx, handler, lastEventID, filter)
+	events, err := m.repository.GetEvents(ctx, lastEventID, 0, time.Duration(0), repo.Filter{
+		AggregateTypes: aggregateTypes,
+	})
 	if err != nil {
 		return fmt.Errorf("Could not replay all events (second part): %w", err)
 	}
-
+	for _, event := range events {
+		err = handler(ctx, event)
+		if err != nil {
+			return fmt.Errorf("Error handling event %+v: %w", event, err)
+		}
+	}
 	// start consuming events from the last available position
 	frozen := make([]chan struct{}, partitionSize)
 	for i := 0; i < partitionSize; i++ {

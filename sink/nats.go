@@ -12,22 +12,33 @@ import (
 )
 
 type NatsSink struct {
-	topic      string
-	client     stan.Conn
-	partitions uint32
+	topic         string
+	client        stan.Conn
+	partitions    uint32
+	stanClusterID string
+	clientID      string
+	options       []stan.Option
 }
 
 // NewNatsSink instantiate PulsarSink
-func NewNatsSink(topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) (*NatsSink, error) {
-	c, err := stan.Connect(stanClusterID, clientID, options...)
-	if err != nil {
-		return nil, fmt.Errorf("Could not instantiate Nats connection: %w", err)
-	}
+func NewNatsSink(topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) *NatsSink {
 	return &NatsSink{
-		topic:      topic,
-		client:     c,
-		partitions: partitions,
-	}, nil
+		topic:         topic,
+		partitions:    partitions,
+		stanClusterID: stanClusterID,
+		clientID:      clientID,
+		options:       options,
+	}
+}
+
+// Init starts the feed
+func (p *NatsSink) Init() error {
+	c, err := stan.Connect(p.stanClusterID, p.clientID, p.options...)
+	if err != nil {
+		return fmt.Errorf("Could not instantiate Nats connection: %w", err)
+	}
+	p.client = c
+	return nil
 }
 
 // Close releases resources blocking until

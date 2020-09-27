@@ -2,36 +2,23 @@ package player
 
 import (
 	"context"
+	"time"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/repo"
+)
+
+const (
+	TrailingLag = 200 * time.Millisecond
 )
 
 type Replayer interface {
-	Replay(ctx context.Context, handler EventHandler, afterEventID string, filters ...FilterOption) (string, error)
+	Replay(ctx context.Context, handler EventHandler, afterEventID string, filters ...repo.FilterOption) (string, error)
 }
 
 type Repository interface {
-	GetLastEventID(ctx context.Context, filter Filter) (string, error)
-	GetEvents(ctx context.Context, afterEventID string, limit int, filter Filter) ([]eventstore.Event, error)
-}
-
-type Filter struct {
-	AggregateTypes []string
-	// Labels filters on top of labels. Every key of the map is ANDed with every OR of the values
-	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Labels []Label
-}
-
-func NewLabel(key, value string) Label {
-	return Label{
-		Key:   key,
-		Value: value,
-	}
-}
-
-type Label struct {
-	Key   string
-	Value string
+	GetLastEventID(ctx context.Context, trailingLag time.Duration, filter repo.Filter) (string, error)
+	GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter repo.Filter) ([]eventstore.Event, error)
 }
 
 type Start int
@@ -46,21 +33,44 @@ type EventHandler func(ctx context.Context, e eventstore.Event) error
 
 type Cancel func()
 
-type FilterOption func(*Filter)
+type Option func(*Player)
 
 type Player struct {
 	repo      Repository
 	batchSize int
+	// lag to account for on same millisecond concurrent inserts and clock skews
+	trailingLag time.Duration
 }
 
-func New(repo Repository, batchSize int) Player {
-	if batchSize == 0 {
-		batchSize = 20
+func WithBatchSize(batchSize int) Option {
+	return func(p *Player) {
+		if batchSize > 0 {
+			p.batchSize = batchSize
+		}
 	}
-	return Player{
-		repo:      repo,
-		batchSize: batchSize,
+}
+
+func WithTrailingLag(trailingLag time.Duration) Option {
+	return func(r *Player) {
+		r.trailingLag = trailingLag
 	}
+}
+
+// New instantiates a new Player.
+//
+// trailingLag: lag to account for on same millisecond concurrent inserts and clock skews. A good lag is 200ms.
+func New(repository Repository, options ...Option) Player {
+	p := Player{
+		repo:        repository,
+		batchSize:   20,
+		trailingLag: TrailingLag,
+	}
+
+	for _, f := range options {
+		f(&p)
+	}
+
+	return p
 }
 
 type StartOption struct {
@@ -95,56 +105,22 @@ func StartAt(afterEventID string) StartOption {
 	}
 }
 
-func WithFilter(filter Filter) FilterOption {
-	return func(f *Filter) {
-		f = &filter
-	}
-}
-
-func WithAggregateTypes(at ...string) FilterOption {
-	return func(f *Filter) {
-		f.AggregateTypes = at
-	}
-}
-
-func WithLabel(key, value string) FilterOption {
-	return func(f *Filter) {
-		if f.Labels == nil {
-			f.Labels = []Label{}
-		}
-		f.Labels = append(f.Labels, NewLabel(key, value))
-	}
-}
-
-type Labels map[string]string
-
-func WithLabels(labels Labels) FilterOption {
-	return func(f *Filter) {
-		f.Labels = make([]Label, len(labels))
-		idx := 0
-		for k, v := range labels {
-			f.Labels[idx] = NewLabel(k, v)
-			idx++
-		}
-	}
-}
-
-func (p Player) ReplayUntil(ctx context.Context, handler EventHandler, untilEventID string, filters ...FilterOption) (string, error) {
+func (p Player) ReplayUntil(ctx context.Context, handler EventHandler, untilEventID string, filters ...repo.FilterOption) (string, error) {
 	return p.ReplayFromUntil(ctx, handler, "", untilEventID, filters...)
 }
 
-func (p Player) Replay(ctx context.Context, handler EventHandler, afterEventID string, filters ...FilterOption) (string, error) {
+func (p Player) Replay(ctx context.Context, handler EventHandler, afterEventID string, filters ...repo.FilterOption) (string, error) {
 	return p.ReplayFromUntil(ctx, handler, afterEventID, "", filters...)
 }
 
-func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, afterEventID, untilEventID string, filters ...FilterOption) (string, error) {
-	filter := Filter{}
+func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, afterEventID, untilEventID string, filters ...repo.FilterOption) (string, error) {
+	filter := repo.Filter{}
 	for _, f := range filters {
 		f(&filter)
 	}
 	loop := true
 	for loop {
-		events, err := p.repo.GetEvents(ctx, afterEventID, p.batchSize, filter)
+		events, err := p.repo.GetEvents(ctx, afterEventID, p.batchSize, p.trailingLag, filter)
 		if err != nil {
 			return "", err
 		}

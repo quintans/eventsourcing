@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore/player"
+	"github.com/quintans/eventstore/repo"
 	"github.com/quintans/eventstore/sink"
 	log "github.com/sirupsen/logrus"
 )
@@ -19,9 +20,17 @@ type Poller struct {
 	limit        int
 	partitions   int
 	play         player.Player
+	// lag to account for on same millisecond concurrent inserts and clock skews
+	trailingLag time.Duration
 }
 
 type Option func(*Poller)
+
+func WithTrailingLag(trailingLag time.Duration) Option {
+	return func(r *Poller) {
+		r.trailingLag = trailingLag
+	}
+}
 
 func WithPollInterval(pollInterval time.Duration) Option {
 	return func(p *Poller) {
@@ -45,28 +54,28 @@ func WithPartitions(partitions int) Option {
 	}
 }
 
-func New(repo player.Repository, options ...Option) Poller {
+func New(repository player.Repository, options ...Option) Poller {
 	p := Poller{
-		pollInterval: 200 * time.Millisecond,
+		pollInterval: player.TrailingLag,
 		limit:        20,
-		repo:         repo,
+		repo:         repository,
 	}
 
 	for _, o := range options {
 		o(&p)
 	}
 
-	p.play = player.New(repo, p.limit)
+	p.play = player.New(repository, player.WithBatchSize(p.limit), player.WithTrailingLag(p.trailingLag))
 
 	return p
 }
 
-func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler player.EventHandler, filters ...player.FilterOption) error {
+func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler player.EventHandler, filters ...repo.FilterOption) error {
 	var afterEventID string
 	var err error
 	switch startOption.StartFrom() {
 	case player.END:
-		afterEventID, err = p.repo.GetLastEventID(ctx, player.Filter{})
+		afterEventID, err = p.repo.GetLastEventID(ctx, p.trailingLag, repo.Filter{})
 		if err != nil {
 			return err
 		}
@@ -74,10 +83,10 @@ func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handle
 	case player.SEQUENCE:
 		afterEventID = startOption.AfterEventID()
 	}
-	return p.handle(ctx, afterEventID, handler, filters...)
+	return p.forward(ctx, afterEventID, handler, filters...)
 }
 
-func (p Poller) handle(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...player.FilterOption) error {
+func (p Poller) forward(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...repo.FilterOption) error {
 	wait := p.pollInterval
 	for {
 		eid, err := p.play.Replay(ctx, handler, afterEventID, filters...)
@@ -104,7 +113,7 @@ func (p Poller) handle(ctx context.Context, afterEventID string, handler player.
 
 // Feed forwars the handling to a sink.
 // eg: a message queue
-func (p Poller) Feed(ctx context.Context, sinker sink.Sinker, filters ...player.FilterOption) error {
+func (p Poller) Feed(ctx context.Context, sinker sink.Sinker, filters ...repo.FilterOption) error {
 	// looking for the lowest ID in all partitions
 	var afterEventID string
 	if p.partitions == 0 {
@@ -131,5 +140,5 @@ func (p Poller) Feed(ctx context.Context, sinker sink.Sinker, filters ...player.
 	}
 
 	log.Println("Starting to feed from event ID:", afterEventID)
-	return p.handle(ctx, afterEventID, sinker.Sink, filters...)
+	return p.forward(ctx, afterEventID, sinker.Sink, filters...)
 }

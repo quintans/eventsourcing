@@ -13,21 +13,18 @@ import (
 	"github.com/lib/pq"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/player"
-	"github.com/rs/xid"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
 	uniqueViolation = "23505"
-	lag             = -200 * time.Millisecond
 )
 
 // PgEvent is the event data stored in the database
 type PgEvent struct {
 	ID               string      `db:"id"`
 	AggregateID      string      `db:"aggregate_id"`
-	AggregateVersion int         `db:"aggregate_version"`
+	AggregateVersion uint32      `db:"aggregate_version"`
 	AggregateType    string      `db:"aggregate_type"`
 	Kind             string      `db:"kind"`
 	Body             common.Json `db:"body"`
@@ -40,9 +37,6 @@ type PgEsRepository struct {
 	db *sqlx.DB
 }
 
-var _ eventstore.EsRepository = (*PgEsRepository)(nil)
-var _ player.Repository = (*PgEsRepository)(nil)
-
 func NewPgEsRepository(dburl string) (*PgEsRepository, error) {
 	db, err := sql.Open("postgres", dburl)
 	if err != nil {
@@ -54,26 +48,24 @@ func NewPgEsRepository(dburl string) (*PgEsRepository, error) {
 	return NewPgEsRepositoryDB(db)
 }
 
-// NewESPostgreSQL creates a new instance of ESPostgreSQL
+// NewPgEsRepositoryDB creates a new instance of PgEsRepositoryDB
 func NewPgEsRepositoryDB(db *sql.DB) (*PgEsRepository, error) {
 	dbx := sqlx.NewDb(db, "postgres")
-	return &PgEsRepository{
+	r := &PgEsRepository{
 		db: dbx,
-	}, nil
+	}
+
+	return r, nil
 }
 
-func (r *PgEsRepository) SaveEvent(ctx context.Context, tName string, eRec []eventstore.EventRecord, idempotencyKey string, labels []byte) (string, error) {
-	var eID string
+func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec []eventstore.EventRecord) error {
 	er := r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
-		var eventID string
+		var err error
 		for _, e := range eRec {
-			eventID = xid.New().String()
-			now := time.Now().UTC()
-
-			_, err := tx.ExecContext(c,
+			_, err = tx.ExecContext(c,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-				eventID, e.AggregateID, e.Version, tName, e.Name, e.Body, idempotencyKey, labels, now)
+				e.ID(), e.AggregateID, e.Version, e.AggregateType, e.Name, e.Body, e.IdempotencyKey, e.Labels, e.CreatedAt)
 			if err != nil {
 				if pgerr, ok := err.(*pq.Error); ok {
 					if pgerr.Code == uniqueViolation {
@@ -83,10 +75,9 @@ func (r *PgEsRepository) SaveEvent(ctx context.Context, tName string, eRec []eve
 				return fmt.Errorf("Unable to insert event: %w", err)
 			}
 		}
-		eID = eventID
 		return nil
 	})
-	return eID, er
+	return er
 }
 
 func (r *PgEsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventstore.Snapshot, error) {
@@ -223,22 +214,24 @@ func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRe
 type PgSnapshot struct {
 	ID               string      `db:"id"`
 	AggregateID      string      `db:"aggregate_id"`
-	AggregateVersion int         `db:"aggregate_version"`
+	AggregateVersion uint32      `db:"aggregate_version"`
 	Body             common.Json `db:"body"`
 	CreatedAt        time.Time   `db:"created_at"`
 }
 
-//==============================
-
-func (es *PgEsRepository) GetLastEventID(ctx context.Context, filter player.Filter) (string, error) {
-	var eventID string
-	safetyMargin := time.Now().Add(lag)
-	args := []interface{}{safetyMargin}
+func (r *PgEsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter Filter) (string, error) {
 	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events WHERE created_at <= $1 ")
+	query.WriteString("SELECT * FROM events ")
+	args := []interface{}{}
+	if trailingLag != time.Duration(0) {
+		safetyMargin := time.Now().UTC().Add(-trailingLag)
+		args = append(args, safetyMargin)
+		query.WriteString("created_at <= $1 ")
+	}
 	args = writeFilter(filter, &query, args)
 	query.WriteString(" ORDER BY id DESC LIMIT 1")
-	if err := es.db.GetContext(ctx, &eventID, query.String(), args...); err != nil {
+	var eventID string
+	if err := r.db.GetContext(ctx, &eventID, query.String(), args...); err != nil {
 		if err != sql.ErrNoRows {
 			return "", fmt.Errorf("Unable to get the last event ID: %w", err)
 		}
@@ -246,16 +239,23 @@ func (es *PgEsRepository) GetLastEventID(ctx context.Context, filter player.Filt
 	return eventID, nil
 }
 
-func (es *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, filter player.Filter) ([]eventstore.Event, error) {
-	safetyMargin := time.Now().Add(lag)
-	args := []interface{}{afterEventID, safetyMargin}
+func (r *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, trailingLag time.Duration, filter Filter) ([]eventstore.Event, error) {
+	args := []interface{}{afterEventID}
 	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events WHERE id > $1 AND created_at <= $2")
+	query.WriteString("SELECT * FROM events WHERE id > $1 ")
+	if trailingLag != time.Duration(0) {
+		safetyMargin := time.Now().UTC().Add(-trailingLag)
+		args = append(args, safetyMargin)
+		query.WriteString("AND created_at <= $2 ")
+	}
 	args = writeFilter(filter, &query, args)
-	query.WriteString(" ORDER BY id ASC LIMIT ")
-	query.WriteString(strconv.Itoa(batchSize))
+	query.WriteString(" ORDER BY id ASC")
+	if batchSize > 0 {
+		query.WriteString(" LIMIT ")
+		query.WriteString(strconv.Itoa(batchSize))
+	}
 
-	rows, err := es.queryEvents(ctx, query.String(), args)
+	rows, err := r.queryEvents(ctx, query.String(), args)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			return nil, fmt.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
@@ -264,7 +264,7 @@ func (es *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, ba
 	return rows, nil
 }
 
-func writeFilter(filter player.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
+func writeFilter(filter Filter, query *bytes.Buffer, args []interface{}) []interface{} {
 	if len(filter.AggregateTypes) > 0 {
 		query.WriteString(" AND (")
 		first := true
@@ -297,8 +297,8 @@ func writeFilter(filter player.Filter, query *bytes.Buffer, args []interface{}) 
 	return args
 }
 
-func (es *PgEsRepository) queryEvents(ctx context.Context, query string, args []interface{}) ([]eventstore.Event, error) {
-	rows, err := es.db.QueryxContext(ctx, query, args...)
+func (r *PgEsRepository) queryEvents(ctx context.Context, query string, args []interface{}) ([]eventstore.Event, error) {
+	rows, err := r.db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

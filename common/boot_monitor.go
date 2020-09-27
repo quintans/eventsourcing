@@ -29,6 +29,7 @@ const (
 
 // BootMonitor is responsible for refreshing the lease
 type BootMonitor struct {
+	name     string
 	refresh  time.Duration
 	locker   Locker
 	lockable Booter
@@ -48,8 +49,9 @@ func WithRefreshInterval(refresh time.Duration) func(r *BootMonitor) {
 	}
 }
 
-func NewBootMonitor(lockable Booter, options ...Option) BootMonitor {
+func NewBootMonitor(name string, lockable Booter, options ...Option) BootMonitor {
 	l := BootMonitor{
+		name:     name,
 		refresh:  10 * time.Second,
 		lockable: lockable,
 	}
@@ -69,6 +71,7 @@ func (l BootMonitor) Start(ctx context.Context) {
 			ok, _ = l.locker.Lock()
 		}
 		if ok {
+			log.Infof("Acquired lock for %s", l.name)
 			// acquired lock
 			// OnBoot may take some time (minutes) to finish since it will be doing synchronisation
 			go func() {

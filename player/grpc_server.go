@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/golang/protobuf/ptypes"
 	_ "github.com/lib/pq"
 	pb "github.com/quintans/eventstore/api/proto"
+	"github.com/quintans/eventstore/repo"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -18,7 +20,7 @@ type GrpcServer struct {
 
 func (s *GrpcServer) GetLastEventID(ctx context.Context, r *pb.GetLastEventIDRequest) (*pb.GetLastEventIDReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
-	eID, err := s.repo.GetLastEventID(ctx, filter)
+	eID, err := s.repo.GetLastEventID(ctx, time.Duration(r.TrailingLag)*time.Millisecond, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +29,7 @@ func (s *GrpcServer) GetLastEventID(ctx context.Context, r *pb.GetLastEventIDReq
 
 func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb.GetEventsReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
-	events, err := s.repo.GetEvents(ctx, r.GetAfterEventId(), int(r.GetLimit()), filter)
+	events, err := s.repo.GetEvents(ctx, r.GetAfterEventId(), int(r.GetLimit()), time.Duration(r.TrailingLag)*time.Millisecond, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -35,13 +37,13 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 	for k, v := range events {
 		createdAt, err := ptypes.TimestampProto(v.CreatedAt)
 		if err != nil {
-			log.Fatal("could convert time")
+			log.Fatal("could not convert time")
 		}
 
 		pbEvents[k] = &pb.Event{
 			Id:               v.ID,
 			AggregateId:      v.AggregateID,
-			AggregateVersion: int32(v.AggregateVersion),
+			AggregateVersion: v.AggregateVersion,
 			AggregateType:    v.AggregateType,
 			Kind:             v.Kind,
 			Body:             string(v.Body),
@@ -53,16 +55,16 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 	return &pb.GetEventsReply{Events: pbEvents}, nil
 }
 
-func pbFilterToFilter(pbFilter *pb.Filter) Filter {
+func pbFilterToFilter(pbFilter *pb.Filter) repo.Filter {
 	types := make([]string, len(pbFilter.AggregateTypes))
 	for k, v := range pbFilter.AggregateTypes {
 		types[k] = v
 	}
-	labels := make([]Label, len(pbFilter.Labels))
+	labels := make([]repo.Label, len(pbFilter.Labels))
 	for k, v := range pbFilter.Labels {
-		labels[k] = NewLabel(v.Key, v.Value)
+		labels[k] = repo.NewLabel(v.Key, v.Value)
 	}
-	return Filter{AggregateTypes: types, Labels: labels}
+	return repo.Filter{AggregateTypes: types, Labels: labels}
 }
 
 func StartGrpcServer(ctx context.Context, address string, repo Repository) error {
