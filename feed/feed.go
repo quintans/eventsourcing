@@ -2,8 +2,10 @@ package feed
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
+	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/repo"
 	"github.com/quintans/eventstore/sink"
 	log "github.com/sirupsen/logrus"
@@ -59,3 +61,33 @@ func (f *Feed) Wait() <-chan struct{} {
 }
 
 func (f *Feed) Cancel() {}
+
+func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitions int) (string, error) {
+	// looking for the lowest ID in all partitions
+	var afterEventID string
+	if partitions == 0 {
+		message, err := sinker.LastMessage(ctx, 0)
+		if err != nil {
+			return "", fmt.Errorf("Unable to get the last event ID in sink (unpartitioned): %w", err)
+		}
+		if message != nil {
+			afterEventID = message.Event.ID
+		}
+	} else {
+		afterEventID = common.MaxEventID
+		for i := 1; i <= partitions; i++ {
+			message, err := sinker.LastMessage(ctx, i)
+			if err != nil {
+				return "", fmt.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
+			}
+			// lowest
+			if message != nil && message.Event.ID < afterEventID {
+				afterEventID = message.Event.ID
+			} else {
+				afterEventID = common.MinEventID
+			}
+		}
+	}
+
+	return afterEventID, nil
+}

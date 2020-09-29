@@ -13,6 +13,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/eventid"
+	"github.com/quintans/eventstore/feed"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/repo"
 	"github.com/quintans/eventstore/sink"
@@ -109,29 +110,9 @@ func New(dbUrl string, repository player.Repository, channel string, options ...
 // Feed will forward messages to the sinker
 // important: sinker.LastMessage should implement lag
 func (p PgListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...repo.FilterOption) error {
-	// looking for the lowest ID in all partitions
-	var afterEventID string
-	if p.partitions == 0 {
-		message, err := sinker.LastMessage(ctx, 0)
-		if err != nil {
-			return err
-		}
-		if message != nil {
-			afterEventID = message.Event.ID
-		}
-	} else {
-		afterEventID = "-"
-		for i := 1; i <= p.partitions; i++ {
-			message, err := sinker.LastMessage(ctx, i)
-			if err != nil {
-				return err
-			}
-			if message != nil && (afterEventID == "-" || message.Event.ID < afterEventID) {
-				afterEventID = message.Event.ID
-			} else {
-				afterEventID = ""
-			}
-		}
+	afterEventID, err := feed.LastEventIDInSink(ctx, sinker, p.partitions)
+	if err != nil {
+		return err
 	}
 
 	log.Println("Starting to feed from event ID:", afterEventID)

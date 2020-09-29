@@ -75,7 +75,7 @@ func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition int) (stri
 	return strconv.FormatUint(sequence, 10), nil
 }
 
-func (s NatsSubscriber) StartConsumer(ctx context.Context, partition int, resumeToken string, projection projection.Projection) (chan struct{}, error) {
+func (s NatsSubscriber) StartConsumer(ctx context.Context, partition int, resumeToken string, projection projection.Projection, aggregateTypes []string) (chan struct{}, error) {
 	start := stan.DeliverAllAvailable()
 	var seq uint64
 	if resumeToken != "" {
@@ -97,7 +97,7 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition int, resume
 		if err != nil {
 			log.WithError(err).Errorf("Unable to unmarshal event '%s'", string(m.Data))
 		}
-		if !in(e.AggregateType, projection.GetAggregateTypes()...) {
+		if !in(e.AggregateType, aggregateTypes...) {
 			// ignore
 			return
 		}
@@ -130,7 +130,7 @@ func in(test string, values ...string) bool {
 	return false
 }
 
-func (s NatsSubscriber) StartNotifier(ctx context.Context, freezer projection.Freezer) error {
+func (s NatsSubscriber) ListenForNotifications(ctx context.Context, freezer projection.Freezer) error {
 	sub, err := s.queue.Subscribe(s.managerTopic, func(msg *nats.Msg) {
 		n := projection.Notification{}
 		err := json.Unmarshal(msg.Data, &n)

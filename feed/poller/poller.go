@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/quintans/eventstore/feed"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/repo"
 	"github.com/quintans/eventstore/sink"
@@ -114,29 +115,9 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 // Feed forwars the handling to a sink.
 // eg: a message queue
 func (p Poller) Feed(ctx context.Context, sinker sink.Sinker, filters ...repo.FilterOption) error {
-	// looking for the lowest ID in all partitions
-	var afterEventID string
-	if p.partitions == 0 {
-		message, err := sinker.LastMessage(ctx, 0)
-		if err != nil {
-			return err
-		}
-		if message != nil {
-			afterEventID = message.Event.ID
-		}
-	} else {
-		afterEventID = "-"
-		for i := 1; i <= p.partitions; i++ {
-			message, err := sinker.LastMessage(ctx, i)
-			if err != nil {
-				return err
-			}
-			if message != nil && (afterEventID == "-" || message.Event.ID < afterEventID) {
-				afterEventID = message.Event.ID
-			} else {
-				afterEventID = ""
-			}
-		}
+	afterEventID, err := feed.LastEventIDInSink(ctx, sinker, p.partitions)
+	if err != nil {
+		return err
 	}
 
 	log.Println("Starting to feed from event ID:", afterEventID)
