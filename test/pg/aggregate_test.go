@@ -1,4 +1,4 @@
-package repo_test
+package pg
 
 import (
 	"github.com/quintans/eventstore"
