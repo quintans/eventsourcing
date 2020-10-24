@@ -17,6 +17,7 @@ require (
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.6.1
 	github.com/testcontainers/testcontainers-go v0.5.1
+	go.mongodb.org/mongo-driver v1.1.0
 	google.golang.org/grpc v1.27.1
 	google.golang.org/protobuf v1.25.0
 )

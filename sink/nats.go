@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/nats-io/stan.go"
@@ -49,7 +48,7 @@ func (p *NatsSink) Close() {
 }
 
 // LastMessage gets the last message sent to NATS
-func (p *NatsSink) LastMessage(ctx context.Context, partition int) (*Message, error) {
+func (p *NatsSink) LastMessage(ctx context.Context, partition int) (*eventstore.Event, error) {
 	type message struct {
 		sequence uint64
 		data     []byte
@@ -80,10 +79,7 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition int) (*Message, er
 		return nil, err
 	}
 
-	return &Message{
-		Event:       event,
-		ResumeToken: strconv.FormatUint(msg.sequence, 10),
-	}, nil
+	return &event, nil
 }
 
 // Sink sends the event to pulsar

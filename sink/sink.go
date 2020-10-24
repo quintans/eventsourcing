@@ -8,15 +8,10 @@ import (
 	"github.com/quintans/eventstore"
 )
 
-type Message struct {
-	ResumeToken string
-	Event       eventstore.Event
-}
-
 type Sinker interface {
 	Init() error
 	Sink(ctx context.Context, e eventstore.Event) error
-	LastMessage(ctx context.Context, partition int) (*Message, error)
+	LastMessage(ctx context.Context, partition int) (*eventstore.Event, error)
 	Close()
 }
 

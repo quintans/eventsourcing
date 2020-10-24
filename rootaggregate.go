@@ -17,10 +17,8 @@ type Handler struct {
 // HandlersCache is a map of types to functions that will be used to route event sourcing events
 type HandlersCache map[string]Handler
 
-func NewRootAggregate(aggregate interface{}, id string, version uint32) RootAggregate {
+func NewRootAggregate(aggregate interface{}) RootAggregate {
 	return RootAggregate{
-		ID:       id,
-		Version:  version,
 		events:   []interface{}{},
 		handlers: createHandlersCache(aggregate),
 	}
@@ -56,8 +54,9 @@ func createHandlersCache(source interface{}) HandlersCache {
 }
 
 type RootAggregate struct {
-	ID      string `json:"id,omitempty"`
-	Version uint32 `json:"version,omitempty"`
+	ID            string `json:"id,omitempty"`
+	Version       uint32 `json:"version,omitempty"`
+	EventsCounter uint32 `json:"events_counter,omitempty"`
 
 	events    []interface{}
 	handlers  HandlersCache
@@ -74,6 +73,10 @@ func (a RootAggregate) GetVersion() uint32 {
 
 func (a *RootAggregate) SetVersion(version uint32) {
 	a.Version = version
+}
+
+func (a RootAggregate) GetEventsCounter() uint32 {
+	return a.EventsCounter
 }
 
 func (a RootAggregate) GetEvents() []interface{} {
@@ -95,6 +98,7 @@ func (a *RootAggregate) ApplyChangeFromHistory(event Event) error {
 	}
 	a.Version = event.AggregateVersion
 	a.updatedAt = event.CreatedAt
+	a.EventsCounter++
 	return nil
 }
 
@@ -104,6 +108,7 @@ func (a *RootAggregate) ApplyChange(event interface{}) {
 		h.handle(event)
 	}
 	a.events = append(a.events, event)
+	a.EventsCounter++
 }
 
 func (a RootAggregate) IsZero() bool {

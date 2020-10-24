@@ -104,10 +104,12 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 			wait = p.pollInterval
 		}
 
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return nil
-		case _ = <-time.After(p.pollInterval):
+		case <-t.C:
 		}
 	}
 }
@@ -115,7 +117,7 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 // Feed forwars the handling to a sink.
 // eg: a message queue
 func (p Poller) Feed(ctx context.Context, sinker sink.Sinker, filters ...repo.FilterOption) error {
-	afterEventID, err := feed.LastEventIDInSink(ctx, sinker, p.partitions)
+	afterEventID, _, err := feed.LastEventIDInSink(ctx, sinker, p.partitions)
 	if err != nil {
 		return err
 	}

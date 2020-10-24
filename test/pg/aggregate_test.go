@@ -36,7 +36,8 @@ func CreateAccount(owner string, id string, money int64) *account {
 		Balance: money,
 		Owner:   owner,
 	}
-	a.RootAggregate = eventstore.NewRootAggregate(a, id, 0)
+	a.RootAggregate = eventstore.NewRootAggregate(a)
+	a.RootAggregate.ID = id
 	a.ApplyChange(AccountCreated{
 		ID:    id,
 		Money: money,
@@ -47,7 +48,7 @@ func CreateAccount(owner string, id string, money int64) *account {
 
 func NewAccount() *account {
 	a := &account{}
-	a.RootAggregate = eventstore.NewRootAggregate(a, "", 0)
+	a.RootAggregate = eventstore.NewRootAggregate(a)
 	return a
 }
 

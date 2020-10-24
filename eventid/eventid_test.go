@@ -5,14 +5,15 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventstore/base32"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSerialise(t *testing.T) {
-	first := "Y0000000020EFA33KAQMSCNSRKY35F67BMY0000004"
-	second := "Y0000000020EFA33KAQMSCNSRKY35F67BMY0000008"
-	third := "ZW000000020EFA33KAQMSCNSRKY35F67BMY0000004"
+	first := "Y0000000020EFA33KAQMSCNSRKY35F67BMY00001"
+	second := "Y0000000020EFA33KAQMSCNSRKY35F67BMY00002"
+	third := "ZW000000020EFA33KAQMSCNSRKY35F67BMY00001"
 
 	ts := Time(0x0000f00000000000)
 	id, _ := uuid.Parse("80e7a863-9aaf-4cb2-b9c4-fc32bcc75d3c")
@@ -47,7 +48,6 @@ func TestSerialise(t *testing.T) {
 	assert.Equal(t, ts, eid.Time())
 	assert.Equal(t, id.String(), eid.AggregateID().String())
 	assert.Equal(t, uint32(1), eid.Version())
-
 }
 
 func TestMarshall(t *testing.T) {
@@ -97,7 +97,7 @@ func TestMarshall(t *testing.T) {
 	for _, tt := range tc {
 		t.Run(tt.name, func(t *testing.T) {
 			b := tt.binary()
-			s := Marshal(b)
+			s := base32.Marshal(b)
 			assert.Equal(t, tt.expected, s)
 		})
 	}
@@ -137,7 +137,7 @@ func TestUnmarshall(t *testing.T) {
 	}
 	for _, tt := range tc {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := Unmarshal(tt.encoded)
+			s, err := base32.Unmarshal(tt.encoded)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, s)
 		})

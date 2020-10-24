@@ -7,9 +7,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/eventid"
 )
 
 var (
@@ -21,6 +19,8 @@ type Aggregater interface {
 	GetID() string
 	GetVersion() uint32
 	SetVersion(uint32)
+	// GetEventsCounter used to determine snapshots threshold
+	GetEventsCounter() uint32
 	GetEvents() []interface{}
 	ClearEvents()
 	ApplyChangeFromHistory(event Event) error
@@ -30,6 +30,7 @@ type Aggregater interface {
 // Event represents the event data
 type Event struct {
 	ID               string      `json:"id,omitempty"`
+	ResumeToken      string      `json:"resume_token,omitempty"`
 	AggregateID      string      `json:"aggregate_id,omitempty"`
 	AggregateVersion uint32      `json:"aggregate_version,omitempty"`
 	AggregateType    string      `json:"aggregate_type,omitempty"`
@@ -45,9 +46,9 @@ func (e Event) IsZero() bool {
 }
 
 type EsRepository interface {
-	SaveEvent(ctx context.Context, eRec []EventRecord) error
+	SaveEvent(ctx context.Context, eRec EventRecord) (id string, version uint32, err error)
 	GetSnapshot(ctx context.Context, aggregateID string) (Snapshot, error)
-	SaveSnapshot(ctx context.Context, agregate Aggregater, eventID string)
+	SaveSnapshot(ctx context.Context, agregate Aggregater, eventID string) error
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
 	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
 	Forget(ctx context.Context, request ForgetRequest) error
@@ -56,7 +57,8 @@ type EsRepository interface {
 type Snapshot struct {
 	AggregateID      string
 	AggregateVersion int
-	Body             []byte
+	Body             common.Json
+	EventsCounter    uint32
 }
 
 func (s Snapshot) IsValid() bool {
@@ -67,23 +69,21 @@ type EventRecord struct {
 	AggregateID    string
 	Version        uint32
 	AggregateType  string
-	Name           string
-	Body           []byte
 	IdempotencyKey string
-	Labels         []byte
+	Labels         map[string]interface{}
 	CreatedAt      time.Time
+	Details        []EventRecordDetail
 }
 
-func (e EventRecord) ID() string {
-	id, _ := uuid.Parse(e.AggregateID)
-	eid := eventid.New(e.CreatedAt, id, e.Version)
-	return eid.String()
+type EventRecordDetail struct {
+	Kind string      `json:"kind"`
+	Body common.Json `json:"body"`
 }
 
 type Options struct {
 	IdempotencyKey string
 	// Labels tags the event. eg: {"geo": "EU"}
-	Labels map[string]string
+	Labels map[string]interface{}
 }
 
 type EventStorer interface {
@@ -131,14 +131,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 	}
 
 	for _, v := range events {
-		aggregate.ApplyChangeFromHistory(Event{
-			AggregateID:      v.AggregateID,
-			AggregateVersion: v.AggregateVersion,
-			AggregateType:    v.AggregateType,
-			Kind:             v.Kind,
-			Body:             v.Body,
-			CreatedAt:        v.CreatedAt,
-		})
+		aggregate.ApplyChangeFromHistory(v)
 	}
 
 	return nil
@@ -149,11 +142,6 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 	eventsLen := len(events)
 	if eventsLen == 0 {
 		return nil
-	}
-
-	labels, err := json.Marshal(options.Labels)
-	if err != nil {
-		return err
 	}
 
 	now := time.Now().UTC()
@@ -167,43 +155,42 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 	}
 
 	tName := aggregate.GetType()
-	version := aggregate.GetVersion()
-	oldVersion := version
-
-	var eventID string
-	ers := make([]EventRecord, eventsLen)
+	details := make([]EventRecordDetail, eventsLen)
 	for i := 0; i < eventsLen; i++ {
 		e := events[i]
-		version++
-		aggregate.SetVersion(version)
 		body, err := json.Marshal(e)
 		if err != nil {
 			return err
 		}
-		ers[i] = EventRecord{
-			AggregateID:    aggregate.GetID(),
-			Version:        aggregate.GetVersion(),
-			AggregateType:  tName,
-			Name:           nameFor(e),
-			Body:           body,
-			IdempotencyKey: options.IdempotencyKey,
-			Labels:         labels,
-			CreatedAt:      now,
+		details[i] = EventRecordDetail{
+			Kind: nameFor(e),
+			Body: body,
 		}
-		eventID = ers[i].ID()
 	}
 
-	err = es.repo.SaveEvent(ctx, ers)
+	rec := EventRecord{
+		AggregateID:    aggregate.GetID(),
+		Version:        aggregate.GetVersion(),
+		AggregateType:  tName,
+		IdempotencyKey: options.IdempotencyKey,
+		Labels:         options.Labels,
+		CreatedAt:      now,
+		Details:        details,
+	}
+
+	id, lastVersion, err := es.repo.SaveEvent(ctx, rec)
 	if err != nil {
-		aggregate.SetVersion(oldVersion)
 		return err
 	}
+	aggregate.SetVersion(lastVersion)
 
-	if version > es.snapshotThreshold-1 {
-		mod := oldVersion % es.snapshotThreshold
-		delta := version - oldVersion + mod
+	newCounter := aggregate.GetEventsCounter()
+	oldCounter := newCounter - uint32(eventsLen)
+	if newCounter > es.snapshotThreshold-1 {
+		mod := oldCounter % es.snapshotThreshold
+		delta := newCounter - (oldCounter - mod)
 		if delta >= es.snapshotThreshold {
-			es.repo.SaveSnapshot(ctx, aggregate, eventID)
+			es.repo.SaveSnapshot(ctx, aggregate, id)
 		}
 	}
 

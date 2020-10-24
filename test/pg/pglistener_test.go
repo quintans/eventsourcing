@@ -14,7 +14,6 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/feed/pglistener"
 	"github.com/quintans/eventstore/repo"
-	"github.com/quintans/eventstore/sink"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,8 +34,8 @@ func (s *MockSink) Sink(ctx context.Context, e eventstore.Event) error {
 	return nil
 }
 
-func (s *MockSink) LastMessage(ctx context.Context, partition int) (*sink.Message, error) {
-	return &sink.Message{}, nil
+func (s *MockSink) LastMessage(ctx context.Context, partition int) (*eventstore.Event, error) {
+	return &eventstore.Event{}, nil
 }
 
 func (s *MockSink) Close() {}

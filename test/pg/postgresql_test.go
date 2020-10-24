@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"testing"
 	"time"
 
@@ -62,6 +63,8 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, len(evts))
 	assert.Equal(t, "AccountCreated", evts[0].Kind)
+	assert.Equal(t, "MoneyDeposited", evts[1].Kind)
+	assert.Equal(t, "MoneyDeposited", evts[2].Kind)
 	assert.Equal(t, "Account", evts[0].AggregateType)
 	assert.Equal(t, id, evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
@@ -73,6 +76,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, uint32(4), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, OPEN, acc2.Status)
+	assert.Equal(t, uint32(4), acc2.GetEventsCounter())
 }
 
 func TestListener(t *testing.T) {
@@ -103,8 +107,11 @@ func TestListener(t *testing.T) {
 	go func() {
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+			log.Println("Done...")
+		case <-time.After(2 * time.Second):
+			log.Println("Timeout...")
 		}
+		log.Println("Cancelling...")
 		cancel()
 	}()
 	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
@@ -112,6 +119,7 @@ func TestListener(t *testing.T) {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
 			if counter == 4 {
+				log.Println("Reached the expected count. Done.")
 				close(done)
 			}
 		}
@@ -154,6 +162,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
 			if counter == 4 {
+				log.Println("Reached the expected count. Done.")
 				close(done)
 			}
 		}
@@ -162,7 +171,9 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	select {
 	case <-done:
+		log.Println("Done...")
 	case <-time.After(time.Second):
+		log.Println("Timeout...")
 	}
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
@@ -182,14 +193,14 @@ func TestListenerWithLabels(t *testing.T) {
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{
-		Labels: map[string]string{
+		Labels: map[string]interface{}{
 			"geo": "EU",
 		},
 	})
 	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc, eventstore.Options{
-		Labels: map[string]string{
+		Labels: map[string]interface{}{
 			"geo": "US",
 		},
 	})
@@ -209,6 +220,7 @@ func TestListenerWithLabels(t *testing.T) {
 			acc2.ApplyChangeFromHistory(e)
 			counter++
 			if counter == 3 {
+				log.Println("Reached the expected count. Done.")
 				close(done)
 			}
 		}
@@ -217,7 +229,9 @@ func TestListenerWithLabels(t *testing.T) {
 
 	select {
 	case <-done:
+		log.Println("Done...")
 	case <-time.After(time.Second):
+		log.Println("Timeout...")
 	}
 	assert.Equal(t, 3, counter)
 	assert.Equal(t, id, acc2.ID)

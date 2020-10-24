@@ -104,8 +104,8 @@ func dbSchema() error {
 		body JSONB NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		FOREIGN KEY (id) REFERENCES events (id)
-	 );
-	 CREATE INDEX aggregate_id_idx ON snapshots (aggregate_id);
+	);
+	CREATE INDEX aggregate_id_idx ON snapshots (aggregate_id);
 	
 	CREATE OR REPLACE FUNCTION notify_event() RETURNS TRIGGER AS $FN$
 		DECLARE 
