@@ -9,9 +9,7 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
-	log "github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -19,7 +17,7 @@ import (
 const (
 	mongoUniqueViolation = 11000
 	eventsCollection     = "events"
-	snapshotCollection   = "snapshot"
+	snapshotCollection   = "snapshots"
 )
 
 // MongoEvent is the event data stored in the database
@@ -28,7 +26,7 @@ type MongoEvent struct {
 	AggregateID      string             `bson:"aggregate_id,omitempty"`
 	AggregateVersion uint32             `bson:"aggregate_version,omitempty"`
 	AggregateType    string             `bson:"aggregate_type,omitempty"`
-	Details          []MongoEventDetail `bson:"detail,omitempty"`
+	Details          []MongoEventDetail `bson:"details,omitempty"`
 	IdempotencyKey   string             `bson:"idempotency_key,omitempty"`
 	Labels           bson.M             `bson:"labels,omitempty"`
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
@@ -43,7 +41,7 @@ type MongoSnapshot struct {
 	ID               string    `bson:"_id,omitempty"`
 	AggregateID      string    `bson:"aggregate_id,omitempty"`
 	AggregateVersion uint32    `bson:"aggregate_version,omitempty"`
-	Body             []byte    `bson:"body,omitempty"`
+	Body             bson.M    `bson:"body,omitempty"`
 	CreatedAt        time.Time `bson:"created_at,omitempty"`
 }
 
@@ -139,6 +137,8 @@ func isMongoDup(err error) bool {
 }
 
 func (r *MongoEsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventstore.Snapshot, error) {
+	// FIXME it should return eventstore.Snapshot because it forces json encoding on the caller. The encoding should belong only to the repository layer
+
 	snap := MongoSnapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
@@ -148,19 +148,29 @@ func (r *MongoEsRepository) GetSnapshot(ctx context.Context, aggregateID string)
 		}
 		return eventstore.Snapshot{}, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	return eventstore.Snapshot{}, nil
+	body, err := json.Marshal(snap.Body)
+	if err != nil {
+		return eventstore.Snapshot{}, err
+	}
+	return eventstore.Snapshot{
+		AggregateID:      snap.AggregateID,
+		AggregateVersion: snap.AggregateVersion,
+		Body:             body,
+	}, nil
 }
 
 func (r *MongoEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
-	body, err := json.Marshal(aggregate)
+	bodyJson, err := json.Marshal(aggregate)
 	if err != nil {
-		log.WithField("aggregate", aggregate).
-			WithError(err).
-			Error("Failed to serialize aggregate")
+		return fmt.Errorf("Failed to create serialize snapshot: %w", err)
+	}
+	body := bson.M{}
+	err = bson.UnmarshalExtJSON(bodyJson, true, &body)
+	if err != nil {
 		return err
 	}
 
-	snap := &MongoSnapshot{
+	snap := MongoSnapshot{
 		ID:               eventID,
 		AggregateID:      aggregate.GetID(),
 		AggregateVersion: aggregate.GetVersion(),
@@ -168,22 +178,17 @@ func (r *MongoEsRepository) SaveSnapshot(ctx context.Context, aggregate eventsto
 		CreatedAt:        time.Now().UTC(),
 	}
 
-	go func() {
-		_, err := r.snapshotCollection().InsertOne(ctx, snap)
-		if err != nil {
-			log.WithField("snapshot", snap).
-				WithError(err).
-				Error("Failed to save snapshot")
-		}
-	}()
+	_, err = r.snapshotCollection().InsertOne(ctx, snap)
 
-	return nil
+	return err
 }
 
 func (r *MongoEsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
-	filter := primitive.D{primitive.E{"aggregate_id", bson.D{{"$eq", aggregateID}}}}
+	filter := bson.D{
+		{"aggregate_id", bson.D{{"$eq", aggregateID}}},
+	}
 	if snapVersion > -1 {
-		filter = append(filter, primitive.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
+		filter = append(filter, bson.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
 	}
 
 	opts := options.Find()
@@ -222,7 +227,7 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 		}
 		fields := bson.D{}
 		for _, v := range evt.Fields {
-			fields = append(fields, primitive.E{"details.body." + v, ""})
+			fields = append(fields, bson.E{"details.body." + v, ""})
 		}
 		update := bson.D{
 			{"$unset", fields},
@@ -239,7 +244,7 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 		}
 		fields := bson.D{}
 		for _, v := range request.AggregateFields {
-			fields = append(fields, primitive.E{"body." + v, ""})
+			fields = append(fields, bson.E{"body." + v, ""})
 		}
 		update := bson.D{
 			{"$unset", fields},
@@ -254,11 +259,11 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 }
 
 func (r *MongoEsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter Filter) (string, error) {
-	flt := primitive.D{}
+	flt := bson.D{}
 
 	if trailingLag != time.Duration(0) {
 		safetyMargin := time.Now().UTC().Add(-trailingLag)
-		flt = append(flt, primitive.E{"created_at", bson.D{{"$lte", safetyMargin}}})
+		flt = append(flt, bson.E{"created_at", bson.D{{"$lte", safetyMargin}}})
 	}
 	flt = writeMongoFilter(filter, flt)
 
@@ -283,11 +288,13 @@ func (r *MongoEsRepository) GetEvents(ctx context.Context, afterMessageID string
 	}
 
 	// since we have to consider the count, the query starts with the eventID
-	flt := primitive.D{primitive.E{"_id", bson.D{{"$gte", eventID}}}}
+	flt := bson.D{
+		{"_id", bson.D{{"$gte", eventID}}},
+	}
 
 	if trailingLag != time.Duration(0) {
 		safetyMargin := time.Now().UTC().Add(-trailingLag)
-		flt = append(flt, primitive.E{"created_at", bson.D{{"$lte", safetyMargin}}})
+		flt = append(flt, bson.E{"created_at", bson.D{{"$lte", safetyMargin}}})
 	}
 	flt = writeMongoFilter(filter, flt)
 
@@ -305,17 +312,17 @@ func (r *MongoEsRepository) GetEvents(ctx context.Context, afterMessageID string
 	return rows, nil
 }
 
-func writeMongoFilter(filter Filter, flt primitive.D) primitive.D {
+func writeMongoFilter(filter Filter, flt bson.D) bson.D {
 	if len(filter.AggregateTypes) > 0 {
-		flt = append(flt, primitive.E{"aggregate_type", bson.D{{"$in", filter.AggregateTypes}}})
+		flt = append(flt, bson.E{"aggregate_type", bson.D{{"$in", filter.AggregateTypes}}})
 	}
 	if len(filter.Labels) > 0 {
-		flt = append(flt, primitive.E{"labels", bson.D{{"$in", filter.Labels}}})
+		flt = append(flt, bson.E{"labels", bson.D{{"$in", filter.Labels}}})
 	}
 	return flt
 }
 
-func (r *MongoEsRepository) queryEvents(ctx context.Context, filter primitive.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, error) {
+func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, error) {
 	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -335,7 +342,7 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter primitive.D,
 		for k, d := range v.Details {
 			// only collect events that are greater than afterEventID-afterCount
 			if v.ID > afterEventID || k > after {
-				body, err := bson.MarshalExtJSON(d.Body, true, false)
+				body, err := json.Marshal(d.Body)
 				if err != nil {
 					return nil, err
 				}

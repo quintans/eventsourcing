@@ -13,7 +13,6 @@ import (
 	"github.com/lib/pq"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -119,16 +118,17 @@ func (r *PgEsRepository) GetSnapshot(ctx context.Context, aggregateID string) (e
 		}
 		return eventstore.Snapshot{}, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	return eventstore.Snapshot{}, nil
+	return eventstore.Snapshot{
+		AggregateID:      snap.AggregateID,
+		AggregateVersion: snap.AggregateVersion,
+		Body:             snap.Body,
+	}, nil
 }
 
 func (r *PgEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
 	body, err := json.Marshal(aggregate)
 	if err != nil {
-		log.WithField("aggregate", aggregate).
-			WithError(err).
-			Error("Failed to serialize aggregate")
-		return err
+		return fmt.Errorf("Failed to create serialize snapshot: %w", err)
 	}
 
 	snap := &PgSnapshot{
@@ -139,19 +139,11 @@ func (r *PgEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.
 		CreatedAt:        time.Now().UTC(),
 	}
 
-	go func() {
-		_, err = r.db.NamedExecContext(ctx,
-			`INSERT INTO snapshots (id, aggregate_id, aggregate_version, body, created_at)
+	_, err = r.db.NamedExecContext(ctx,
+		`INSERT INTO snapshots (id, aggregate_id, aggregate_version, body, created_at)
 	     VALUES (:id, :aggregate_id, :aggregate_version, :body, :created_at)`, snap)
 
-		if err != nil {
-			log.WithField("snapshot", snap).
-				WithError(err).
-				Error("Failed to save snapshot")
-		}
-	}()
-
-	return nil
+	return err
 }
 
 func (r *PgEsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {

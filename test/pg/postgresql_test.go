@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
@@ -16,11 +15,12 @@ import (
 	"github.com/quintans/eventstore/feed/poller"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func ping(dburl string) (*sqlx.DB, error) {
+func connect(dburl string) (*sqlx.DB, error) {
 	db, err := sqlx.Open("postgres", dburl)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,7 @@ func TestSaveAndGet(t *testing.T) {
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
-	acc := CreateAccount("Paulo", id, 100)
+	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{})
@@ -51,7 +51,7 @@ func TestSaveAndGet(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := ping(dbURL)
+	db, err := connect(dbURL)
 	require.NoError(t, err)
 	count := 0
 	err = db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
@@ -69,13 +69,13 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, id, evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
 
-	acc2 := NewAccount()
+	acc2 := test.NewAccount()
 	err = es.GetByID(ctx, id, acc2)
 	require.NoError(t, err)
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(4), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
-	assert.Equal(t, OPEN, acc2.Status)
+	assert.Equal(t, test.OPEN, acc2.Status)
 	assert.Equal(t, uint32(4), acc2.GetEventsCounter())
 }
 
@@ -86,7 +86,7 @@ func TestListener(t *testing.T) {
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
-	acc := CreateAccount("Paulo", id, 100)
+	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{})
@@ -96,7 +96,7 @@ func TestListener(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := NewAccount()
+	acc2 := test.NewAccount()
 	counter := 0
 	repo, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
@@ -130,7 +130,7 @@ func TestListener(t *testing.T) {
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(4), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
-	assert.Equal(t, OPEN, acc2.Status)
+	assert.Equal(t, test.OPEN, acc2.Status)
 }
 
 func TestListenerWithAggregateType(t *testing.T) {
@@ -140,7 +140,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
-	acc := CreateAccount("Paulo", id, 100)
+	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{})
@@ -150,7 +150,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := NewAccount()
+	acc2 := test.NewAccount()
 	counter := 0
 	repository, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
@@ -179,7 +179,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(4), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
-	assert.Equal(t, OPEN, acc2.Status)
+	assert.Equal(t, test.OPEN, acc2.Status)
 }
 
 func TestListenerWithLabels(t *testing.T) {
@@ -189,7 +189,7 @@ func TestListenerWithLabels(t *testing.T) {
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
-	acc := CreateAccount("Paulo", id, 100)
+	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{
@@ -207,7 +207,7 @@ func TestListenerWithLabels(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := NewAccount()
+	acc2 := test.NewAccount()
 	counter := 0
 
 	repository, err := repo.NewPgEsRepository(dbURL)
@@ -237,7 +237,7 @@ func TestListenerWithLabels(t *testing.T) {
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(3), acc2.Version)
 	assert.Equal(t, int64(130), acc2.Balance)
-	assert.Equal(t, OPEN, acc2.Status)
+	assert.Equal(t, test.OPEN, acc2.Status)
 }
 
 func TestForget(t *testing.T) {
@@ -247,7 +247,7 @@ func TestForget(t *testing.T) {
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
-	acc := CreateAccount("Paulo", id, 100)
+	acc := test.CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -262,14 +262,14 @@ func TestForget(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := ping(dbURL)
+	db, err := connect(dbURL)
 	require.NoError(t, err)
 	evts := []common.Json{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		ou := &OwnerUpdated{}
+		ou := &test.OwnerUpdated{}
 		err = json.Unmarshal(v, ou)
 		require.NoError(t, err)
 		assert.NotEmpty(t, ou.Owner)
@@ -280,7 +280,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
-		a := NewAccount()
+		a := test.NewAccount()
 		err = json.Unmarshal(v, a)
 		require.NoError(t, err)
 		assert.NotEmpty(t, a.Owner)
@@ -303,7 +303,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		ou := &OwnerUpdated{}
+		ou := &test.OwnerUpdated{}
 		err = json.Unmarshal(v, ou)
 		require.NoError(t, err)
 		assert.Empty(t, ou.Owner)
@@ -314,7 +314,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
-		a := NewAccount()
+		a := test.NewAccount()
 		err = json.Unmarshal(v, a)
 		require.NoError(t, err)
 		assert.Empty(t, a.Owner)
@@ -327,7 +327,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New().String()
-		acc := CreateAccount("Paulo", id, 0)
+		acc := test.CreateAccount("Paulo", id, 0)
 
 		for pb.Next() {
 			acc.Deposit(10)

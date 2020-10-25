@@ -56,9 +56,8 @@ type EsRepository interface {
 
 type Snapshot struct {
 	AggregateID      string
-	AggregateVersion int
+	AggregateVersion uint32
 	Body             common.Json
-	EventsCounter    uint32
 }
 
 func (s Snapshot) IsValid() bool {
@@ -122,7 +121,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 		if err != nil {
 			return err
 		}
-		events, err = es.repo.GetAggregateEvents(ctx, aggregateID, snap.AggregateVersion)
+		events, err = es.repo.GetAggregateEvents(ctx, aggregateID, int(snap.AggregateVersion))
 	} else {
 		events, err = es.repo.GetAggregateEvents(ctx, aggregateID, -1)
 	}
@@ -131,7 +130,10 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 	}
 
 	for _, v := range events {
-		aggregate.ApplyChangeFromHistory(v)
+		err = aggregate.ApplyChangeFromHistory(v)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -190,7 +192,10 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 		mod := oldCounter % es.snapshotThreshold
 		delta := newCounter - (oldCounter - mod)
 		if delta >= es.snapshotThreshold {
-			es.repo.SaveSnapshot(ctx, aggregate, id)
+			err := es.repo.SaveSnapshot(ctx, aggregate, id)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

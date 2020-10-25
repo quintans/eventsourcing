@@ -14,6 +14,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/feed/pglistener"
 	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,7 +72,7 @@ func TestPgListenere(t *testing.T) {
 	es := eventstore.NewEventStore(repo, 3)
 
 	id := uuid.New().String()
-	acc := CreateAccount("Paulo", id, 100)
+	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Save(ctx, acc, eventstore.Options{})
