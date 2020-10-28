@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventstore/base32"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,98 +47,4 @@ func TestSerialise(t *testing.T) {
 	assert.Equal(t, ts, eid.Time())
 	assert.Equal(t, id.String(), eid.AggregateID().String())
 	assert.Equal(t, uint32(1), eid.Version())
-}
-
-func TestMarshall(t *testing.T) {
-	tc := []struct {
-		name     string
-		binary   func() []byte
-		expected string
-	}{
-		{
-			name: "empty",
-			binary: func() []byte {
-				return make([]byte, 3)
-			},
-			expected: "00000",
-		},
-		{
-			name: "one right",
-			binary: func() []byte {
-				b := make([]byte, 26)
-				b[25] = 0x01
-				return b
-			},
-			expected: "000000000000000000000000000000000000000004",
-		},
-		{
-			name: "just one left",
-			binary: func() []byte {
-				return []byte{0x80}
-			},
-			expected: "G0",
-		},
-		{
-			name: "one left",
-			binary: func() []byte {
-				return []byte{0x80, 0}
-			},
-			expected: "G000",
-		},
-		{
-			name: "on both ends",
-			binary: func() []byte {
-				return []byte{0x80, 0, 0x1}
-			},
-			expected: "G0002",
-		},
-	}
-	for _, tt := range tc {
-		t.Run(tt.name, func(t *testing.T) {
-			b := tt.binary()
-			s := base32.Marshal(b)
-			assert.Equal(t, tt.expected, s)
-		})
-	}
-}
-
-func TestUnmarshall(t *testing.T) {
-	tc := []struct {
-		name     string
-		encoded  string
-		expected []byte
-	}{
-		{
-			name:     "decode empty",
-			encoded:  "00000",
-			expected: []byte{0, 0, 0},
-		},
-		{
-			name:     "decode one right",
-			encoded:  "000000000000000000000000000000000000000004",
-			expected: []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-		},
-		{
-			name:     "decode just one left",
-			encoded:  "G0",
-			expected: []byte{0x80},
-		},
-		{
-			name:     "decode one left",
-			encoded:  "G000",
-			expected: []byte{0x80, 0},
-		},
-		{
-			name:     "decode on both ends",
-			encoded:  "G0002",
-			expected: []byte{0x80, 0, 0x1},
-		},
-	}
-	for _, tt := range tc {
-		t.Run(tt.name, func(t *testing.T) {
-			s, err := base32.Unmarshal(tt.encoded)
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected, s)
-		})
-	}
 }

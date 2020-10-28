@@ -77,12 +77,17 @@ func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRec
 	var id string
 	err = r.withTx(ctx, func(c context.Context, s *sql.Tx) error {
 		for _, e := range eRec.Details {
+			body, err := json.Marshal(e.Body)
+			if err != nil {
+				return err
+			}
+
 			version++
 			id = common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
-			_, err := r.db.ExecContext(ctx,
+			_, err = r.db.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, eRec.IdempotencyKey, labels, eRec.CreatedAt)
+				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, body, eRec.IdempotencyKey, labels, eRec.CreatedAt)
 
 			if err != nil {
 				if isPgDup(err) {
@@ -121,7 +126,9 @@ func (r *PgEsRepository) GetSnapshot(ctx context.Context, aggregateID string) (e
 	return eventstore.Snapshot{
 		AggregateID:      snap.AggregateID,
 		AggregateVersion: snap.AggregateVersion,
-		Body:             snap.Body,
+		Decode: func(v interface{}) error {
+			return json.Unmarshal(snap.Body, v)
+		},
 	}, nil
 }
 
@@ -311,8 +318,11 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 			AggregateType:    pg.AggregateType,
 			Kind:             pg.Kind,
 			Body:             pg.Body,
-			Labels:           pg.Labels,
-			CreatedAt:        pg.CreatedAt,
+			Decode: func(v interface{}) error {
+				return json.Unmarshal(pg.Body, v)
+			},
+			Labels:    pg.Labels,
+			CreatedAt: pg.CreatedAt,
 		})
 	}
 	return events, nil

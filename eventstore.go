@@ -2,7 +2,6 @@ package eventstore
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"reflect"
 	"time"
@@ -13,6 +12,8 @@ import (
 var (
 	ErrConcurrentModification = errors.New("Concurrent Modification")
 )
+
+type DecodeFunc func(v interface{}) error
 
 type Aggregater interface {
 	GetType() string
@@ -39,6 +40,7 @@ type Event struct {
 	IdempotencyKey   string      `json:"idempotency_key,omitempty"`
 	Labels           common.Json `json:"labels,omitempty"`
 	CreatedAt        time.Time   `json:"created_at,omitempty"`
+	Decode           DecodeFunc  `json:"-"`
 }
 
 func (e Event) IsZero() bool {
@@ -57,7 +59,7 @@ type EsRepository interface {
 type Snapshot struct {
 	AggregateID      string
 	AggregateVersion uint32
-	Body             common.Json
+	Decode           DecodeFunc
 }
 
 func (s Snapshot) IsValid() bool {
@@ -75,8 +77,8 @@ type EventRecord struct {
 }
 
 type EventRecordDetail struct {
-	Kind string      `json:"kind"`
-	Body common.Json `json:"body"`
+	Kind string
+	Body interface{}
 }
 
 type Options struct {
@@ -117,7 +119,8 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 
 	var events []Event
 	if snap.IsValid() {
-		err = json.Unmarshal(snap.Body, aggregate)
+		// lazy decode
+		err = snap.Decode(aggregate)
 		if err != nil {
 			return err
 		}
@@ -160,13 +163,9 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 	details := make([]EventRecordDetail, eventsLen)
 	for i := 0; i < eventsLen; i++ {
 		e := events[i]
-		body, err := json.Marshal(e)
-		if err != nil {
-			return err
-		}
 		details[i] = EventRecordDetail{
 			Kind: nameFor(e),
-			Body: body,
+			Body: e,
 		}
 	}
 

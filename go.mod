@@ -1,6 +1,6 @@
 module github.com/quintans/eventstore
 
-go 1.14
+go 1.15
 
 require (
 	github.com/docker/go-connections v0.4.0
@@ -20,4 +20,5 @@ require (
 	go.mongodb.org/mongo-driver v1.1.0
 	google.golang.org/grpc v1.27.1
 	google.golang.org/protobuf v1.25.0
+	gotest.tools v0.0.0-20181223230014-1083505acf35
 )

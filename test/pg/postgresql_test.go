@@ -79,7 +79,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, uint32(4), acc2.GetEventsCounter())
 }
 
-func TestListener(t *testing.T) {
+func TestPollListener(t *testing.T) {
 	ctx := context.Background()
 	r, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
@@ -98,9 +98,9 @@ func TestListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repo, err := repo.NewPgEsRepository(dbURL)
+	repository, err := repo.NewPgEsRepository(dbURL)
 	require.NoError(t, err)
-	lm := poller.New(repo)
+	lm := poller.New(repository)
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())

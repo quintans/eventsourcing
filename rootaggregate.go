@@ -1,7 +1,6 @@
 package eventstore
 
 import (
-	"encoding/json"
 	"reflect"
 	"strings"
 	"time"
@@ -91,7 +90,7 @@ func (a *RootAggregate) ApplyChangeFromHistory(event Event) error {
 	h, ok := a.handlers[event.Kind]
 	if ok {
 		evtPtr := reflect.New(h.eventType)
-		if err := json.Unmarshal(event.Body, evtPtr.Interface()); err != nil {
+		if err := event.Decode(evtPtr.Interface()); err != nil {
 			return err
 		}
 		h.handle(evtPtr.Elem().Interface())

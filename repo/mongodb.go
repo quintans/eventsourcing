@@ -88,8 +88,13 @@ func (r *MongoEsRepository) SaveEvent(ctx context.Context, eRec eventstore.Event
 	}
 	details := make([]MongoEventDetail, 0, len(eRec.Details))
 	for _, e := range eRec.Details {
+		b, err := json.Marshal(e.Body)
+		if err != nil {
+			return "", 0, err
+		}
+
 		body := bson.M{}
-		err := bson.UnmarshalExtJSON(e.Body, true, &body)
+		err = bson.UnmarshalExtJSON(b, true, &body)
 		if err != nil {
 			return "", 0, err
 		}
@@ -155,7 +160,9 @@ func (r *MongoEsRepository) GetSnapshot(ctx context.Context, aggregateID string)
 	return eventstore.Snapshot{
 		AggregateID:      snap.AggregateID,
 		AggregateVersion: snap.AggregateVersion,
-		Body:             body,
+		Decode: func(v interface{}) error {
+			return json.Unmarshal(body, v)
+		},
 	}, nil
 }
 
@@ -223,15 +230,16 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 	for _, evt := range request.Events {
 		filter := bson.D{
 			{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
-			{"kind", bson.D{{"$eq", evt.Kind}}},
+			{"details.kind", bson.D{{"$eq", evt.Kind}}},
 		}
 		fields := bson.D{}
 		for _, v := range evt.Fields {
-			fields = append(fields, bson.E{"details.body." + v, ""})
+			fields = append(fields, bson.E{"details.$.body." + v, ""})
 		}
 		update := bson.D{
 			{"$unset", fields},
 		}
+		fmt.Println("update ====>", update)
 		_, err := r.eventsCollection().UpdateMany(ctx, filter, update)
 		if err != nil {
 			return fmt.Errorf("Unable to forget events: %w", err)
@@ -317,7 +325,18 @@ func writeMongoFilter(filter Filter, flt bson.D) bson.D {
 		flt = append(flt, bson.E{"aggregate_type", bson.D{{"$in", filter.AggregateTypes}}})
 	}
 	if len(filter.Labels) > 0 {
-		flt = append(flt, bson.E{"labels", bson.D{{"$in", filter.Labels}}})
+		m := map[string][]string{}
+		for _, v := range filter.Labels {
+			lbls := m[v.Key]
+			if lbls == nil {
+				lbls = []string{}
+			}
+			lbls = append(lbls, v.Value)
+			m[v.Key] = lbls
+		}
+		for k, v := range m {
+			flt = append(flt, bson.E{"labels." + k, bson.D{{"$in", v}}})
+		}
 	}
 	return flt
 }
@@ -357,9 +376,12 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 					AggregateType:    v.AggregateType,
 					Kind:             d.Kind,
 					Body:             body,
-					IdempotencyKey:   v.IdempotencyKey,
-					Labels:           labels,
-					CreatedAt:        v.CreatedAt,
+					Decode: func(v interface{}) error {
+						return json.Unmarshal(body, v)
+					},
+					IdempotencyKey: v.IdempotencyKey,
+					Labels:         labels,
+					CreatedAt:      v.CreatedAt,
 				})
 			}
 		}
