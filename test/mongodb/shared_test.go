@@ -7,9 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/docker/go-connections/nat"
 	testcontainers "github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -29,62 +27,68 @@ const (
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
-	dbContainer, err := bootstrapDbContainer(ctx)
+	destroy, err := dockerCompose(ctx)
 	if err != nil {
+		destroy()
 		log.Fatal(err)
 	}
 
-	defer dbContainer.Terminate(ctx)
 	err = dbSchema()
 	if err != nil {
+		destroy()
 		log.Fatal(err)
 	}
 
 	// test run
-	os.Exit(m.Run())
+	code := m.Run()
+	destroy()
+	os.Exit(code)
 }
 
-func bootstrapDbContainer(ctx context.Context) (testcontainers.Container, error) {
-	tcpPort := "27017"
-	natPort := nat.Port(tcpPort)
+func dockerCompose(ctx context.Context) (func(), error) {
+	path := "./docker-compose.yaml"
 
-	req := testcontainers.ContainerRequest{
-		Image:        "mongo:latest",
-		ExposedPorts: []string{tcpPort + "/tcp"},
-		Env: map[string]string{
-			"MONGO_INITDB_ROOT_USERNAME": "root",
-			"MONGO_INITDB_ROOT_PASSWORD": "password",
-		},
-		WaitingFor: wait.ForListeningPort(natPort),
-	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		return nil, err
+	compose := testcontainers.NewLocalDockerCompose([]string{path}, "mongo-set")
+	destroyFn := func() {
+		exErr := compose.Down()
+		if err := checkIfError(exErr); err != nil {
+			log.Printf("Error on compose shutdown: %v\n", err)
+		}
 	}
 
-	ip, err := container.Host(ctx)
-	if err != nil {
-		container.Terminate(ctx)
-		return nil, err
+	exErr := compose.Down()
+	if err := checkIfError(exErr); err != nil {
+		return func() {}, err
 	}
-	port, err := container.MappedPort(ctx, natPort)
+	exErr = compose.
+		WithCommand([]string{"up", "-d"}).
+		Invoke()
+	err := checkIfError(exErr)
 	if err != nil {
-		container.Terminate(ctx)
-		return nil, err
+		return destroyFn, err
 	}
 
-	dbURL = fmt.Sprintf("mongodb://root:password@%s:%s/%s?authSource=admin", ip, port.Port(), dbName)
+	dbURL = fmt.Sprintf("mongodb://localhost:27017/%s?replicaSet=rs0", dbName)
 
 	opts := options.Client().ApplyURI(dbURL)
 	client, err = mongo.Connect(ctx, opts)
-	if err != nil {
-		return nil, err
+
+	return destroyFn, err
+}
+
+func checkIfError(err testcontainers.ExecError) error {
+	if err.Error != nil {
+		return fmt.Errorf("Failed when running %v: %v", err.Command, err.Error)
 	}
 
-	return container, nil
+	if err.Stdout != nil {
+		return fmt.Errorf("An error in Stdout happened when running %v: %v", err.Command, err.Stdout)
+	}
+
+	if err.Stderr != nil {
+		return fmt.Errorf("An error in Stderr happened when running %v: %v", err.Command, err.Stderr)
+	}
+	return nil
 }
 
 func dbSchema() error {
