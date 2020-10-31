@@ -51,7 +51,7 @@ func (s *MockSink) Events() []eventstore.Event {
 }
 
 func TestPgListenere(t *testing.T) {
-	repo, err := repo.NewPgEsRepository(dbURL)
+	repository, err := repo.NewPgEsRepository(dbURL)
 	if err != nil {
 		log.Fatalf("Error instantiating event store: %v", err)
 	}
@@ -59,17 +59,22 @@ func TestPgListenere(t *testing.T) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	listener, err := pglistener.New(dbURL, repo, "events_channel")
+	listener, err := pglistener.New(dbURL, repository, "events_channel")
 
 	s := &MockSink{
 		events: []eventstore.Event{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go listener.Feed(ctx, s)
+	go func() {
+		err := listener.Feed(ctx, s)
+		if err != nil {
+			log.Fatalf("Error feeding: %v", err)
+		}
+	}()
 
 	time.Sleep(100 * time.Millisecond)
 
-	es := eventstore.NewEventStore(repo, 3)
+	es := eventstore.NewEventStore(repository, 3)
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)

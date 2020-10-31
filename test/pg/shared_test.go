@@ -27,14 +27,16 @@ func TestMain(m *testing.M) {
 		log.Fatal(err)
 	}
 
-	defer dbContainer.Terminate(ctx)
 	err = dbSchema()
 	if err != nil {
+		dbContainer.Terminate(ctx)
 		log.Fatal(err)
 	}
 
 	// test run
-	os.Exit(m.Run())
+	code := m.Run()
+	dbContainer.Terminate(ctx)
+	os.Exit(code)
 }
 
 func bootstrapDbContainer(ctx context.Context) (testcontainers.Container, error) {

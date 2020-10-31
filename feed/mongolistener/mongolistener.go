@@ -68,6 +68,9 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 	} else {
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline)
 	}
+	if err != nil {
+		return err
+	}
 	defer eventsStream.Close(ctx)
 	for eventsStream.Next(ctx) {
 		var data ChangeEvent
