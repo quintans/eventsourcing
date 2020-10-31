@@ -41,13 +41,13 @@ func (f *Feed) OnBoot(ctx context.Context) error {
 		log.Println("Initialising Sink")
 		err := f.sinker.Init()
 		if err != nil {
-			log.Error("Error initialising Sink:", err)
+			log.Error("Error initialising Sink on boot:", err)
 		}
 
 		log.Println("Starting Seed")
 		err = f.feeder.Feed(ctx, f.sinker)
 		if err != nil {
-			log.Error("Error feeding:", err)
+			log.Error("Error feeding on boot:", err)
 		}
 	}()
 	return nil
@@ -62,12 +62,12 @@ func (f *Feed) Wait() <-chan struct{} {
 
 func (f *Feed) Cancel() {}
 
-func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitions int) (afterEventID, resumeToken string, err error) {
+func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitions int) (afterEventID string, resumeToken []byte, err error) {
 	// looking for the lowest ID in all partitions
 	if partitions == 0 {
 		message, err := sinker.LastMessage(ctx, 0)
 		if err != nil {
-			return "", "", fmt.Errorf("Unable to get the last event ID in sink (unpartitioned): %w", err)
+			return "", nil, fmt.Errorf("Unable to get the last event ID in sink (unpartitioned): %w", err)
 		}
 		if message != nil {
 			afterEventID = message.ID
@@ -78,7 +78,7 @@ func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitions int) 
 		for i := 1; i <= partitions; i++ {
 			message, err := sinker.LastMessage(ctx, i)
 			if err != nil {
-				return "", "", fmt.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
+				return "", nil, fmt.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
 			}
 			// lowest
 			if message != nil && message.ID < afterEventID {

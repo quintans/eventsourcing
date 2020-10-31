@@ -31,7 +31,7 @@ type Aggregater interface {
 // Event represents the event data
 type Event struct {
 	ID               string      `json:"id,omitempty"`
-	ResumeToken      string      `json:"resume_token,omitempty"`
+	ResumeToken      []byte      `json:"resume_token,omitempty"`
 	AggregateID      string      `json:"aggregate_id,omitempty"`
 	AggregateVersion uint32      `json:"aggregate_version,omitempty"`
 	AggregateType    string      `json:"aggregate_type,omitempty"`

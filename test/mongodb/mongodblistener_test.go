@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -36,7 +37,13 @@ func (s *MockSink) Sink(ctx context.Context, e eventstore.Event) error {
 }
 
 func (s *MockSink) LastMessage(ctx context.Context, partition int) (*eventstore.Event, error) {
-	return &eventstore.Event{}, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.events) == 0 {
+		return &eventstore.Event{}, nil
+	}
+	e := s.events[len(s.events)-1]
+	return &e, nil
 }
 
 func (s *MockSink) Close() {}
@@ -68,7 +75,7 @@ func TestMongoListenere(t *testing.T) {
 	go func() {
 		err := listener.Feed(ctx, s)
 		if err != nil {
-			log.Fatalf("Error feeding: %v", err)
+			log.Fatalf("Error feeding on #1: %v", err)
 		}
 	}()
 
@@ -83,7 +90,6 @@ func TestMongoListenere(t *testing.T) {
 	err = es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
 
-	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
 	events := s.Events()
@@ -91,5 +97,36 @@ func TestMongoListenere(t *testing.T) {
 	assert.Equal(t, "AccountCreated", events[0].Kind)
 	assert.Equal(t, "MoneyDeposited", events[1].Kind)
 	assert.Equal(t, "MoneyDeposited", events[2].Kind)
+
+	// cancel current listener
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+	listener.Close(context.Background())
+
+	// reconnecting
+	listener, err = mongolistener.New(dbURL, dbName)
+	ctx, cancel = context.WithCancel(context.Background())
+	go func() {
+		err := listener.Feed(ctx, s)
+		if err != nil {
+			log.Fatalf("Error feeding on #2: %v", err)
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	events = s.Events()
+	assert.Equal(t, 3, len(events), "event size")
+
+	acc.Withdraw(5)
+	err = es.Save(ctx, acc, eventstore.Options{})
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	events = s.Events()
+	fmt.Printf("===> %+v", events)
+	assert.Equal(t, 4, len(events), "event size")
+	assert.Equal(t, "MoneyWithdrawn", events[3].Kind)
+
 	cancel()
 }

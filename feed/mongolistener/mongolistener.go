@@ -58,13 +58,14 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 	if err != nil {
 		return err
 	}
+
 	matchPipeline := bson.D{{Key: "$match", Value: bson.D{{Key: "operationType", Value: "insert"}}}}
 	pipeline := mongo.Pipeline{matchPipeline}
 
 	eventsCollection := m.client.Database(m.dbName).Collection("events")
 	var eventsStream *mongo.ChangeStream
-	if resumeToken != "" {
-		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(resumeToken))
+	if len(resumeToken) != 0 {
+		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(resumeToken)))
 	} else {
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline)
 	}
@@ -72,11 +73,13 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 		return err
 	}
 	defer eventsStream.Close(ctx)
+
 	for eventsStream.Next(ctx) {
 		var data ChangeEvent
 		if err := eventsStream.Decode(&data); err != nil {
 			return err
 		}
+
 		eventDoc := data.FullDocument
 		events := []eventstore.Event{}
 		for k, d := range eventDoc.Details {
@@ -92,7 +95,7 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 
 			event := eventstore.Event{
 				ID:               common.NewMessageID(eventDoc.ID, uint8(k)),
-				ResumeToken:      eventsStream.ResumeToken().String(),
+				ResumeToken:      eventsStream.ResumeToken(),
 				AggregateID:      eventDoc.AggregateID,
 				AggregateVersion: eventDoc.AggregateVersion,
 				AggregateType:    eventDoc.AggregateType,
@@ -112,4 +115,8 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 		}
 	}
 	return nil
+}
+
+func (m MongoListener) Close(ctx context.Context) error {
+	return m.client.Disconnect(ctx)
 }

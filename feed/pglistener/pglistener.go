@@ -122,14 +122,14 @@ func (p PgListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...rep
 func (p PgListener) forward(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...repo.FilterOption) error {
 	lastID := afterEventID
 	for {
-		conn, err := p.pool.Acquire(context.Background())
+		conn, err := p.pool.Acquire(ctx)
 		if err != nil {
 			return fmt.Errorf("Error acquiring connection: %w", err)
 		}
 		defer conn.Release()
 
 		// start listening for events
-		_, err = conn.Exec(context.Background(), "listen "+p.channel)
+		_, err = conn.Exec(ctx, "listen "+p.channel)
 		if err != nil {
 			return fmt.Errorf("Error listening to %s channel: %w", p.channel, err)
 		}
@@ -166,7 +166,10 @@ func (p PgListener) forward(ctx context.Context, afterEventID string, handler pl
 		var retry bool
 		lastID, retry, err = p.listen(ctx, conn, lastID, handler)
 		if !retry {
-			return fmt.Errorf("Error while listening PostgreSQL: %w", err)
+			if err != nil {
+				return fmt.Errorf("Error while listening PostgreSQL: %w", err)
+			}
+			return nil
 		}
 		log.Warn("Error waiting for PostgreSQL notification: ", err)
 	}
@@ -178,8 +181,13 @@ func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID 
 	log.Infof("Listening for PostgreSQL notifications on channel %s starting at %s", p.channel, thresholdID)
 	for {
 		msg, err := conn.Conn().WaitForNotification(ctx)
-		if err != nil {
-			return lastID, true, fmt.Errorf("Error waiting for notification: %w", err)
+		select {
+		case <-ctx.Done():
+			return lastID, false, nil
+		default:
+			if err != nil {
+				return lastID, true, fmt.Errorf("Error waiting for notification: %w", err)
+			}
 		}
 
 		pgEvent := PgEvent{}
@@ -210,4 +218,8 @@ func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID 
 			return "", false, fmt.Errorf("Error handling event %+v: %w", event, err)
 		}
 	}
+}
+
+func (p PgListener) Close() {
+	p.pool.Close()
 }

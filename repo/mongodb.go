@@ -239,7 +239,6 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 		update := bson.D{
 			{"$unset", fields},
 		}
-		fmt.Println("update ====>", update)
 		_, err := r.eventsCollection().UpdateMany(ctx, filter, update)
 		if err != nil {
 			return fmt.Errorf("Unable to forget events: %w", err)

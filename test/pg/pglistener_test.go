@@ -68,7 +68,7 @@ func TestPgListenere(t *testing.T) {
 	go func() {
 		err := listener.Feed(ctx, s)
 		if err != nil {
-			log.Fatalf("Error feeding: %v", err)
+			log.Fatalf("Error feeding #1: %v", err)
 		}
 	}()
 
@@ -88,5 +88,9 @@ func TestPgListenere(t *testing.T) {
 
 	events := s.Events()
 	assert.Equal(t, 3, len(events), "event size")
+	assert.Equal(t, "AccountCreated", events[0].Kind)
+	assert.Equal(t, "MoneyDeposited", events[1].Kind)
+	assert.Equal(t, "MoneyDeposited", events[2].Kind)
+
 	cancel()
 }
