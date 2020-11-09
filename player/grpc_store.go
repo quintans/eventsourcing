@@ -2,6 +2,7 @@ package player
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -10,7 +11,6 @@ import (
 	"github.com/quintans/eventstore"
 	pb "github.com/quintans/eventstore/api/proto"
 	"github.com/quintans/eventstore/repo"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
@@ -69,9 +69,13 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 	for k, v := range r.Events {
 		createdAt, err := tsToTime(v.CreatedAt)
 		if err != nil {
-			log.Fatal("could convert timestamp")
+			return nil, fmt.Errorf("could convert timestamp to time: %w", err)
 		}
-
+		labels := map[string]interface{}{}
+		err = json.Unmarshal([]byte(v.Labels), &labels)
+		if err != nil {
+			return nil, fmt.Errorf("Unable unmarshal labels to map: %w", err)
+		}
 		events[k] = eventstore.Event{
 			ID:               v.Id,
 			AggregateID:      v.AggregateId,
@@ -80,7 +84,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 			Kind:             v.Kind,
 			Body:             []byte(v.Body),
 			IdempotencyKey:   v.IdempotencyKey,
-			Labels:           []byte(v.Labels),
+			Labels:           labels,
 			CreatedAt:        *createdAt,
 		}
 	}

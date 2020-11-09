@@ -2,6 +2,7 @@ package player
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"time"
@@ -10,7 +11,6 @@ import (
 	_ "github.com/lib/pq"
 	pb "github.com/quintans/eventstore/api/proto"
 	"github.com/quintans/eventstore/repo"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
@@ -37,9 +37,12 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 	for k, v := range events {
 		createdAt, err := ptypes.TimestampProto(v.CreatedAt)
 		if err != nil {
-			log.Fatal("could not convert time")
+			return nil, fmt.Errorf("could convert timestamp to proto: %w", err)
 		}
-
+		labels, err := json.Marshal(v.Labels)
+		if err != nil {
+			return nil, fmt.Errorf("Unable marshal labels: %w", err)
+		}
 		pbEvents[k] = &pb.Event{
 			Id:               v.ID,
 			AggregateId:      v.AggregateID,
@@ -48,7 +51,7 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			Kind:             v.Kind,
 			Body:             string(v.Body),
 			IdempotencyKey:   v.IdempotencyKey,
-			Labels:           string(v.Labels),
+			Labels:           string(labels),
 			CreatedAt:        createdAt,
 		}
 	}

@@ -30,17 +30,17 @@ type Aggregater interface {
 
 // Event represents the event data
 type Event struct {
-	ID               string      `json:"id,omitempty"`
-	ResumeToken      []byte      `json:"resume_token,omitempty"`
-	AggregateID      string      `json:"aggregate_id,omitempty"`
-	AggregateVersion uint32      `json:"aggregate_version,omitempty"`
-	AggregateType    string      `json:"aggregate_type,omitempty"`
-	Kind             string      `json:"kind,omitempty"`
-	Body             common.Json `json:"body,omitempty"`
-	IdempotencyKey   string      `json:"idempotency_key,omitempty"`
-	Labels           common.Json `json:"labels,omitempty"`
-	CreatedAt        time.Time   `json:"created_at,omitempty"`
-	Decode           DecodeFunc  `json:"-"`
+	ID               string                 `json:"id,omitempty"`
+	ResumeToken      []byte                 `json:"resume_token,omitempty"`
+	AggregateID      string                 `json:"aggregate_id,omitempty"`
+	AggregateVersion uint32                 `json:"aggregate_version,omitempty"`
+	AggregateType    string                 `json:"aggregate_type,omitempty"`
+	Kind             string                 `json:"kind,omitempty"`
+	Body             common.Json            `json:"body,omitempty"`
+	IdempotencyKey   string                 `json:"idempotency_key,omitempty"`
+	Labels           map[string]interface{} `json:"labels,omitempty"`
+	CreatedAt        time.Time              `json:"created_at,omitempty"`
+	Decode           DecodeFunc             `json:"-"`
 }
 
 func (e Event) IsZero() bool {

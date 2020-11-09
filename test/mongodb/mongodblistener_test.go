@@ -2,7 +2,6 @@ package mongodb
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -93,7 +92,7 @@ func TestMongoListenere(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	events := s.Events()
-	assert.Equal(t, 3, len(events), "event size")
+	require.Equal(t, 3, len(events), "event size")
 	assert.Equal(t, "AccountCreated", events[0].Kind)
 	assert.Equal(t, "MoneyDeposited", events[1].Kind)
 	assert.Equal(t, "MoneyDeposited", events[2].Kind)
@@ -124,7 +123,6 @@ func TestMongoListenere(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	events = s.Events()
-	fmt.Printf("===> %+v", events)
 	assert.Equal(t, 4, len(events), "event size")
 	assert.Equal(t, "MoneyWithdrawn", events[3].Kind)
 

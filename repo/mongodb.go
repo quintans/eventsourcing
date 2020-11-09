@@ -364,10 +364,6 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 				if err != nil {
 					return nil, err
 				}
-				labels, err := bson.MarshalExtJSON(v.Labels, true, false)
-				if err != nil {
-					return nil, err
-				}
 				events = append(events, eventstore.Event{
 					ID:               common.NewMessageID(v.ID, uint8(k)),
 					AggregateID:      v.AggregateID,
@@ -379,7 +375,7 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 						return json.Unmarshal(body, v)
 					},
 					IdempotencyKey: v.IdempotencyKey,
-					Labels:         labels,
+					Labels:         v.Labels,
 					CreatedAt:      v.CreatedAt,
 				})
 			}

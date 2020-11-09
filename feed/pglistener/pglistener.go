@@ -202,6 +202,11 @@ func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID 
 			continue
 		}
 
+		labels := map[string]interface{}{}
+		err = json.Unmarshal(pgEvent.Labels, &labels)
+		if err != nil {
+			return "", false, fmt.Errorf("Unable unmarshal labels to map: %w", err)
+		}
 		event := eventstore.Event{
 			ID:               pgEvent.ID,
 			AggregateID:      pgEvent.AggregateID,
@@ -210,7 +215,7 @@ func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID 
 			Kind:             pgEvent.Kind,
 			Body:             pgEvent.Body,
 			IdempotencyKey:   pgEvent.IdempotencyKey,
-			Labels:           pgEvent.Labels,
+			Labels:           labels,
 			CreatedAt:        time.Time(pgEvent.CreatedAt),
 		}
 		err = handler(ctx, event)

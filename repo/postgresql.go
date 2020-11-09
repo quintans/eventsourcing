@@ -311,6 +311,11 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 		if err != nil {
 			return nil, fmt.Errorf("Unable to scan to struct: %w", err)
 		}
+		labels := map[string]interface{}{}
+		err = json.Unmarshal(pg.Labels, &labels)
+		if err != nil {
+			return nil, fmt.Errorf("Unable unmarshal labels to map: %w", err)
+		}
 		events = append(events, eventstore.Event{
 			ID:               pg.ID,
 			AggregateID:      pg.AggregateID,
@@ -321,7 +326,7 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 			Decode: func(v interface{}) error {
 				return json.Unmarshal(pg.Body, v)
 			},
-			Labels:    pg.Labels,
+			Labels:    labels,
 			CreatedAt: pg.CreatedAt,
 		})
 	}

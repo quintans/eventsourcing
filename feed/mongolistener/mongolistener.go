@@ -83,12 +83,7 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 		eventDoc := data.FullDocument
 		events := []eventstore.Event{}
 		for k, d := range eventDoc.Details {
-			body, err := bson.MarshalExtJSON(d.Body, true, false)
-			if err != nil {
-				return err
-			}
-
-			labels, err := bson.MarshalExtJSON(eventDoc.Labels, true, false)
+			body, err := bson.MarshalExtJSON(d.Body, false, false)
 			if err != nil {
 				return err
 			}
@@ -102,7 +97,7 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 				Kind:             d.Kind,
 				Body:             body,
 				IdempotencyKey:   eventDoc.IdempotencyKey,
-				Labels:           labels,
+				Labels:           eventDoc.Labels,
 				CreatedAt:        eventDoc.CreatedAt,
 			}
 			events = append(events, event)
