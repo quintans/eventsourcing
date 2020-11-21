@@ -103,6 +103,7 @@ func dbSchema() error {
 		id VARCHAR (50) PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_version INTEGER NOT NULL,
+		aggregate_type VARCHAR (50) NOT NULL,
 		body JSONB NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		FOREIGN KEY (id) REFERENCES events (id)

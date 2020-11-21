@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -21,56 +22,49 @@ const (
 
 // PgEvent is the event data stored in the database
 type PgEvent struct {
-	ID               string      `db:"id"`
-	AggregateID      string      `db:"aggregate_id"`
-	AggregateVersion uint32      `db:"aggregate_version"`
-	AggregateType    string      `db:"aggregate_type"`
-	Kind             string      `db:"kind"`
-	Body             common.Json `db:"body"`
-	IdempotencyKey   string      `db:"idempotency_key"`
-	Labels           common.Json `db:"labels"`
-	CreatedAt        time.Time   `db:"created_at"`
+	ID               string    `db:"id"`
+	AggregateID      string    `db:"aggregate_id"`
+	AggregateVersion uint32    `db:"aggregate_version"`
+	AggregateType    string    `db:"aggregate_type"`
+	Kind             string    `db:"kind"`
+	Body             []byte    `db:"body"`
+	IdempotencyKey   string    `db:"idempotency_key"`
+	Labels           []byte    `db:"labels"`
+	CreatedAt        time.Time `db:"created_at"`
 }
 
 type PgSnapshot struct {
-	ID               string      `db:"id,omitempty"`
-	AggregateID      string      `db:"aggregate_id,omitempty"`
-	AggregateVersion uint32      `db:"aggregate_version,omitempty"`
-	Body             common.Json `db:"body,omitempty"`
-	CreatedAt        time.Time   `db:"created_at,omitempty"`
+	ID               string    `db:"id,omitempty"`
+	AggregateID      string    `db:"aggregate_id,omitempty"`
+	AggregateVersion uint32    `db:"aggregate_version,omitempty"`
+	AggregateType    string    `db:"aggregate_type,omitempty"`
+	Body             []byte    `db:"body,omitempty"`
+	CreatedAt        time.Time `db:"created_at,omitempty"`
 }
 
 var _ eventstore.EsRepository = (*PgEsRepository)(nil)
 
-type PgJsonCodec struct{}
-
-func (_ PgJsonCodec) Encode(v interface{}) ([]byte, error) {
-	return json.Marshal(v)
-}
-
-func (_ PgJsonCodec) Decode(data []byte, v interface{}) error {
-	return json.Unmarshal(data, v)
-}
-
 type PgEsRepository struct {
-	db    *sqlx.DB
-	codec eventstore.Codec
+	db      *sqlx.DB
+	factory eventstore.Factory
+	codec   eventstore.Codec
 }
 
-func NewPgEsRepository(dburl string) (*PgEsRepository, error) {
+func NewPgEsRepository(dburl string, factory eventstore.Factory) (*PgEsRepository, error) {
 	db, err := sql.Open("postgres", dburl)
 	if err != nil {
 		return nil, err
 	}
-	return NewPgEsRepositoryDB(db)
+	return NewPgEsRepositoryDB(db, factory)
 }
 
 // NewPgEsRepositoryDB creates a new instance of PgEsRepository
-func NewPgEsRepositoryDB(db *sql.DB) (*PgEsRepository, error) {
+func NewPgEsRepositoryDB(db *sql.DB, factory eventstore.Factory) (*PgEsRepository, error) {
 	dbx := sqlx.NewDb(db, "postgres")
 	r := &PgEsRepository{
-		db:    dbx,
-		codec: PgJsonCodec{},
+		db:      dbx,
+		factory: factory,
+		codec:   eventstore.JsonCodec{},
 	}
 
 	return r, nil
@@ -128,21 +122,15 @@ func isPgDup(err error) bool {
 	return false
 }
 
-func (r *PgEsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventstore.Snapshot, error) {
+func (r *PgEsRepository) GetSnapshot(ctx context.Context, aggregateID string, aggregate eventstore.Aggregater) error {
 	snap := PgSnapshot{}
 	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err == sql.ErrNoRows {
-			return eventstore.Snapshot{}, nil
+			return nil
 		}
-		return eventstore.Snapshot{}, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	return eventstore.Snapshot{
-		AggregateID:      snap.AggregateID,
-		AggregateVersion: snap.AggregateVersion,
-		Decode: func(v interface{}) error {
-			return r.codec.Decode(snap.Body, v)
-		},
-	}, nil
+	return r.codec.Decode(snap.Body, aggregate)
 }
 
 func (r *PgEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
@@ -155,6 +143,7 @@ func (r *PgEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.
 		ID:               eventID,
 		AggregateID:      aggregate.GetID(),
 		AggregateVersion: aggregate.GetVersion(),
+		AggregateType:    aggregate.GetType(),
 		Body:             body,
 		CreatedAt:        time.Now().UTC(),
 	}
@@ -176,7 +165,7 @@ func (r *PgEsRepository) GetAggregateEvents(ctx context.Context, aggregateID str
 	}
 	query.WriteString(" ORDER BY aggregate_version ASC")
 
-	events, err := r.queryEvents(ctx, query.String(), "", args)
+	events, err := r.queryEvents(ctx, query.String(), "", args...)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
@@ -217,24 +206,54 @@ func (r *PgEsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, ide
 	return exists != 0, nil
 }
 
-func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest) error {
-	// FIXME should also add a new event to the event store. Should use a transaction for the changes.
+func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(interface{}) interface{}) error {
+	// FIXME use a transaction.
+	// FIXME in the end should also add a new event to the event store.
 
-	for _, evt := range request.Events {
-		sql := JoinAndEscape(evt.Fields)
-		sql = fmt.Sprintf("UPDATE events SET body =  body - '{%s}'::text[] WHERE aggregate_id = $1 AND kind = $2", sql)
-		_, err := r.db.ExecContext(ctx, sql, request.AggregateID, evt.Kind)
+	// Forget events
+	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", "", request.AggregateID, request.EventKind)
+	if err != nil {
+		return fmt.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
+	}
+
+	for _, evt := range events {
+		e, err := r.factory.New(evt.Kind)
 		if err != nil {
-			return fmt.Errorf("Unable to forget events: %w", err)
+			return err
+		}
+		e = forget(e)
+		body, err := r.codec.Encode(e)
+		if err != nil {
+			return err
+		}
+		_, err = r.db.ExecContext(ctx, "UPDATE events SET body = $1 WHERE ID = $2", body, evt.ID)
+		if err != nil {
+			return fmt.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
 		}
 	}
 
-	if len(request.AggregateFields) > 0 {
-		sql := JoinAndEscape(request.AggregateFields)
-		sql = fmt.Sprintf("UPDATE snapshots SET body =  body - '{%s}'::text[] WHERE aggregate_id = $1", sql)
-		_, err := r.db.ExecContext(ctx, sql, request.AggregateID)
+	// forget snapshots
+	snaps := []PgSnapshot{}
+	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1", request.AggregateID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", request.AggregateID, err)
+	}
+
+	for _, snap := range snaps {
+		e, err := r.factory.New(snap.AggregateType)
 		if err != nil {
-			return fmt.Errorf("Unable to forget snapshots: %w", err)
+			return err
+		}
+		e = forget(e)
+		body, err := r.codec.Encode(e)
+		if err != nil {
+			return err
+		}
+		_, err = r.db.ExecContext(ctx, "UPDATE snapshot SET body = $1 WHERE ID = $2", body, snap.ID)
+		if err != nil {
+			return fmt.Errorf("Unable to forget snapshot ID %s: %w", snap.ID, err)
 		}
 	}
 
@@ -277,7 +296,7 @@ func (r *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, bat
 		query.WriteString(strconv.Itoa(batchSize))
 	}
 
-	rows, err := r.queryEvents(ctx, query.String(), afterEventID, args)
+	rows, err := r.queryEvents(ctx, query.String(), afterEventID, args...)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
 	}
@@ -298,12 +317,12 @@ func writeFilter(filter Filter, query *bytes.Buffer, args []interface{}) []inter
 	}
 	if len(filter.Labels) > 0 {
 		for idx, v := range filter.Labels {
-			k := Escape(v.Key)
+			k := escape(v.Key)
 			query.WriteString(" AND (")
 			if idx > 0 {
 				query.WriteString(" OR ")
 			}
-			x := Escape(v.Value)
+			x := escape(v.Value)
 			query.WriteString(fmt.Sprintf(`labels  @> '{"%s": "%s"}'`, k, x))
 			query.WriteString(")")
 		}
@@ -311,7 +330,11 @@ func writeFilter(filter Filter, query *bytes.Buffer, args []interface{}) []inter
 	return args
 }
 
-func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEventID string, args []interface{}) ([]eventstore.Event, error) {
+func escape(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEventID string, args ...interface{}) ([]eventstore.Event, error) {
 	rows, err := r.db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -329,8 +352,21 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 		labels := map[string]interface{}{}
 		err = json.Unmarshal(pg.Labels, &labels)
 		if err != nil {
-			return nil, fmt.Errorf("Unable unmarshal labels to map: %w", err)
+			return nil, fmt.Errorf("Unable to unmarshal labels to map: %w", err)
 		}
+
+		decode := func() (eventstore.Eventer, error) {
+			e, err := r.factory.New(pg.Kind)
+			if err != nil {
+				return nil, err
+			}
+			err = r.codec.Decode(pg.Body, &e)
+			if err != nil {
+				return nil, fmt.Errorf("Unable to decode event %s: %w", pg.Kind, err)
+			}
+			return e.(eventstore.Eventer), nil
+		}
+
 		events = append(events, eventstore.Event{
 			ID:               pg.ID,
 			AggregateID:      pg.AggregateID,
@@ -338,11 +374,9 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 			AggregateType:    pg.AggregateType,
 			Kind:             pg.Kind,
 			Body:             pg.Body,
-			Decode: func(v interface{}) error {
-				return r.codec.Decode(pg.Body, v)
-			},
-			Labels:    labels,
-			CreatedAt: pg.CreatedAt,
+			Labels:           labels,
+			CreatedAt:        pg.CreatedAt,
+			Decode:           decode,
 		})
 	}
 	return events, nil

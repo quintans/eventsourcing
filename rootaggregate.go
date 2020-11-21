@@ -9,8 +9,12 @@ type EventMetadata struct {
 	CreatedAt        time.Time
 }
 
+type Typer interface {
+	GetType() string
+}
+
 type Eventer interface {
-	EventName() string
+	Typer
 }
 
 type EventHandler interface {

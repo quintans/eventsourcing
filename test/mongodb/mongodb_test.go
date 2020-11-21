@@ -19,6 +19,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+var codec = eventstore.JsonCodec{}
+
 // creates a independent connection
 func connect() (*mongo.Database, error) {
 	ctx := context.Background()
@@ -33,7 +35,7 @@ func connect() (*mongo.Database, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName)
+	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -92,7 +94,7 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName)
+	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -108,7 +110,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r = repo.NewMongoEsRepositoryDB(client, dbName)
+	r = repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	lm := poller.New(r)
 
 	done := make(chan struct{})
@@ -125,7 +127,9 @@ func TestPollListener(t *testing.T) {
 	}()
 	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			acc2.ApplyChangeFromHistory(e)
+			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+				return err
+			}
 			counter++
 			if counter == 4 {
 				log.Println("Reached the expected count. Done.")
@@ -144,7 +148,7 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName)
+	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -160,13 +164,15 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository := repo.NewMongoEsRepositoryDB(client, dbName)
+	repository := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			acc2.ApplyChangeFromHistory(e)
+			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+				return err
+			}
 			counter++
 			if counter == 4 {
 				log.Println("Reached the expected count. Done.")
@@ -191,7 +197,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName)
+	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -216,13 +222,15 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository := repo.NewMongoEsRepositoryDB(client, dbName)
+	repository := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			acc2.ApplyChangeFromHistory(e)
+			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+				return err
+			}
 			counter++
 			if counter == 3 {
 				log.Println("Reached the expected count. Done.")
@@ -247,7 +255,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName)
+	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -280,13 +288,18 @@ func TestForget(t *testing.T) {
 	err = cursor.All(ctx, &evts)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
+	foundEvent := false
 	for _, e := range evts {
 		for _, v := range e.Details {
 			if v.Kind == "OwnerUpdated" {
-				assert.NotEmpty(t, v.Body["owner"])
+				foundEvent = true
+				evt := test.OwnerUpdated{}
+				codec.Decode(v.Body, &evt)
+				assert.NotEmpty(t, evt.Owner)
 			}
 		}
 	}
+	assert.True(t, foundEvent)
 
 	cursor, err = db.Collection(collSnapshots).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
@@ -302,16 +315,21 @@ func TestForget(t *testing.T) {
 		assert.NotEmpty(t, m["owner"])
 	}
 
-	err = es.Forget(ctx, eventstore.ForgetRequest{
-		AggregateID: id,
-		Events: []eventstore.EventKind{
-			{
-				Kind:   "OwnerUpdated",
-				Fields: []string{"owner"},
-			},
+	err = es.Forget(ctx,
+		eventstore.ForgetRequest{
+			AggregateID: id,
+			EventKind:   "OwnerUpdated",
 		},
-		AggregateFields: []string{"owner"},
-	})
+		func(i interface{}) interface{} {
+			switch t := i.(type) {
+			case test.OwnerUpdated:
+				t.Owner = ""
+			case test.Account:
+				t.Owner = ""
+			}
+			return i
+		},
+	)
 	require.NoError(t, err)
 
 	cursor, err = db.Collection(collEvents).Find(ctx, bson.M{
@@ -327,13 +345,18 @@ func TestForget(t *testing.T) {
 	err = cursor.All(ctx, &evts)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
+	foundEvent = false
 	for _, e := range evts {
 		for _, v := range e.Details {
 			if v.Kind == "OwnerUpdated" {
-				assert.Empty(t, v.Body["owner"])
+				foundEvent = true
+				evt := test.OwnerUpdated{}
+				codec.Decode(v.Body, &evt)
+				assert.NotEmpty(t, evt.Owner)
 			}
 		}
 	}
+	assert.True(t, foundEvent)
 
 	cursor, err = db.Collection(collSnapshots).Find(ctx, bson.M{
 		"aggregate_id": bson.D{

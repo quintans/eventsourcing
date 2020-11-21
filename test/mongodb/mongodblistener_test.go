@@ -57,7 +57,7 @@ func (s *MockSink) Events() []eventstore.Event {
 }
 
 func TestMongoListenere(t *testing.T) {
-	repository, err := repo.NewMongoEsRepository(dbURL, dbName)
+	repository, err := repo.NewMongoEsRepository(dbURL, dbName, test.StructFactory{})
 	if err != nil {
 		log.Fatalf("Error instantiating event store: %v", err)
 	}

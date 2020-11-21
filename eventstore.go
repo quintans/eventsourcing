@@ -10,12 +10,12 @@ var (
 	ErrConcurrentModification = errors.New("Concurrent Modification")
 )
 
-type Instantiater interface {
-	Instantiate(Event) (Eventer, error)
+type Factory interface {
+	New(kind string) (interface{}, error)
 }
 
 type Upcaster interface {
-	Upcast(Eventer) Eventer
+	Upcast(Typer) Typer
 }
 
 type Codec interface {
@@ -31,10 +31,8 @@ type Decoder interface {
 	Decode(data []byte, v interface{}) error
 }
 
-type DecodeFunc func(v interface{}) error
-
 type Aggregater interface {
-	GetType() string
+	Typer
 	GetID() string
 	GetVersion() uint32
 	SetVersion(uint32)
@@ -42,7 +40,7 @@ type Aggregater interface {
 	GetEventsCounter() uint32
 	GetEvents() []Eventer
 	ClearEvents()
-	ApplyChangeFromHistory(m EventMetadata, event Eventer) error
+	ApplyChangeFromHistory(m EventMetadata, event Eventer)
 	UpdatedAt() time.Time
 }
 
@@ -58,7 +56,7 @@ type Event struct {
 	IdempotencyKey   string
 	Labels           map[string]interface{}
 	CreatedAt        time.Time
-	Decode           DecodeFunc
+	Decode           func() (Eventer, error)
 }
 
 func (e Event) IsZero() bool {
@@ -67,21 +65,11 @@ func (e Event) IsZero() bool {
 
 type EsRepository interface {
 	SaveEvent(ctx context.Context, eRec EventRecord) (id string, version uint32, err error)
-	GetSnapshot(ctx context.Context, aggregateID string) (Snapshot, error)
-	SaveSnapshot(ctx context.Context, agregate Aggregater, eventID string) error
+	GetSnapshot(ctx context.Context, aggregateID string, aggregate Aggregater) error
+	SaveSnapshot(ctx context.Context, aggregate Aggregater, eventID string) error
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
 	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
-	Forget(ctx context.Context, request ForgetRequest) error
-}
-
-type Snapshot struct {
-	AggregateID      string
-	AggregateVersion uint32
-	Decode           DecodeFunc
-}
-
-func (s Snapshot) IsValid() bool {
-	return s.AggregateID != ""
+	Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error
 }
 
 type EventRecord struct {
@@ -96,7 +84,7 @@ type EventRecord struct {
 
 type EventRecordDetail struct {
 	Kind string
-	Body interface{}
+	Body Eventer
 }
 
 type Options struct {
@@ -110,17 +98,16 @@ type EventStorer interface {
 	Save(ctx context.Context, aggregate Aggregater, options Options) error
 	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
 	// Forget erases the values of the specified fields
-	Forget(ctx context.Context, request ForgetRequest) error
+	Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error
 }
 
 var _ EventStorer = (*EventStore)(nil)
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, instantiater Instantiater, snapshotThreshold uint32) EventStore {
+func NewEventStore(repo EsRepository, snapshotThreshold uint32) EventStore {
 	return EventStore{
 		repo:              repo,
 		snapshotThreshold: snapshotThreshold,
-		instantiater:      instantiater,
 	}
 }
 
@@ -128,7 +115,6 @@ func NewEventStore(repo EsRepository, instantiater Instantiater, snapshotThresho
 type EventStore struct {
 	repo              EsRepository
 	snapshotThreshold uint32
-	instantiater      Instantiater
 	upcaster          Upcaster
 }
 
@@ -137,19 +123,14 @@ func (es *EventStore) SetUpcaster(upcaster Upcaster) {
 }
 
 func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
-	snap, err := es.repo.GetSnapshot(ctx, aggregateID)
+	err := es.repo.GetSnapshot(ctx, aggregateID, aggregate)
 	if err != nil {
 		return err
 	}
 
 	var events []Event
-	if snap.IsValid() {
-		// lazy decode
-		err = snap.Decode(aggregate)
-		if err != nil {
-			return err
-		}
-		events, err = es.repo.GetAggregateEvents(ctx, aggregateID, int(snap.AggregateVersion))
+	if aggregate.GetID() != "" {
+		events, err = es.repo.GetAggregateEvents(ctx, aggregateID, int(aggregate.GetVersion()))
 	} else {
 		events, err = es.repo.GetAggregateEvents(ctx, aggregateID, -1)
 	}
@@ -162,17 +143,14 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 			AggregateVersion: v.AggregateVersion,
 			CreatedAt:        v.CreatedAt,
 		}
-		e, err := es.instantiater.Instantiate(v)
+		e, err := v.Decode()
 		if err != nil {
 			return err
 		}
 		if es.upcaster != nil {
 			e = es.upcaster.Upcast(e)
 		}
-		err = aggregate.ApplyChangeFromHistory(m, e)
-		if err != nil {
-			return err
-		}
+		aggregate.ApplyChangeFromHistory(m, e)
 	}
 
 	return nil
@@ -200,7 +178,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 	for i := 0; i < eventsLen; i++ {
 		e := events[i]
 		details[i] = EventRecordDetail{
-			Kind: e.EventName(),
+			Kind: e.GetType(),
 			Body: e,
 		}
 	}
@@ -243,16 +221,10 @@ func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateID, idempot
 }
 
 type ForgetRequest struct {
-	AggregateID     string
-	AggregateFields []string
-	Events          []EventKind
+	AggregateID string
+	EventKind   string
 }
 
-type EventKind struct {
-	Kind   string
-	Fields []string
-}
-
-func (es EventStore) Forget(ctx context.Context, request ForgetRequest) error {
-	return es.repo.Forget(ctx, request)
+func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
+	return es.repo.Forget(ctx, request, forget)
 }

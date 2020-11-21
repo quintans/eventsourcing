@@ -33,7 +33,7 @@ func connect(dburl string) (*sqlx.DB, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -81,7 +81,7 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -98,7 +98,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := repo.NewPgEsRepository(dbURL)
+	repository, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	lm := poller.New(repository)
 
@@ -116,7 +116,9 @@ func TestPollListener(t *testing.T) {
 	}()
 	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			acc2.ApplyChangeFromHistory(e)
+			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+				return err
+			}
 			counter++
 			if counter == 4 {
 				log.Println("Reached the expected count. Done.")
@@ -135,7 +137,7 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -152,14 +154,16 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := repo.NewPgEsRepository(dbURL)
+	repository, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			acc2.ApplyChangeFromHistory(e)
+			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+				return err
+			}
 			counter++
 			if counter == 4 {
 				log.Println("Reached the expected count. Done.")
@@ -184,7 +188,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -210,14 +214,16 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := repo.NewPgEsRepository(dbURL)
+	repository, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			acc2.ApplyChangeFromHistory(e)
+			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+				return err
+			}
 			counter++
 			if counter == 3 {
 				log.Println("Reached the expected count. Done.")
@@ -242,7 +248,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL)
+	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -286,16 +292,21 @@ func TestForget(t *testing.T) {
 		assert.NotEmpty(t, a.Owner)
 	}
 
-	err = es.Forget(ctx, eventstore.ForgetRequest{
-		AggregateID: id,
-		Events: []eventstore.EventKind{
-			{
-				Kind:   "OwnerUpdated",
-				Fields: []string{"owner"},
-			},
+	err = es.Forget(ctx,
+		eventstore.ForgetRequest{
+			AggregateID: id,
+			EventKind:   "OwnerUpdated",
 		},
-		AggregateFields: []string{"owner"},
-	})
+		func(i interface{}) interface{} {
+			switch t := i.(type) {
+			case test.OwnerUpdated:
+				t.Owner = ""
+			case test.Account:
+				t.Owner = ""
+			}
+			return i
+		},
+	)
 	require.NoError(t, err)
 
 	evts = []common.Json{}
@@ -322,7 +333,7 @@ func TestForget(t *testing.T) {
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
-	r, _ := repo.NewPgEsRepository(dbURL)
+	r, _ := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 50)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()

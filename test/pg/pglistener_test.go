@@ -51,7 +51,7 @@ func (s *MockSink) Events() []eventstore.Event {
 }
 
 func TestPgListenere(t *testing.T) {
-	repository, err := repo.NewPgEsRepository(dbURL)
+	repository, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
 	if err != nil {
 		log.Fatalf("Error instantiating event store: %v", err)
 	}

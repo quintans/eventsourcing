@@ -20,7 +20,7 @@ type AccountCreated struct {
 	Owner string `json:"owner,omitempty"`
 }
 
-func (_ AccountCreated) EventName() string {
+func (_ AccountCreated) GetType() string {
 	return "AccountCreated"
 }
 
@@ -28,7 +28,7 @@ type MoneyWithdrawn struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func (_ MoneyWithdrawn) EventName() string {
+func (_ MoneyWithdrawn) GetType() string {
 	return "MoneyWithdrawn"
 }
 
@@ -36,7 +36,7 @@ type MoneyDeposited struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func (_ MoneyDeposited) EventName() string {
+func (_ MoneyDeposited) GetType() string {
 	return "MoneyDeposited"
 }
 
@@ -44,15 +44,17 @@ type OwnerUpdated struct {
 	Owner string `json:"owner,omitempty"`
 }
 
-func (_ OwnerUpdated) EventName() string {
+func (_ OwnerUpdated) GetType() string {
 	return "OwnerUpdated"
 }
 
-type Instantiater struct{}
+type StructFactory struct{}
 
-func (_ Instantiater) Instantiate(event eventstore.Event) (eventstore.Eventer, error) {
-	var e eventstore.Eventer
-	switch event.Kind {
+func (_ StructFactory) New(kind string) (interface{}, error) {
+	var e interface{}
+	switch kind {
+	case "Account":
+		e = Account{}
 	case "AccountCreated":
 		e = AccountCreated{}
 	case "MoneyDeposited":
@@ -63,18 +65,13 @@ func (_ Instantiater) Instantiate(event eventstore.Event) (eventstore.Eventer, e
 		e = OwnerUpdated{}
 	}
 	if e == nil {
-		return nil, fmt.Errorf("Unknown event kind: %s", event.Kind)
+		return nil, fmt.Errorf("Unknown event kind: %s", kind)
 	}
-	err := event.Decode(&e)
-	if err != nil {
-		return nil, err
-	}
-
 	return e, nil
 }
 
-func CreateAccount(owner string, id string, money int64) *account {
-	a := &account{
+func CreateAccount(owner string, id string, money int64) *Account {
+	a := &Account{
 		Status:  OPEN,
 		Balance: money,
 		Owner:   owner,
@@ -89,24 +86,24 @@ func CreateAccount(owner string, id string, money int64) *account {
 	return a
 }
 
-func NewAccount() *account {
-	a := &account{}
+func NewAccount() *Account {
+	a := &Account{}
 	a.RootAggregate = eventstore.NewRootAggregate(a)
 	return a
 }
 
-type account struct {
+type Account struct {
 	eventstore.RootAggregate
 	Status  Status `json:"status,omitempty"`
 	Balance int64  `json:"balance,omitempty"`
 	Owner   string `json:"owner,omitempty"`
 }
 
-func (a account) GetType() string {
+func (a Account) GetType() string {
 	return "Account"
 }
 
-func (a *account) Withdraw(money int64) bool {
+func (a *Account) Withdraw(money int64) bool {
 	if a.Balance >= money {
 		a.ApplyChange(MoneyWithdrawn{Money: money})
 		return true
@@ -114,15 +111,15 @@ func (a *account) Withdraw(money int64) bool {
 	return false
 }
 
-func (a *account) Deposit(money int64) {
+func (a *Account) Deposit(money int64) {
 	a.ApplyChange(MoneyDeposited{Money: money})
 }
 
-func (a *account) UpdateOwner(owner string) {
+func (a *Account) UpdateOwner(owner string) {
 	a.ApplyChange(OwnerUpdated{Owner: owner})
 }
 
-func (a *account) HandleEvent(event eventstore.Eventer) {
+func (a *Account) HandleEvent(event eventstore.Eventer) {
 	switch v := event.(type) {
 	case AccountCreated:
 		a.HandleAccountCreated(v)
@@ -135,21 +132,35 @@ func (a *account) HandleEvent(event eventstore.Eventer) {
 	}
 }
 
-func (a *account) HandleAccountCreated(event AccountCreated) {
+func (a *Account) HandleAccountCreated(event AccountCreated) {
 	a.ID = event.ID
 	a.Balance = event.Money
 	// this reflects that we are handling domain events and NOT property events
 	a.Status = OPEN
 }
 
-func (a *account) HandleMoneyDeposited(event MoneyDeposited) {
+func (a *Account) HandleMoneyDeposited(event MoneyDeposited) {
 	a.Balance += event.Money
 }
 
-func (a *account) HandleMoneyWithdrawn(event MoneyWithdrawn) {
+func (a *Account) HandleMoneyWithdrawn(event MoneyWithdrawn) {
 	a.Balance -= event.Money
 }
 
-func (a *account) HandleOwnerUpdated(event OwnerUpdated) {
+func (a *Account) HandleOwnerUpdated(event OwnerUpdated) {
 	a.Owner = event.Owner
+}
+
+func ApplyChangeFromHistory(agg eventstore.Aggregater, e eventstore.Event) error {
+	m := eventstore.EventMetadata{
+		AggregateVersion: e.AggregateVersion,
+		CreatedAt:        e.CreatedAt,
+	}
+	evt, err := e.Decode()
+	if err != nil {
+		return err
+	}
+	agg.ApplyChangeFromHistory(m, evt)
+
+	return nil
 }
