@@ -45,7 +45,7 @@ message Event {
 	uint32 aggregate_version = 3;
 	string aggregate_type = 4;
 	string kind = 5;
-	string body = 6;
+	bytes body = 6;
 	string idempotency_key = 7;
 	string labels = 8;
 	google.protobuf.Timestamp created_at =9;

@@ -3,6 +3,8 @@ a simple implementation of an event store using only a database
 
 This an exercise on how I could implement a event store and how this could be used with CQRS.
 
+*This library started as an event store then it evolved to be a lot more, and that is why it wrongly named **eventstore*** 
+
 ## Introduction
 
 The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture pattern.

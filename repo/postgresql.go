@@ -42,16 +42,24 @@ type PgSnapshot struct {
 
 var _ eventstore.EsRepository = (*PgEsRepository)(nil)
 
+type PgJsonCodec struct{}
+
+func (_ PgJsonCodec) Encode(v interface{}) ([]byte, error) {
+	return json.Marshal(v)
+}
+
+func (_ PgJsonCodec) Decode(data []byte, v interface{}) error {
+	return json.Unmarshal(data, v)
+}
+
 type PgEsRepository struct {
-	db *sqlx.DB
+	db    *sqlx.DB
+	codec eventstore.Codec
 }
 
 func NewPgEsRepository(dburl string) (*PgEsRepository, error) {
 	db, err := sql.Open("postgres", dburl)
 	if err != nil {
-		return nil, err
-	}
-	if err := db.Ping(); err != nil {
 		return nil, err
 	}
 	return NewPgEsRepositoryDB(db)
@@ -61,10 +69,15 @@ func NewPgEsRepository(dburl string) (*PgEsRepository, error) {
 func NewPgEsRepositoryDB(db *sql.DB) (*PgEsRepository, error) {
 	dbx := sqlx.NewDb(db, "postgres")
 	r := &PgEsRepository{
-		db: dbx,
+		db:    dbx,
+		codec: PgJsonCodec{},
 	}
 
 	return r, nil
+}
+
+func (r *PgEsRepository) SetCodec(codec eventstore.Codec) {
+	r.codec = codec
 }
 
 func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
@@ -77,7 +90,7 @@ func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRec
 	var id string
 	err = r.withTx(ctx, func(c context.Context, s *sql.Tx) error {
 		for _, e := range eRec.Details {
-			body, err := json.Marshal(e.Body)
+			body, err := r.codec.Encode(e.Body)
 			if err != nil {
 				return err
 			}
@@ -127,13 +140,13 @@ func (r *PgEsRepository) GetSnapshot(ctx context.Context, aggregateID string) (e
 		AggregateID:      snap.AggregateID,
 		AggregateVersion: snap.AggregateVersion,
 		Decode: func(v interface{}) error {
-			return json.Unmarshal(snap.Body, v)
+			return r.codec.Decode(snap.Body, v)
 		},
 	}, nil
 }
 
 func (r *PgEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
-	body, err := json.Marshal(aggregate)
+	body, err := r.codec.Encode(aggregate)
 	if err != nil {
 		return fmt.Errorf("Failed to create serialize snapshot: %w", err)
 	}
@@ -205,6 +218,8 @@ func (r *PgEsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, ide
 }
 
 func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest) error {
+	// FIXME should also add a new event to the event store. Should use a transaction for the changes.
+
 	for _, evt := range request.Events {
 		sql := JoinAndEscape(evt.Fields)
 		sql = fmt.Sprintf("UPDATE events SET body =  body - '{%s}'::text[] WHERE aggregate_id = $1 AND kind = $2", sql)
@@ -324,7 +339,7 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 			Kind:             pg.Kind,
 			Body:             pg.Body,
 			Decode: func(v interface{}) error {
-				return json.Unmarshal(pg.Body, v)
+				return r.codec.Decode(pg.Body, v)
 			},
 			Labels:    labels,
 			CreatedAt: pg.CreatedAt,

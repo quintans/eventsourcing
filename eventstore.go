@@ -3,15 +3,33 @@ package eventstore
 import (
 	"context"
 	"errors"
-	"reflect"
 	"time"
-
-	"github.com/quintans/eventstore/common"
 )
 
 var (
 	ErrConcurrentModification = errors.New("Concurrent Modification")
 )
+
+type Instantiater interface {
+	Instantiate(Event) (Eventer, error)
+}
+
+type Upcaster interface {
+	Upcast(Eventer) Eventer
+}
+
+type Codec interface {
+	Encoder
+	Decoder
+}
+
+type Encoder interface {
+	Encode(v interface{}) ([]byte, error)
+}
+
+type Decoder interface {
+	Decode(data []byte, v interface{}) error
+}
 
 type DecodeFunc func(v interface{}) error
 
@@ -22,25 +40,25 @@ type Aggregater interface {
 	SetVersion(uint32)
 	// GetEventsCounter used to determine snapshots threshold
 	GetEventsCounter() uint32
-	GetEvents() []interface{}
+	GetEvents() []Eventer
 	ClearEvents()
-	ApplyChangeFromHistory(event Event) error
+	ApplyChangeFromHistory(m EventMetadata, event Eventer) error
 	UpdatedAt() time.Time
 }
 
 // Event represents the event data
 type Event struct {
-	ID               string                 `json:"id,omitempty"`
-	ResumeToken      []byte                 `json:"resume_token,omitempty"`
-	AggregateID      string                 `json:"aggregate_id,omitempty"`
-	AggregateVersion uint32                 `json:"aggregate_version,omitempty"`
-	AggregateType    string                 `json:"aggregate_type,omitempty"`
-	Kind             string                 `json:"kind,omitempty"`
-	Body             common.Json            `json:"body,omitempty"`
-	IdempotencyKey   string                 `json:"idempotency_key,omitempty"`
-	Labels           map[string]interface{} `json:"labels,omitempty"`
-	CreatedAt        time.Time              `json:"created_at,omitempty"`
-	Decode           DecodeFunc             `json:"-"`
+	ID               string
+	ResumeToken      []byte
+	AggregateID      string
+	AggregateVersion uint32
+	AggregateType    string
+	Kind             string
+	Body             []byte
+	IdempotencyKey   string
+	Labels           map[string]interface{}
+	CreatedAt        time.Time
+	Decode           DecodeFunc
 }
 
 func (e Event) IsZero() bool {
@@ -98,10 +116,11 @@ type EventStorer interface {
 var _ EventStorer = (*EventStore)(nil)
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, snapshotThreshold uint32) EventStore {
+func NewEventStore(repo EsRepository, instantiater Instantiater, snapshotThreshold uint32) EventStore {
 	return EventStore{
 		repo:              repo,
 		snapshotThreshold: snapshotThreshold,
+		instantiater:      instantiater,
 	}
 }
 
@@ -109,6 +128,12 @@ func NewEventStore(repo EsRepository, snapshotThreshold uint32) EventStore {
 type EventStore struct {
 	repo              EsRepository
 	snapshotThreshold uint32
+	instantiater      Instantiater
+	upcaster          Upcaster
+}
+
+func (es *EventStore) SetUpcaster(upcaster Upcaster) {
+	es.upcaster = upcaster
 }
 
 func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
@@ -133,7 +158,18 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 	}
 
 	for _, v := range events {
-		err = aggregate.ApplyChangeFromHistory(v)
+		m := EventMetadata{
+			AggregateVersion: v.AggregateVersion,
+			CreatedAt:        v.CreatedAt,
+		}
+		e, err := es.instantiater.Instantiate(v)
+		if err != nil {
+			return err
+		}
+		if es.upcaster != nil {
+			e = es.upcaster.Upcast(e)
+		}
+		err = aggregate.ApplyChangeFromHistory(m, e)
 		if err != nil {
 			return err
 		}
@@ -164,7 +200,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 	for i := 0; i < eventsLen; i++ {
 		e := events[i]
 		details[i] = EventRecordDetail{
-			Kind: nameFor(e),
+			Kind: e.EventName(),
 			Body: e,
 		}
 	}
@@ -200,14 +236,6 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 
 	aggregate.ClearEvents()
 	return nil
-}
-
-func nameFor(x interface{}) string {
-	t := reflect.TypeOf(x)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	return t.Name()
 }
 
 func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {

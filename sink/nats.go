@@ -2,7 +2,6 @@ package sink
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -16,6 +15,7 @@ type NatsSink struct {
 	partitions    uint32
 	stanClusterID string
 	clientID      string
+	codec         Codec
 	options       []stan.Option
 }
 
@@ -27,7 +27,12 @@ func NewNatsSink(topic string, partitions uint32, stanClusterID, clientID string
 		stanClusterID: stanClusterID,
 		clientID:      clientID,
 		options:       options,
+		codec:         JsonCodec{},
 	}
+}
+
+func (p *NatsSink) SetCodec(codec Codec) {
+	p.codec = codec
 }
 
 // Init starts the feed
@@ -73,8 +78,7 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition int) (*eventstore.
 		// no last message
 		return nil, nil
 	}
-	event := eventstore.Event{}
-	err = json.Unmarshal(msg.data, &event)
+	event, err := p.codec.Decode(msg.data)
 	if err != nil {
 		return nil, err
 	}
@@ -84,9 +88,9 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition int) (*eventstore.
 
 // Sink sends the event to pulsar
 func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
-	b, err := json.Marshal(e)
+	b, err := p.codec.Encode(e)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	topic := PartitionTopic(e.AggregateID, p.topic, p.partitions)

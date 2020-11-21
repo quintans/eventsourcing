@@ -9,7 +9,6 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/stan.go"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/projection"
 	"github.com/quintans/eventstore/sink"
 	log "github.com/sirupsen/logrus"
@@ -20,6 +19,7 @@ type NatsSubscriber struct {
 	stream       stan.Conn
 	topic        string
 	managerTopic string
+	codec        sink.Codec
 }
 
 func NewNatsSubscriber(ctx context.Context, addresses string, stanClusterID, clientID string, topic, managerTopic string) (*NatsSubscriber, error) {
@@ -44,7 +44,12 @@ func NewNatsSubscriber(ctx context.Context, addresses string, stanClusterID, cli
 		stream:       stream,
 		topic:        topic,
 		managerTopic: managerTopic,
+		codec:        sink.JsonCodec{},
 	}, nil
+}
+
+func (s *NatsSubscriber) SetCodec(codec sink.Codec) {
+	s.codec = codec
 }
 
 func (s NatsSubscriber) GetQueue() *nats.Conn {
@@ -92,8 +97,7 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition int, resume
 			// ignore seq
 			return
 		}
-		e := eventstore.Event{}
-		err := json.Unmarshal(m.Data, &e)
+		e, err := s.codec.Decode(m.Data)
 		if err != nil {
 			log.WithError(err).Errorf("Unable to unmarshal event '%s'", string(m.Data))
 		}

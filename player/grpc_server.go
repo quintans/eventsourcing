@@ -49,7 +49,7 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			AggregateVersion: v.AggregateVersion,
 			AggregateType:    v.AggregateType,
 			Kind:             v.Kind,
-			Body:             string(v.Body),
+			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
 			Labels:           string(labels),
 			CreatedAt:        createdAt,

@@ -20,6 +20,39 @@ const (
 	snapshotCollection   = "snapshots"
 )
 
+type MongoCodec interface {
+	Encode(v interface{}) (bson.M, error)
+	Decodable(data bson.M) ([]byte, func(interface{}) error, error)
+}
+
+type MongoJsonCodec struct{}
+
+func (_ MongoJsonCodec) Encode(v interface{}) (bson.M, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+
+	body := bson.M{}
+	err = bson.UnmarshalExtJSON(b, true, &body)
+	if err != nil {
+		return nil, err
+	}
+
+	return body, nil
+}
+
+func (_ MongoJsonCodec) Decodable(data bson.M) ([]byte, func(interface{}) error, error) {
+	body, err := json.Marshal(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	dec := func(v interface{}) error {
+		return json.Unmarshal(body, v)
+	}
+	return body, dec, nil
+}
+
 // MongoEvent is the event data stored in the database
 type MongoEvent struct {
 	ID               string             `bson:"_id,omitempty"`
@@ -50,6 +83,7 @@ var _ eventstore.EsRepository = (*MongoEsRepository)(nil)
 type MongoEsRepository struct {
 	dbName string
 	client *mongo.Client
+	codec  MongoCodec
 }
 
 func NewMongoEsRepository(connString string, dbName string) (*MongoEsRepository, error) {
@@ -67,7 +101,12 @@ func NewMongoEsRepositoryDB(client *mongo.Client, dbName string) *MongoEsReposit
 	return &MongoEsRepository{
 		dbName: dbName,
 		client: client,
+		codec:  MongoJsonCodec{},
 	}
+}
+
+func (r *MongoEsRepository) SetCodec(codec MongoCodec) {
+	r.codec = codec
 }
 
 func (r *MongoEsRepository) collection(coll string) *mongo.Collection {
@@ -88,16 +127,11 @@ func (r *MongoEsRepository) SaveEvent(ctx context.Context, eRec eventstore.Event
 	}
 	details := make([]MongoEventDetail, 0, len(eRec.Details))
 	for _, e := range eRec.Details {
-		b, err := json.Marshal(e.Body)
+		body, err := r.codec.Encode(e.Body)
 		if err != nil {
 			return "", 0, err
 		}
 
-		body := bson.M{}
-		err = bson.UnmarshalExtJSON(b, true, &body)
-		if err != nil {
-			return "", 0, err
-		}
 		details = append(details, MongoEventDetail{
 			Kind: e.Kind,
 			Body: body,
@@ -142,8 +176,6 @@ func isMongoDup(err error) bool {
 }
 
 func (r *MongoEsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventstore.Snapshot, error) {
-	// FIXME it should return eventstore.Snapshot because it forces json encoding on the caller. The encoding should belong only to the repository layer
-
 	snap := MongoSnapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
@@ -153,30 +185,25 @@ func (r *MongoEsRepository) GetSnapshot(ctx context.Context, aggregateID string)
 		}
 		return eventstore.Snapshot{}, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	body, err := json.Marshal(snap.Body)
-	if err != nil {
-		return eventstore.Snapshot{}, err
-	}
+	body := snap.Body
 	return eventstore.Snapshot{
 		AggregateID:      snap.AggregateID,
 		AggregateVersion: snap.AggregateVersion,
 		Decode: func(v interface{}) error {
-			return json.Unmarshal(body, v)
+			_, dec, err := r.codec.Decodable(body)
+			if err != nil {
+				return err
+			}
+			return dec(v)
 		},
 	}, nil
 }
 
 func (r *MongoEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
-	bodyJson, err := json.Marshal(aggregate)
+	body, err := r.codec.Encode(aggregate)
 	if err != nil {
 		return fmt.Errorf("Failed to create serialize snapshot: %w", err)
 	}
-	body := bson.M{}
-	err = bson.UnmarshalExtJSON(bodyJson, true, &body)
-	if err != nil {
-		return err
-	}
-
 	snap := MongoSnapshot{
 		ID:               eventID,
 		AggregateID:      aggregate.GetID(),
@@ -227,6 +254,8 @@ func (r *MongoEsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, 
 }
 
 func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest) error {
+	// FIXME should also add a new event to the event store. Should use a transaction for the changes.
+
 	for _, evt := range request.Events {
 		filter := bson.D{
 			{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
@@ -360,10 +389,11 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 		for k, d := range v.Details {
 			// only collect events that are greater than afterEventID-afterCount
 			if v.ID > afterEventID || k > after {
-				body, err := json.Marshal(d.Body)
+				body, dec, err := r.codec.Decodable(d.Body)
 				if err != nil {
 					return nil, err
 				}
+
 				events = append(events, eventstore.Event{
 					ID:               common.NewMessageID(v.ID, uint8(k)),
 					AggregateID:      v.AggregateID,
@@ -372,7 +402,7 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 					Kind:             d.Kind,
 					Body:             body,
 					Decode: func(v interface{}) error {
-						return json.Unmarshal(body, v)
+						return dec(v)
 					},
 					IdempotencyKey: v.IdempotencyKey,
 					Labels:         v.Labels,
