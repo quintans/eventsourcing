@@ -1,36 +1,49 @@
 # Event Store
-a simple implementation of an event store using only a database
+a simple implementation of an event store using a database
 
 This an exercise on how I could implement a event store and how this could be used with CQRS.
 
-*This library started as an event store then it evolved to be a lot more, and that is why it wrongly named **eventstore*** 
-
 ## Introduction
 
-The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture pattern.
+The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture pattern where each side (write and read) can scale independently.
+
+This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS.
+To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database. I f we would like to write the read model into the same database, we could easily extend the current implementation to allow an event handler for the read model (maybe in the future)
+
+I went a bit further and also implemented an orchestration layer for the event consumer on the read side.
+
+*This library started as an event store then it evolved to be a lot more, and that is why it wrongly named **eventstore*** 
+
+I first talk about the several challenges and then about the solutions for those challenges.
 
 ### Event Bus
 
 The main challenge is, how to store events into a database and then propagate it to a event bus without losing any event.
 
-In most of the implementations that I have seen, some sort of event bus is used to deliver the domain events to external consumers, without considering that it is not possible to write into a database and publish to a event bus in a transaction. Many things can go wrong, like for example, after writing to the database we fail to write into the event event bus. Even if it fails, there is no guarantee that it wasn't published.
+In some of the implementations that I have seen, some sort of event bus is used to deliver the domain events to external consumers, without considering that it is not possible to write into a database and publish to a event bus in a transaction. There is no guarantee that this would always work.For example, we could use a transaction and publish to the event bus only if we were able to successfully insert in the database, but the commit may fail, resulting in an inconsistency between the database and the published event.
+
+That being said, first we write to the database and then a second process picks up the database changes.
+
+Below I present to options: Polling and Pushing (reactive)
+
+*I implemented examples of both :)*
 
 ### IDs
 
-Understand how the IDs are used and what is the best ID that we can use, in my opinion, is the most important thing in an event sourcing and CQRS.
+Understanding how IDs are used and what is the best ID strategy that we can use, in my opinion, is the most important thing in an event sourcing and CQRS.
 
 Having incremental IDs is very important so that we can replay the events in case of a failure and
-also because, if events are incremental, it is easy to implement idempotency. We just ignore events that have lower order than the last one received.
+also because, if events are incremental, it is easy to implement idempotency. For a specific aggregate, we just ignore events that have lower order than the last one received.
 
-**So we cannot insert events in the event store with IDs out of order?**
+* **So we cannot insert events in the event store with IDs out of order?**
 
-We can, as long as this out of order events happens in different aggregates.
-For the same aggregate, the events ID must be monotonic. The order only matter for the aggregate.
+  We can, as long as this out of order events happens in different aggregates.
+  For the same aggregate, the events ID must be monotonic. The order only matter for the aggregate.
 
-**If events are inserted out of order how will they impact the projections?**
+* **If events are inserted out of order how will they impact the projections?**
 
-If what I said before is true, then it will not matter, even if consider projection built with different aggregates.
-Consider the aggregates A and B that are materialised in the projection C, so that `A + B = C`. This exactly the same as `B + A = C` 
+  If what I said before is true, then it will not matter, even if consider projection built with different aggregates.
+  Consider the aggregates A and B that are materialised in the projection C, so that `A + B = C`. This exactly the same as `B + A = C` 
 
 
 Ideally we would like to have global monotonic events, but that is impossible to have unless we have a single node writer, creating a bottleneck.
@@ -49,8 +62,8 @@ Unfortunately, there is no guarantee that two nodes, generating IDs for an aggre
 
 Compensating for clock skews, is easy if the tool allows to set the time, but for the randomness, not so much.
 
-Stepping back a little what do we really need for our ID? For a given aggregate, we need it to be monotonic and Lexicographically sortable.
-That can be achieved if we consider an ID that has `time + aggregate ID + version` and encoded in base32.
+Taking a step back, what do we need our ID to be? For a given aggregate, we need it to be monotonic and Lexicographically sortable.
+That can be achieved if we consider an ID that has `time + aggregate ID + version`. I could just use it like that, but to make it internet friendly and the smallest possible, I ended up encoding it in base32 (base64 has to many ugly characters)
 With that goal in mind I created a small [tool](./eventid/eventid.go) that handles this composite ID.
 
 ### Polling
@@ -84,22 +97,22 @@ ORDER BY id ASC
 LIMIT 100
 ```
 
-This polling strategy can be used both with SQL and NoSQL databases, like Postgresql, Cockroach or MongoDB, to name a few.
+This polling strategy can be used both with SQL and NoSQL databases, like Postgresql or MongoDB, to name a few.
 
-As a side note I would like to say that I went for the polling strategy because it fits well for SQL and NoSQL generic databases and it is simple to understand and straight forward to implement.
+I would like to say that I would use polling strategy on databases where it is not easy to implement change data capture, like MySQL because it is simple to understand and straight forward to implement.
 
 Advantages:
 * Easy to implement
 
 Disadvantages
-* Network costs. If the data is updated infrequently we will be polling with no results, otherwise if the data change frequency is hight then there will be no difference.
-* events that depend on others will have an incremental delay due to the time delay applied to the query.
+* Network costs. If the data is updated infrequently we will be polling with no results. On the other hand, if the data change frequency is hight then there will be no difference.
+* events that depend on others will have an accumulated delay due to the time delay applied to the query.
 
 ### Pushing
 
 The above polling solution is a solution that works for all kinds of databases.
 
-This is not saying that there aren't other solutions that would work better. Some database provide notification mechanisms from where we collect, like change streams from MongoDB.
+This is not saying that there aren't other solutions that would work better. Some database provide notification mechanisms from where we collect the changes, like `change streams` from MongoDB.
 
 PostgreSQL also has the `LISTEN / NOTIFY` feature that allow us to be notified on a record change [example](https://pkg.go.dev/github.com/lib/pq/example/listen?tab=doc.)
 
@@ -108,28 +121,28 @@ PostgreSQL also has the `LISTEN / NOTIFY` feature that allow us to be notified o
 
 When we interact with an aggregate, several events may be created. 
 
-In the current implementation, a PostgreSQL is used, so we create a record per event and used a transaction to guarantee consistency.
+If a SQL database is used, like PostgreSQL, we create a record per event and used a transaction to guarantee consistency.
 
-Depending of the used database a different approach must be used.
-For example, for document NoSQL databases like MongoDB, the solution is to use one document with the array of events inside.
+For document NoSQL databases, like MongoDB, the solution is to use one document with the array of events inside, as a sub-collection.
 The only requirement is that the database needs to provide unique constraints on multiple fields (aggregate_id, version).
 
 The record would be something like:
 
 `{ _id = 1, aggregate_id = 1, version = 1, events = [ { … }, { … }, { … }, { … } ] }`
 
+This project provides examples of both.
 
 ### Snapshots
 
 I will also use the memento pattern, to take snapshots of the current state, every X events.
 
-Snapshots is a technique used to improve the performance of the event store, when retrieving an aggregate, but they don't play any part in keeping the consistency of the event store, therefore if we sporadically fail to save a snapshot, it is not a problem, so they can be saved in a separate transaction and go routine.
+Snapshots is a technique used to improve the performance of the event store, when retrieving an aggregate, but they don't play any part in keeping the consistency of the event store, therefore if we sporadically fail to save a snapshot, it is not a problem, so they can be saved in a separate transaction and in a go routine.
 
 ### Idempotency
 
 When saving an aggregate, we have the option to supply an idempotent key. Later, we can check the presence of the idempotency key, to see if we are repeating an action. This can be useful when used in process manager reactors.
 
-the following example I exemplify a money transfer with rollback actions, leveraging idempotent keys.
+In the following example I exemplify a money transfer with rollback actions, leveraging idempotent keys.
 
 Here, Withdraw and Deposit need to be idempotent, but setting the transfer state does not. The latter is idempotent action while the former is not. 
 
@@ -241,6 +254,8 @@ func OnTransferFailedToDeposit(ctx context.Context, es EventStore, e Event) {
 }
 ```
 
+---
+
 ## Command Query Responsibility Segregation (CQRS) + Event Sourcing
 
 An event store is where we store the events of an application that follows the event sourcing architecture pattern.
@@ -248,52 +263,32 @@ This pattern essentially is modelling the changes to the application as a series
 
 CQRS is an application architecture pattern often used with event sourcing.
 
-### Simple use
+### Architecture
 
-By using this library player, a simple architecture can be achieved. The player polls the database for new events at a regular interval (should be less than 1 second), for events after a given event ID and fans out to registered consumers. So we have one player serving multiple consumers. Consumer can be stopped and restart on demand.
-The projectors should take care of persisting the last handled event, so that in the case of a restart it will pick from the last known event.
-It is also important to note that for each projectors, can only be working in one instance at a given time, to guarantee that the events are processed in order (if and event is not processed in order we might end up with corrupt data).
-
-![CQRS](cqrs-es-simple.png)
-
-This is a simplistic and easy to implement approach but has the drawback of stressing the database due to the constant polling, as the number of read instances increase.
-
-#### Replay
-Replaying all the events fo a projection is very easy to achieve. 
-1) Stop the respective consumer
-2) retrieve all the events using the player
-3) Reattach the consumer to lock to a buffer position
-4) retrieve any event from the last position returned in 2)
-5) resume consuming
-
-### Alternative
-
-Another approach is to have an event bus after the data store poller, and let the event bus deliver the events to the projectors, as depicted in the following picture:
+Next I present a possible architecture.
 
 ![CQRS](cqrs-es.png)
 
-The data store poller polls the database, and writes the events into the event bus.
-If it fails to write into the event bus, it queries the event bus for the last message and start polling the database from there.
-If the poller service restarts, it will do the same as before, querying the event bus for the last message.
+The write service writes to the database, the changes are captured by the Forwarder service and published to the event bus. The read service listen to the event bus and updates the views according to the received events.
+
+If the Forwarder service fails to write into the event bus, it will try again. If it restarts, it queries the event bus for the last message and start polling the database from there.
 > If it is not possible to get the last published message to the event bus, we can store it in a database.
 > Writing repeated messages to the event bus is not a concern, since the used event bus must guarantee `at least once` delivery. It is the job of the projector to be idempotent, discarding repeated messages.
 
-On the projection side it is pretty much the same as in the Simple use, but now we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages.
+On the projection side we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages.
 
-Here we refer to a poller because it is easy to implement, but any other implementation that is able to forward events starting at a given point resume point would also work. 
+### Instances
 
-#### Polling
-
-Depending on the rate of events being written in the event store, the poller may not be able to keep up and becomes a bottleneck.
+Depending on the rate of events being written in the event store, the Forwarder service may not be able to keep up and becomes a bottleneck.
 When this happens we need to create more polling services that don't overlap when polling events.
 Overlapping can be avoided by filtering over metadata.
 What this metadata can be and how it is stored will depend in your business case.
-A good example is to have a poller per set of aggregates types of per aggregate type.
-As an implementation example, for a very broad spectrum of problem, events can be stored with with generic labels, that in turn can be used to filter the events. Each poller would then be sending events into its own event bus topic.
+A good example is to have a Forwarder service per set of aggregates types of per aggregate type.
+As an implementation example, for a very broad spectrum of problem, events can be stored with with generic labels, that in turn can be used to filter the events. Each Forwarder service would then be sending events into its own event bus topic.
 
-> To be honest, if we use a poller per write service I don't see how this would ever be a bottleneck, but again, we never know.
+> To be honest, if we use a Forwarder service per write service I don't see how this would ever be a bottleneck, but again, we never know.
 
-#### Key Partition
+### Key Partition
 
 Since we only have one instance responsible for creating a projection, the read side may become a bottleneck as it handles more aggregates and do more database operations to create a consistent projection. An approach is needed to evenly distribute this load over the existing services instances, and this can be done with key partitioning.
 
@@ -301,7 +296,7 @@ Since we only have one instance responsible for creating a projection, the read 
 
 > Another approach is to distribute projections over the existing instances.
 
-So, on the read side, consider that we are interested in creating 12 partitions (it a good idea to create a reasonable amount of partitions from the start so that when we add more services instances we can spread them easily). In the poller side we would publish events into 12 topics, `topic.1`, `topic.2` ... `topic.12` each representing a partition. To select what event goes on what topic, we would mod over the hash of the event ID.
+So, on the read side, consider that we are interested in creating 12 partitions (it a good idea to create a reasonable amount of partitions from the start so that when we add more services instances we can spread them easily). In the Forwarder service side we would publish events into 12 topics, `topic.1`, `topic.2` ... `topic.12` each representing a partition. To select what event goes on what topic, we would mod over the hash of the event ID.
 
 ```go
 topicNr := hash(event.ID)%12
@@ -329,12 +324,13 @@ instance #3 - 9-12
 
 The idempotency is still guaranteed for each aggregate.
 
-#### Replay
+### Replay
 
 Considering that the event bus should have a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
+1) Stop the respective consumer
 1) get the position of the last message from the event bus
-2) consume events from the event store until we reach the event matching the previous event bus position
-3) resume listening the event bus from the position of 1)  
+1) consume events from the event store until we reach the event matching the previous event bus position
+1) resume listening the event bus from the position of 2)
 
 ### GDPR
 
@@ -343,19 +339,6 @@ According to the GDPR rules, we must completely remove the information that can 
 This means that the data stored in the data store has to change, going against the rule that an event store should only be an append only "log".
 
 Regarding the event-bus, this will not be a problem if we consider a limited retention window for messages (we have 30 days to comply with the GDPR).
-
-```go
-es.Forget(ctx, ForgetRequest{
-    AggregateID: id,
-    AggregateFields: []string{"owner"},
-    Events: []EventKind{
-        {
-            Kind:   "OwnerUpdated",
-            Fields: []string{"owner"},
-        },
-    },
-})
-```
 
 ## gRPC codegen
 ```sh
