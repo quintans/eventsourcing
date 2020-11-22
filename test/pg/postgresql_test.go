@@ -65,6 +65,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "AccountCreated", evts[0].Kind)
 	assert.Equal(t, "MoneyDeposited", evts[1].Kind)
 	assert.Equal(t, "MoneyDeposited", evts[2].Kind)
+	assert.Equal(t, "MoneyDeposited", evts[3].Kind)
 	assert.Equal(t, "Account", evts[0].AggregateType)
 	assert.Equal(t, id, evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
@@ -301,8 +302,10 @@ func TestForget(t *testing.T) {
 			switch t := i.(type) {
 			case test.OwnerUpdated:
 				t.Owner = ""
+				return t
 			case test.Account:
 				t.Owner = ""
+				return t
 			}
 			return i
 		},
@@ -329,6 +332,7 @@ func TestForget(t *testing.T) {
 		err = json.Unmarshal(v, a)
 		require.NoError(t, err)
 		assert.Empty(t, a.Owner)
+		assert.NotEmpty(t, a.ID)
 	}
 }
 

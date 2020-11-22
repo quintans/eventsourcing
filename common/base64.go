@@ -40,7 +40,7 @@ func (m Base64) String() string {
 	if m == nil {
 		return ""
 	}
-	return string(m)
+	return base64.StdEncoding.EncodeToString(m)
 }
 
 var _ fmt.Stringer = (*Base64)(nil)

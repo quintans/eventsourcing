@@ -149,8 +149,8 @@ func (r *PgEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.
 	}
 
 	_, err = r.db.NamedExecContext(ctx,
-		`INSERT INTO snapshots (id, aggregate_id, aggregate_version, body, created_at)
-	     VALUES (:id, :aggregate_id, :aggregate_version, :body, :created_at)`, snap)
+		`INSERT INTO snapshots (id, aggregate_id, aggregate_version, aggregate_type, body, created_at)
+	     VALUES (:id, :aggregate_id, :aggregate_version, :aggregate_type, :body, :created_at)`, snap)
 
 	return err
 }
@@ -207,8 +207,7 @@ func (r *PgEsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, ide
 }
 
 func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(interface{}) interface{}) error {
-	// FIXME use a transaction.
-	// FIXME in the end should also add a new event to the event store.
+	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
 	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", "", request.AggregateID, request.EventKind)
@@ -221,6 +220,11 @@ func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRe
 		if err != nil {
 			return err
 		}
+		err = r.codec.Decode(evt.Body, e)
+		if err != nil {
+			return err
+		}
+		e = common.Dereference(e)
 		e = forget(e)
 		body, err := r.codec.Encode(e)
 		if err != nil {
@@ -246,12 +250,17 @@ func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRe
 		if err != nil {
 			return err
 		}
+		err = r.codec.Decode(snap.Body, e)
+		if err != nil {
+			return err
+		}
+		e = common.Dereference(e)
 		e = forget(e)
 		body, err := r.codec.Encode(e)
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, "UPDATE snapshot SET body = $1 WHERE ID = $2", body, snap.ID)
+		_, err = r.db.ExecContext(ctx, "UPDATE snapshots SET body = $1 WHERE ID = $2", body, snap.ID)
 		if err != nil {
 			return fmt.Errorf("Unable to forget snapshot ID %s: %w", snap.ID, err)
 		}
@@ -360,10 +369,11 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 			if err != nil {
 				return nil, err
 			}
-			err = r.codec.Decode(pg.Body, &e)
+			err = r.codec.Decode(pg.Body, e)
 			if err != nil {
 				return nil, fmt.Errorf("Unable to decode event %s: %w", pg.Kind, err)
 			}
+			e = common.Dereference(e)
 			return e.(eventstore.Eventer), nil
 		}
 

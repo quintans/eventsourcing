@@ -190,6 +190,7 @@ func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID 
 			}
 		}
 
+		// the event is JSON encoded
 		pgEvent := PgEvent{}
 		err = json.Unmarshal([]byte(msg.Payload), &pgEvent)
 		if err != nil {
@@ -213,7 +214,7 @@ func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID 
 			AggregateVersion: pgEvent.AggregateVersion,
 			AggregateType:    pgEvent.AggregateType,
 			Kind:             pgEvent.Kind,
-			Body:             pgEvent.Body,
+			Body:             []byte(pgEvent.Body),
 			IdempotencyKey:   pgEvent.IdempotencyKey,
 			Labels:           labels,
 			CreatedAt:        time.Time(pgEvent.CreatedAt),

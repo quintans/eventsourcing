@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -44,4 +45,14 @@ func SplitMessageID(messageID string) (eventID string, count uint8, err error) {
 	}
 
 	return id, uint8(b[0]), nil
+}
+
+// Dereference returns the underlying struct dereference
+func Dereference(i interface{}) interface{} {
+	v := reflect.ValueOf(i)
+	if v.Kind() != reflect.Ptr {
+		return i
+	}
+	v = v.Elem()
+	return v.Interface()
 }

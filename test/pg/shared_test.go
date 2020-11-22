@@ -89,7 +89,7 @@ func dbSchema() error {
 		aggregate_version INTEGER NOT NULL,
 		aggregate_type VARCHAR (50) NOT NULL,
 		kind VARCHAR (50) NOT NULL,
-		body JSONB NOT NULL,
+		body bytea NOT NULL,
 		idempotency_key VARCHAR (50),
 		labels JSONB NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
@@ -104,7 +104,7 @@ func dbSchema() error {
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_version INTEGER NOT NULL,
 		aggregate_type VARCHAR (50) NOT NULL,
-		body JSONB NOT NULL,
+		body bytea NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		FOREIGN KEY (id) REFERENCES events (id)
 	);

@@ -100,7 +100,7 @@ func TestPollListener(t *testing.T) {
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
-	acc.Deposit(20)
+	acc.Withdraw(5)
 	err := es.Save(ctx, acc, eventstore.Options{})
 	require.NoError(t, err)
 	acc.Deposit(5)
@@ -142,7 +142,7 @@ func TestPollListener(t *testing.T) {
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(2), acc2.Version)
-	assert.Equal(t, int64(135), acc2.Balance)
+	assert.Equal(t, int64(110), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
 
@@ -307,12 +307,13 @@ func TestForget(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	snaps := []bson.M{}
+	snaps := []repo.MongoSnapshot{}
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		m := v["body"].(bson.M)
-		assert.NotEmpty(t, m["owner"])
+		snap := test.Account{}
+		codec.Decode(v.Body, &snap)
+		assert.NotEmpty(t, snap.Owner)
 	}
 
 	err = es.Forget(ctx,
@@ -324,13 +325,17 @@ func TestForget(t *testing.T) {
 			switch t := i.(type) {
 			case test.OwnerUpdated:
 				t.Owner = ""
+				return t
 			case test.Account:
 				t.Owner = ""
+				return t
 			}
 			return i
 		},
 	)
 	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
 
 	cursor, err = db.Collection(collEvents).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
@@ -364,11 +369,13 @@ func TestForget(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	snaps = []bson.M{}
+	snaps = []repo.MongoSnapshot{}
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		m := v["body"].(bson.M)
-		assert.Empty(t, m["owner"])
+		snap := test.Account{}
+		codec.Decode(v.Body, &snap)
+		assert.Empty(t, snap.Owner)
+		assert.NotEmpty(t, snap.ID)
 	}
 }

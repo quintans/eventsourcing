@@ -54,15 +54,15 @@ func (_ StructFactory) New(kind string) (interface{}, error) {
 	var e interface{}
 	switch kind {
 	case "Account":
-		e = Account{}
+		e = &Account{}
 	case "AccountCreated":
-		e = AccountCreated{}
+		e = &AccountCreated{}
 	case "MoneyDeposited":
-		e = MoneyDeposited{}
+		e = &MoneyDeposited{}
 	case "MoneyWithdrawn":
-		e = MoneyWithdrawn{}
+		e = &MoneyWithdrawn{}
 	case "OwnerUpdated":
-		e = OwnerUpdated{}
+		e = &OwnerUpdated{}
 	}
 	if e == nil {
 		return nil, fmt.Errorf("Unknown event kind: %s", kind)
@@ -120,15 +120,15 @@ func (a *Account) UpdateOwner(owner string) {
 }
 
 func (a *Account) HandleEvent(event eventstore.Eventer) {
-	switch v := event.(type) {
+	switch t := event.(type) {
 	case AccountCreated:
-		a.HandleAccountCreated(v)
+		a.HandleAccountCreated(t)
 	case MoneyDeposited:
-		a.HandleMoneyDeposited(v)
+		a.HandleMoneyDeposited(t)
 	case MoneyWithdrawn:
-		a.HandleMoneyWithdrawn(v)
+		a.HandleMoneyWithdrawn(t)
 	case OwnerUpdated:
-		a.HandleOwnerUpdated(v)
+		a.HandleOwnerUpdated(t)
 	}
 }
 
@@ -157,6 +157,7 @@ func ApplyChangeFromHistory(agg eventstore.Aggregater, e eventstore.Event) error
 		CreatedAt:        e.CreatedAt,
 	}
 	evt, err := e.Decode()
+
 	if err != nil {
 		return err
 	}

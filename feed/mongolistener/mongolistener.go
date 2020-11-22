@@ -79,31 +79,21 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 		if err := eventsStream.Decode(&data); err != nil {
 			return err
 		}
-
 		eventDoc := data.FullDocument
-		events := []eventstore.Event{}
 		for k, d := range eventDoc.Details {
-			body, err := bson.MarshalExtJSON(d.Body, false, false)
-			if err != nil {
-				return err
-			}
-
 			event := eventstore.Event{
 				ID:               common.NewMessageID(eventDoc.ID, uint8(k)),
-				ResumeToken:      eventsStream.ResumeToken(),
+				ResumeToken:      []byte(eventsStream.ResumeToken()),
 				AggregateID:      eventDoc.AggregateID,
 				AggregateVersion: eventDoc.AggregateVersion,
 				AggregateType:    eventDoc.AggregateType,
 				Kind:             d.Kind,
-				Body:             body,
+				Body:             d.Body,
 				IdempotencyKey:   eventDoc.IdempotencyKey,
 				Labels:           eventDoc.Labels,
 				CreatedAt:        eventDoc.CreatedAt,
 			}
-			events = append(events, event)
-		}
-		for _, e := range events {
-			err = sinker.Sink(ctx, e)
+			err = sinker.Sink(ctx, event)
 			if err != nil {
 				return err
 			}

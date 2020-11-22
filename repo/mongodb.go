@@ -235,6 +235,11 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 			if err != nil {
 				return err
 			}
+			err = r.codec.Decode(d.Body, e)
+			if err != nil {
+				return err
+			}
+			e = common.Dereference(e)
 			e = forget(e)
 			body, err := r.codec.Encode(e)
 			if err != nil {
@@ -272,6 +277,11 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 		if err != nil {
 			return err
 		}
+		err = r.codec.Decode(s.Body, e)
+		if err != nil {
+			return err
+		}
+		e = common.Dereference(e)
 		e = forget(e)
 		body, err := r.codec.Encode(e)
 		if err != nil {
@@ -281,10 +291,10 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 		filter := bson.D{
 			{"_id", s.ID},
 		}
-		update := bson.D{
-			{"$set", bson.E{"body", body}},
+		update := bson.M{
+			"$set": bson.M{"body": body},
 		}
-		_, err = r.eventsCollection().UpdateOne(ctx, filter, update)
+		_, err = r.snapshotCollection().UpdateOne(ctx, filter, update)
 		if err != nil {
 			return fmt.Errorf("Unable to forget snapshot with ID %s: %w", s.ID, err)
 		}
@@ -388,15 +398,17 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 		for k, d := range v.Details {
 			// only collect events that are greater than afterEventID-afterCount
 			if v.ID > afterEventID || k > after {
+				detail := d
 				decode := func() (eventstore.Eventer, error) {
-					e, err := r.factory.New(d.Kind)
+					e, err := r.factory.New(detail.Kind)
 					if err != nil {
 						return nil, err
 					}
-					err = r.codec.Decode(d.Body, &e)
+					err = r.codec.Decode(detail.Body, e)
 					if err != nil {
-						return nil, fmt.Errorf("Unable to decode event %s: %w", d.Kind, err)
+						return nil, fmt.Errorf("Unable to decode event %s: %w", detail.Kind, err)
 					}
+					e = common.Dereference(e)
 					return e.(eventstore.Eventer), nil
 				}
 
@@ -405,8 +417,8 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 					AggregateID:      v.AggregateID,
 					AggregateVersion: v.AggregateVersion,
 					AggregateType:    v.AggregateType,
-					Kind:             d.Kind,
-					Body:             d.Body,
+					Kind:             detail.Kind,
+					Body:             detail.Body,
 					IdempotencyKey:   v.IdempotencyKey,
 					Labels:           v.Labels,
 					CreatedAt:        v.CreatedAt,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/quintans/eventstore/common"
 )
 
 var (
@@ -47,12 +49,12 @@ type Aggregater interface {
 // Event represents the event data
 type Event struct {
 	ID               string
-	ResumeToken      []byte
+	ResumeToken      common.Base64
 	AggregateID      string
 	AggregateVersion uint32
 	AggregateType    string
 	Kind             string
-	Body             []byte
+	Body             common.Base64
 	IdempotencyKey   string
 	Labels           map[string]interface{}
 	CreatedAt        time.Time
@@ -202,6 +204,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 	newCounter := aggregate.GetEventsCounter()
 	oldCounter := newCounter - uint32(eventsLen)
 	if newCounter > es.snapshotThreshold-1 {
+		// TODO this could be done asynchronously. Beware that aggregate holds a reference and not a copy.
 		mod := oldCounter % es.snapshotThreshold
 		delta := newCounter - (oldCounter - mod)
 		if delta >= es.snapshotThreshold {

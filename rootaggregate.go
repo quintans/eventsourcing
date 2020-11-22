@@ -23,7 +23,8 @@ type EventHandler interface {
 
 func NewRootAggregate(aggregate EventHandler) RootAggregate {
 	return RootAggregate{
-		events: []Eventer{},
+		events:       []Eventer{},
+		eventHandler: aggregate,
 	}
 }
 
