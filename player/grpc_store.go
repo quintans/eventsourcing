@@ -16,12 +16,20 @@ import (
 
 type GrpcRepository struct {
 	address string
+	factory eventstore.Factory
+	decoder eventstore.Decoder
 }
 
-func NewGrpcRepository(address string) Repository {
+func NewGrpcRepository(address string, factory eventstore.Factory) Repository {
 	return GrpcRepository{
 		address: address,
+		factory: factory,
+		decoder: eventstore.JsonCodec{},
 	}
+}
+
+func (c *GrpcRepository) SetDecoder(decoder eventstore.Decoder) {
+	c.decoder = decoder
 }
 
 func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter repo.Filter) (string, error) {
@@ -82,10 +90,11 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 			AggregateVersion: v.AggregateVersion,
 			AggregateType:    v.AggregateType,
 			Kind:             v.Kind,
-			Body:             []byte(v.Body),
+			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
 			Labels:           labels,
 			CreatedAt:        *createdAt,
+			Decode:           eventstore.EventDecoder(c.factory, c.decoder, v.Kind, v.Body),
 		}
 	}
 	return events, nil

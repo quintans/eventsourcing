@@ -399,19 +399,6 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 			// only collect events that are greater than afterEventID-afterCount
 			if v.ID > afterEventID || k > after {
 				detail := d
-				decode := func() (eventstore.Eventer, error) {
-					e, err := r.factory.New(detail.Kind)
-					if err != nil {
-						return nil, err
-					}
-					err = r.codec.Decode(detail.Body, e)
-					if err != nil {
-						return nil, fmt.Errorf("Unable to decode event %s: %w", detail.Kind, err)
-					}
-					e = common.Dereference(e)
-					return e.(eventstore.Eventer), nil
-				}
-
 				events = append(events, eventstore.Event{
 					ID:               common.NewMessageID(v.ID, uint8(k)),
 					AggregateID:      v.AggregateID,
@@ -422,7 +409,7 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 					IdempotencyKey:   v.IdempotencyKey,
 					Labels:           v.Labels,
 					CreatedAt:        v.CreatedAt,
-					Decode:           decode,
+					Decode:           eventstore.EventDecoder(r.factory, r.codec, detail.Kind, detail.Body),
 				})
 			}
 		}

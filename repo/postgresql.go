@@ -364,19 +364,6 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 			return nil, fmt.Errorf("Unable to unmarshal labels to map: %w", err)
 		}
 
-		decode := func() (eventstore.Eventer, error) {
-			e, err := r.factory.New(pg.Kind)
-			if err != nil {
-				return nil, err
-			}
-			err = r.codec.Decode(pg.Body, e)
-			if err != nil {
-				return nil, fmt.Errorf("Unable to decode event %s: %w", pg.Kind, err)
-			}
-			e = common.Dereference(e)
-			return e.(eventstore.Eventer), nil
-		}
-
 		events = append(events, eventstore.Event{
 			ID:               pg.ID,
 			AggregateID:      pg.AggregateID,
@@ -386,7 +373,7 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 			Body:             pg.Body,
 			Labels:           labels,
 			CreatedAt:        pg.CreatedAt,
-			Decode:           decode,
+			Decode:           eventstore.EventDecoder(r.factory, r.codec, pg.Kind, pg.Body),
 		})
 	}
 	return events, nil
