@@ -44,22 +44,39 @@ type PgSnapshot struct {
 
 var _ eventstore.EsRepository = (*PgEsRepository)(nil)
 
-type PgEsRepository struct {
-	db      *sqlx.DB
-	factory eventstore.Factory
-	codec   eventstore.Codec
+type PgOption func(*PgEsRepository)
+
+func PgCodecOption(codec eventstore.Codec) PgOption {
+	return func(r *PgEsRepository) {
+		r.codec = codec
+	}
 }
 
-func NewPgEsRepository(dburl string, factory eventstore.Factory) (*PgEsRepository, error) {
+type PgProjectorFactory func(*sql.Tx) Projector
+
+func PgProjectorFactoryOption(fn PgProjectorFactory) PgOption {
+	return func(r *PgEsRepository) {
+		r.projectorFactory = fn
+	}
+}
+
+type PgEsRepository struct {
+	db               *sqlx.DB
+	factory          eventstore.Factory
+	codec            eventstore.Codec
+	projectorFactory PgProjectorFactory
+}
+
+func NewPgEsRepository(dburl string, factory eventstore.Factory, options ...PgOption) (*PgEsRepository, error) {
 	db, err := sql.Open("postgres", dburl)
 	if err != nil {
 		return nil, err
 	}
-	return NewPgEsRepositoryDB(db, factory)
+	return NewPgEsRepositoryDB(db, factory, options...)
 }
 
 // NewPgEsRepositoryDB creates a new instance of PgEsRepository
-func NewPgEsRepositoryDB(db *sql.DB, factory eventstore.Factory) (*PgEsRepository, error) {
+func NewPgEsRepositoryDB(db *sql.DB, factory eventstore.Factory, options ...PgOption) (*PgEsRepository, error) {
 	dbx := sqlx.NewDb(db, "postgres")
 	r := &PgEsRepository{
 		db:      dbx,
@@ -67,11 +84,11 @@ func NewPgEsRepositoryDB(db *sql.DB, factory eventstore.Factory) (*PgEsRepositor
 		codec:   eventstore.JsonCodec{},
 	}
 
-	return r, nil
-}
+	for _, o := range options {
+		o(r)
+	}
 
-func (r *PgEsRepository) SetCodec(codec eventstore.Codec) {
-	r.codec = codec
+	return r, nil
 }
 
 func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
@@ -82,7 +99,11 @@ func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRec
 
 	version := eRec.Version
 	var id string
-	err = r.withTx(ctx, func(c context.Context, s *sql.Tx) error {
+	err = r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
+		var projector Projector
+		if r.projectorFactory != nil {
+			projector = r.projectorFactory(tx)
+		}
 		for _, e := range eRec.Details {
 			body, err := r.codec.Encode(e.Body)
 			if err != nil {
@@ -91,7 +112,7 @@ func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRec
 
 			version++
 			id = common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
-			_, err = r.db.ExecContext(ctx,
+			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, body, eRec.IdempotencyKey, labels, eRec.CreatedAt)
@@ -101,6 +122,21 @@ func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRec
 					return eventstore.ErrConcurrentModification
 				}
 				return fmt.Errorf("Unable to insert event: %w", err)
+			}
+
+			if projector != nil {
+				evt := eventstore.Event{
+					ID:               id,
+					AggregateID:      eRec.AggregateID,
+					AggregateVersion: version,
+					AggregateType:    eRec.AggregateType,
+					Kind:             e.Kind,
+					Body:             body,
+					Labels:           eRec.Labels,
+					CreatedAt:        eRec.CreatedAt,
+					Decode:           eventstore.EventDecoder(r.factory, r.codec, e.Kind, body),
+				}
+				projector.Project(evt)
 			}
 		}
 

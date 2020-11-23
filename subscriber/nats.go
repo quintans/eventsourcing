@@ -14,6 +14,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+type NatsSubscriberOption func(*NatsSubscriber)
+
+func MgCodecOption(codec sink.Codec) NatsSubscriberOption {
+	return func(r *NatsSubscriber) {
+		r.codec = codec
+	}
+}
+
 type NatsSubscriber struct {
 	queue        *nats.Conn
 	stream       stan.Conn
@@ -22,7 +30,7 @@ type NatsSubscriber struct {
 	codec        sink.Codec
 }
 
-func NewNatsSubscriber(ctx context.Context, addresses string, stanClusterID, clientID string, topic, managerTopic string) (*NatsSubscriber, error) {
+func NewNatsSubscriber(ctx context.Context, addresses string, stanClusterID, clientID string, topic, managerTopic string, options ...NatsSubscriberOption) (*NatsSubscriber, error) {
 	nc, err := nats.Connect(addresses)
 	if err != nil {
 		return nil, fmt.Errorf("Could not instantiate NATS client: %w", err)
@@ -39,17 +47,19 @@ func NewNatsSubscriber(ctx context.Context, addresses string, stanClusterID, cli
 		stream.Close()
 	}()
 
-	return &NatsSubscriber{
+	s := &NatsSubscriber{
 		queue:        nc,
 		stream:       stream,
 		topic:        topic,
 		managerTopic: managerTopic,
 		codec:        sink.JsonCodec{},
-	}, nil
-}
+	}
 
-func (s *NatsSubscriber) SetCodec(codec sink.Codec) {
-	s.codec = codec
+	for _, o := range options {
+		o(s)
+	}
+
+	return s, nil
 }
 
 func (s NatsSubscriber) GetQueue() *nats.Conn {

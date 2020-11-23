@@ -47,35 +47,53 @@ type MongoSnapshot struct {
 
 var _ eventstore.EsRepository = (*MongoEsRepository)(nil)
 
-type MongoEsRepository struct {
-	dbName  string
-	client  *mongo.Client
-	factory eventstore.Factory
-	codec   eventstore.Codec
+type MgOption func(*MongoEsRepository)
+
+func MgCodecOption(codec eventstore.Codec) MgOption {
+	return func(r *MongoEsRepository) {
+		r.codec = codec
+	}
 }
 
-func NewMongoEsRepository(connString string, dbName string, factory eventstore.Factory) (*MongoEsRepository, error) {
+type MgProjectorFactory func(mongo.SessionContext) Projector
+
+func MgProjectorFactoryOption(fn MgProjectorFactory) MgOption {
+	return func(r *MongoEsRepository) {
+		r.projectorFactory = fn
+	}
+}
+
+type MongoEsRepository struct {
+	dbName           string
+	client           *mongo.Client
+	factory          eventstore.Factory
+	codec            eventstore.Codec
+	projectorFactory MgProjectorFactory
+}
+
+func NewMongoEsRepository(connString string, dbName string, factory eventstore.Factory, opts ...MgOption) (*MongoEsRepository, error) {
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
 		return nil, err
 	}
 
-	return NewMongoEsRepositoryDB(client, dbName, factory), nil
+	return NewMongoEsRepositoryDB(client, dbName, factory, opts...), nil
 }
 
 // NewMongoEsRepositoryDB creates a new instance of MongoEsRepository
-func NewMongoEsRepositoryDB(client *mongo.Client, dbName string, factory eventstore.Factory) *MongoEsRepository {
-	return &MongoEsRepository{
+func NewMongoEsRepositoryDB(client *mongo.Client, dbName string, factory eventstore.Factory, options ...MgOption) *MongoEsRepository {
+	r := &MongoEsRepository{
 		dbName:  dbName,
 		client:  client,
 		factory: factory,
 		codec:   eventstore.JsonCodec{},
 	}
-}
+	for _, o := range options {
+		o(r)
+	}
 
-func (r *MongoEsRepository) SetCodec(codec eventstore.Codec) {
-	r.codec = codec
+	return r
 }
 
 func (r *MongoEsRepository) collection(coll string) *mongo.Collection {
@@ -120,7 +138,35 @@ func (r *MongoEsRepository) SaveEvent(ctx context.Context, eRec eventstore.Event
 		CreatedAt:        eRec.CreatedAt,
 	}
 
-	_, err := r.eventsCollection().InsertOne(ctx, doc)
+	var err error
+	if r.projectorFactory != nil {
+		r.withTx(ctx, func(mCtx mongo.SessionContext) (interface{}, error) {
+			res, err := r.eventsCollection().InsertOne(mCtx, doc)
+			if err != nil {
+				return nil, err
+			}
+
+			projector := r.projectorFactory(mCtx)
+			for _, d := range doc.Details {
+				evt := eventstore.Event{
+					ID:               doc.ID,
+					AggregateID:      doc.AggregateID,
+					AggregateVersion: doc.AggregateVersion,
+					AggregateType:    doc.AggregateType,
+					Kind:             d.Kind,
+					Body:             d.Body,
+					Labels:           doc.Labels,
+					CreatedAt:        doc.CreatedAt,
+					Decode:           eventstore.EventDecoder(r.factory, r.codec, d.Kind, d.Body),
+				}
+				projector.Project(evt)
+			}
+
+			return res, nil
+		})
+	} else {
+		_, err = r.eventsCollection().InsertOne(ctx, doc)
+	}
 	if err != nil {
 		if isMongoDup(err) {
 			return "", 0, eventstore.ErrConcurrentModification
@@ -142,6 +188,21 @@ func isMongoDup(err error) bool {
 		}
 	}
 	return false
+}
+
+func (r *MongoEsRepository) withTx(ctx context.Context, callback func(mongo.SessionContext) (interface{}, error)) (err error) {
+	session, err := r.client.StartSession()
+	if err != nil {
+		return err
+	}
+	defer session.EndSession(ctx)
+
+	_, err = session.WithTransaction(ctx, callback)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *MongoEsRepository) GetSnapshot(ctx context.Context, aggregateID string, aggregate eventstore.Aggregater) error {
@@ -398,18 +459,17 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 		for k, d := range v.Details {
 			// only collect events that are greater than afterEventID-afterCount
 			if v.ID > afterEventID || k > after {
-				detail := d
 				events = append(events, eventstore.Event{
 					ID:               common.NewMessageID(v.ID, uint8(k)),
 					AggregateID:      v.AggregateID,
 					AggregateVersion: v.AggregateVersion,
 					AggregateType:    v.AggregateType,
-					Kind:             detail.Kind,
-					Body:             detail.Body,
+					Kind:             d.Kind,
+					Body:             d.Body,
 					IdempotencyKey:   v.IdempotencyKey,
 					Labels:           v.Labels,
 					CreatedAt:        v.CreatedAt,
-					Decode:           eventstore.EventDecoder(r.factory, r.codec, detail.Kind, detail.Body),
+					Decode:           eventstore.EventDecoder(r.factory, r.codec, d.Kind, d.Body),
 				})
 			}
 		}
