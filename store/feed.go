@@ -14,21 +14,21 @@ type Feeder interface {
 	Feed(ctx context.Context, sink sink.Sinker, filters ...FilterOption) error
 }
 
-type Feed struct {
+type Forwarder struct {
 	feeder  Feeder
 	sinker  sink.Sinker
 	release chan struct{}
 	mu      sync.RWMutex
 }
 
-func New(feeder Feeder, sinker sink.Sinker) *Feed {
-	return &Feed{
+func NewForwarder(feeder Feeder, sinker sink.Sinker) *Forwarder {
+	return &Forwarder{
 		feeder: feeder,
 		sinker: sinker,
 	}
 }
 
-func (f *Feed) OnBoot(ctx context.Context) error {
+func (f *Forwarder) OnBoot(ctx context.Context) error {
 	f.release = make(chan struct{})
 	go func() {
 		defer func() {
@@ -52,14 +52,14 @@ func (f *Feed) OnBoot(ctx context.Context) error {
 	return nil
 }
 
-func (f *Feed) Wait() <-chan struct{} {
+func (f *Forwarder) Wait() <-chan struct{} {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	return f.release
 }
 
-func (f *Feed) Cancel() {}
+func (f *Forwarder) Cancel() {}
 
 func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitions int) (afterEventID string, resumeToken []byte, err error) {
 	// looking for the lowest ID in all partitions
