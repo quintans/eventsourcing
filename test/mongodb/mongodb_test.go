@@ -10,7 +10,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/feed/poller"
 	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/store"
 	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +35,7 @@ func connect() (*mongo.Database, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
+	r := store.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -69,7 +69,7 @@ func TestSaveAndGet(t *testing.T) {
 		},
 	}, opts)
 	require.NoError(t, err)
-	evts := []repo.MongoEvent{}
+	evts := []store.MongoEvent{}
 	err = cursor.All(ctx, &evts)
 	require.NoError(t, err)
 
@@ -94,7 +94,7 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
+	r := store.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -110,7 +110,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r = repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
+	r = store.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	lm := poller.New(r)
 
 	done := make(chan struct{})
@@ -148,7 +148,7 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
+	r := store.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -164,7 +164,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
+	repository := store.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	p := poller.New(repository)
 
 	done := make(chan struct{})
@@ -180,7 +180,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 			}
 		}
 		return nil
-	}, repo.WithAggregateTypes("Account"))
+	}, store.WithAggregateTypes("Account"))
 
 	select {
 	case <-done:
@@ -197,7 +197,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
+	r := store.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -222,7 +222,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
+	repository := store.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	p := poller.New(repository)
 
 	done := make(chan struct{})
@@ -238,7 +238,7 @@ func TestListenerWithLabels(t *testing.T) {
 			}
 		}
 		return nil
-	}, repo.WithLabel("geo", "EU"))
+	}, store.WithLabel("geo", "EU"))
 
 	select {
 	case <-done:
@@ -255,7 +255,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r := repo.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
+	r := store.NewMongoEsRepositoryDB(client, dbName, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 3)
 
 	id := uuid.New().String()
@@ -284,7 +284,7 @@ func TestForget(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	evts := []repo.MongoEvent{}
+	evts := []store.MongoEvent{}
 	err = cursor.All(ctx, &evts)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -307,7 +307,7 @@ func TestForget(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	snaps := []repo.MongoSnapshot{}
+	snaps := []store.MongoSnapshot{}
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
@@ -346,7 +346,7 @@ func TestForget(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	evts = []repo.MongoEvent{}
+	evts = []store.MongoEvent{}
 	err = cursor.All(ctx, &evts)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -369,7 +369,7 @@ func TestForget(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	snaps = []repo.MongoSnapshot{}
+	snaps = []store.MongoSnapshot{}
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {

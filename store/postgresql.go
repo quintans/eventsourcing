@@ -1,4 +1,4 @@
-package repo
+package store
 
 import (
 	"bytes"
@@ -314,7 +314,7 @@ func (r *PgEsRepository) GetLastEventID(ctx context.Context, trailingLag time.Du
 		args = append(args, safetyMargin)
 		query.WriteString("created_at <= $1 ")
 	}
-	args = writeFilter(filter, &query, args)
+	args = addFilter(filter, &query, args)
 	query.WriteString(" ORDER BY id DESC LIMIT 1")
 	var eventID string
 	if err := r.db.GetContext(ctx, &eventID, query.String(), args...); err != nil {
@@ -334,7 +334,7 @@ func (r *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, bat
 		args = append(args, safetyMargin)
 		query.WriteString("AND created_at <= $2 ")
 	}
-	args = writeFilter(filter, &query, args)
+	args = addFilter(filter, &query, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -348,7 +348,7 @@ func (r *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, bat
 	return rows, nil
 }
 
-func writeFilter(filter Filter, query *bytes.Buffer, args []interface{}) []interface{} {
+func addFilter(filter Filter, query *bytes.Buffer, args []interface{}) []interface{} {
 	if len(filter.AggregateTypes) > 0 {
 		query.WriteString(" AND (")
 		for k, v := range filter.AggregateTypes {

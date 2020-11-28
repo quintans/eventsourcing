@@ -108,14 +108,14 @@ var _ EventStorer = (*EventStore)(nil)
 // NewEventStore creates a new instance of ESPostgreSQL
 func NewEventStore(repo EsRepository, snapshotThreshold uint32) EventStore {
 	return EventStore{
-		repo:              repo,
+		store:             repo,
 		snapshotThreshold: snapshotThreshold,
 	}
 }
 
 // EventSore -
 type EventStore struct {
-	repo              EsRepository
+	store             EsRepository
 	snapshotThreshold uint32
 	upcaster          Upcaster
 }
@@ -125,16 +125,16 @@ func (es *EventStore) SetUpcaster(upcaster Upcaster) {
 }
 
 func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
-	err := es.repo.GetSnapshot(ctx, aggregateID, aggregate)
+	err := es.store.GetSnapshot(ctx, aggregateID, aggregate)
 	if err != nil {
 		return err
 	}
 
 	var events []Event
 	if aggregate.GetID() != "" {
-		events, err = es.repo.GetAggregateEvents(ctx, aggregateID, int(aggregate.GetVersion()))
+		events, err = es.store.GetAggregateEvents(ctx, aggregateID, int(aggregate.GetVersion()))
 	} else {
-		events, err = es.repo.GetAggregateEvents(ctx, aggregateID, -1)
+		events, err = es.store.GetAggregateEvents(ctx, aggregateID, -1)
 	}
 	if err != nil {
 		return err
@@ -195,7 +195,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 		Details:        details,
 	}
 
-	id, lastVersion, err := es.repo.SaveEvent(ctx, rec)
+	id, lastVersion, err := es.store.SaveEvent(ctx, rec)
 	if err != nil {
 		return err
 	}
@@ -208,7 +208,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 		mod := oldCounter % es.snapshotThreshold
 		delta := newCounter - (oldCounter - mod)
 		if delta >= es.snapshotThreshold {
-			err := es.repo.SaveSnapshot(ctx, aggregate, id)
+			err := es.store.SaveSnapshot(ctx, aggregate, id)
 			if err != nil {
 				return err
 			}
@@ -220,7 +220,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 }
 
 func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
-	return es.repo.HasIdempotencyKey(ctx, aggregateID, idempotencyKey)
+	return es.store.HasIdempotencyKey(ctx, aggregateID, idempotencyKey)
 }
 
 type ForgetRequest struct {
@@ -229,5 +229,5 @@ type ForgetRequest struct {
 }
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
-	return es.repo.Forget(ctx, request, forget)
+	return es.store.Forget(ctx, request, forget)
 }

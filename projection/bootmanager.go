@@ -10,7 +10,7 @@ import (
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/store"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -160,7 +160,7 @@ func (m *BootableManager) boot(ctx context.Context) error {
 		log.Printf("Booting %s from '%s'", m.projection.GetName(), prjEventID)
 
 		replayer := player.New(stage.Repository)
-		filter := repo.WithAggregateTypes(aggregateTypes...)
+		filter := store.WithAggregateTypes(aggregateTypes...)
 		lastEventID, err := replayer.Replay(ctx, handler, prjEventID, filter)
 		if err != nil {
 			return fmt.Errorf("Could not replay all events (first part): %w", err)
@@ -181,7 +181,7 @@ func (m *BootableManager) boot(ctx context.Context) error {
 		}
 
 		// consume potential missed events events between the switch to the consumer
-		events, err := stage.Repository.GetEvents(ctx, lastEventIDs[k], 0, time.Duration(0), repo.Filter{
+		events, err := stage.Repository.GetEvents(ctx, lastEventIDs[k], 0, time.Duration(0), store.Filter{
 			AggregateTypes: stage.AggregateTypes,
 		})
 		if err != nil {

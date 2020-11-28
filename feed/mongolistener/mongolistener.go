@@ -7,8 +7,8 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/feed"
-	"github.com/quintans/eventstore/repo"
 	"github.com/quintans/eventstore/sink"
+	"github.com/quintans/eventstore/store"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -50,10 +50,10 @@ func New(connString string, dbName string, opts ...Option) (MongoListener, error
 }
 
 type ChangeEvent struct {
-	FullDocument repo.MongoEvent `bson:"fullDocument,omitempty"`
+	FullDocument store.MongoEvent `bson:"fullDocument,omitempty"`
 }
 
-func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...repo.FilterOption) error {
+func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
 	_, resumeToken, err := feed.LastEventIDInSink(ctx, sinker, m.partitions)
 	if err != nil {
 		return err

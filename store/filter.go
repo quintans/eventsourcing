@@ -1,4 +1,4 @@
-package repo
+package store
 
 type Filter struct {
 	AggregateTypes []string

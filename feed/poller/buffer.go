@@ -8,7 +8,7 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/store"
 )
 
 // Buffer manager a list of events.
@@ -43,7 +43,7 @@ func NewBuffer(p Poller) *Buffer {
 	return b
 }
 
-func (n *Buffer) Start(ctx context.Context, pollInterval time.Duration, startAt string, filters ...repo.FilterOption) error {
+func (n *Buffer) Start(ctx context.Context, pollInterval time.Duration, startAt string, filters ...store.FilterOption) error {
 	return n.poller.Poll(ctx, player.StartAt(startAt), func(ctx2 context.Context, e eventstore.Event) error {
 		defer func() {
 			if recover() != nil {

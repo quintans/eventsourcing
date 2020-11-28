@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/feed/mongolistener"
-	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/store"
 	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,7 +57,7 @@ func (s *MockSink) Events() []eventstore.Event {
 }
 
 func TestMongoListenere(t *testing.T) {
-	repository, err := repo.NewMongoEsRepository(dbURL, dbName, test.StructFactory{})
+	repository, err := store.NewMongoEsRepository(dbURL, dbName, test.StructFactory{})
 	if err != nil {
 		log.Fatalf("Error instantiating event store: %v", err)
 	}

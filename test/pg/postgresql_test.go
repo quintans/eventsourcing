@@ -14,7 +14,7 @@ import (
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/feed/poller"
 	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/store"
 	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +33,7 @@ func connect(dburl string) (*sqlx.DB, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	r, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -58,7 +58,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
-	evts := []repo.PgEvent{}
+	evts := []store.PgEvent{}
 	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	require.Equal(t, 4, len(evts))
@@ -82,7 +82,7 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	r, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -99,7 +99,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	repository, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	lm := poller.New(repository)
 
@@ -138,7 +138,7 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	r, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -155,7 +155,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	repository, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	p := poller.New(repository)
 
@@ -172,7 +172,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 			}
 		}
 		return nil
-	}, repo.WithAggregateTypes("Account"))
+	}, store.WithAggregateTypes("Account"))
 
 	select {
 	case <-done:
@@ -189,7 +189,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	r, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -215,7 +215,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	repository, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	p := poller.New(repository)
 
@@ -232,7 +232,7 @@ func TestListenerWithLabels(t *testing.T) {
 			}
 		}
 		return nil
-	}, repo.WithLabel("geo", "EU"))
+	}, store.WithLabel("geo", "EU"))
 
 	select {
 	case <-done:
@@ -249,7 +249,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r, err := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	r, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3)
 
@@ -337,7 +337,7 @@ func TestForget(t *testing.T) {
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
-	r, _ := repo.NewPgEsRepository(dbURL, test.StructFactory{})
+	r, _ := store.NewPgEsRepository(dbURL, test.StructFactory{})
 	es := eventstore.NewEventStore(r, 50)
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()

@@ -15,8 +15,8 @@ import (
 	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/feed"
 	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/repo"
 	"github.com/quintans/eventstore/sink"
+	"github.com/quintans/eventstore/store"
 )
 
 type PgEvent struct {
@@ -109,7 +109,7 @@ func New(dbUrl string, repository player.Repository, channel string, options ...
 
 // Feed will forward messages to the sinker
 // important: sinker.LastMessage should implement lag
-func (p PgListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...repo.FilterOption) error {
+func (p PgListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
 	afterEventID, _, err := feed.LastEventIDInSink(ctx, sinker, p.partitions)
 	if err != nil {
 		return err
@@ -119,7 +119,7 @@ func (p PgListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...rep
 	return p.forward(ctx, afterEventID, sinker.Sink, filters...)
 }
 
-func (p PgListener) forward(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...repo.FilterOption) error {
+func (p PgListener) forward(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...store.FilterOption) error {
 	lastID := afterEventID
 	for {
 		conn, err := p.pool.Acquire(ctx)
@@ -145,7 +145,7 @@ func (p PgListener) forward(ctx context.Context, afterEventID string, handler pl
 		if err != nil {
 			return fmt.Errorf("Error replaying events: %w", err)
 		}
-		filter := repo.Filter{}
+		filter := store.Filter{}
 		for _, f := range filters {
 			f(&filter)
 		}

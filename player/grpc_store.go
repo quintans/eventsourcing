@@ -10,7 +10,7 @@ import (
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/quintans/eventstore"
 	pb "github.com/quintans/eventstore/api/proto"
-	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/store"
 	"google.golang.org/grpc"
 )
 
@@ -32,7 +32,7 @@ func (c *GrpcRepository) SetDecoder(decoder eventstore.Decoder) {
 	c.decoder = decoder
 }
 
-func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter repo.Filter) (string, error) {
+func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (string, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return "", err
@@ -52,7 +52,7 @@ func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Dur
 	return r.EventId, nil
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter repo.Filter) ([]eventstore.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 	return events, nil
 }
 
-func filterToPbFilter(filter repo.Filter) *pb.Filter {
+func filterToPbFilter(filter store.Filter) *pb.Filter {
 	types := make([]string, len(filter.AggregateTypes))
 	for k, v := range filter.AggregateTypes {
 		types[k] = v
