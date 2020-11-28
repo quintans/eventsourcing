@@ -1,4 +1,4 @@
-package feed
+package store
 
 import (
 	"context"
@@ -7,12 +7,11 @@ import (
 
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/sink"
-	"github.com/quintans/eventstore/store"
 	log "github.com/sirupsen/logrus"
 )
 
 type Feeder interface {
-	Feed(ctx context.Context, sink sink.Sinker, filters ...store.FilterOption) error
+	Feed(ctx context.Context, sink sink.Sinker, filters ...FilterOption) error
 }
 
 type Feed struct {

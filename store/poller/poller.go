@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/quintans/eventstore/feed"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
@@ -117,7 +116,7 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 // Feed forwars the handling to a sink.
 // eg: a message queue
 func (p Poller) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
-	afterEventID, _, err := feed.LastEventIDInSink(ctx, sinker, p.partitions)
+	afterEventID, _, err := store.LastEventIDInSink(ctx, sinker, p.partitions)
 	if err != nil {
 		return err
 	}

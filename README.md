@@ -16,6 +16,16 @@ I went a bit further and also implemented an orchestration layer for the event c
 
 I first talk about the several challenges and then about the solutions for those challenges.
 
+## Design
+
+This libraries implements the following pipeline:
+
+A service **writes** to a **database** (the event store), a **forwarder** service listens to inserts into the database and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary views.
+
+![Design](eventstore-design.png)
+
+## Rationale
+
 ### Event Bus
 
 The main challenge is, how to store events into a database and then propagate it to a event bus without losing any event.

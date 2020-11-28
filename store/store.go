@@ -1,5 +1,7 @@
 package store
 
+import "github.com/quintans/eventstore"
+
 type Filter struct {
 	AggregateTypes []string
 	// Labels filters on top of labels. Every key of the map is ANDed with every OR of the values
@@ -53,4 +55,8 @@ func WithLabels(labels Labels) FilterOption {
 			idx++
 		}
 	}
+}
+
+type Projector interface {
+	Project(eventstore.Event)
 }

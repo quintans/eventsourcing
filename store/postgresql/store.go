@@ -1,4 +1,4 @@
-package store
+package postgresql
 
 import (
 	"bytes"
@@ -14,14 +14,15 @@ import (
 	"github.com/lib/pq"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/store"
 )
 
 const (
 	pgUniqueViolation = "23505"
 )
 
-// PgEvent is the event data stored in the database
-type PgEvent struct {
+// Event is the event data stored in the database
+type Event struct {
 	ID               string    `db:"id"`
 	AggregateID      string    `db:"aggregate_id"`
 	AggregateVersion uint32    `db:"aggregate_version"`
@@ -33,7 +34,7 @@ type PgEvent struct {
 	CreatedAt        time.Time `db:"created_at"`
 }
 
-type PgSnapshot struct {
+type Snapshot struct {
 	ID               string    `db:"id,omitempty"`
 	AggregateID      string    `db:"aggregate_id,omitempty"`
 	AggregateVersion uint32    `db:"aggregate_version,omitempty"`
@@ -42,43 +43,43 @@ type PgSnapshot struct {
 	CreatedAt        time.Time `db:"created_at,omitempty"`
 }
 
-var _ eventstore.EsRepository = (*PgEsRepository)(nil)
+var _ eventstore.EsRepository = (*EsRepository)(nil)
 
-type PgOption func(*PgEsRepository)
+type StoreOption func(*EsRepository)
 
-func PgCodecOption(codec eventstore.Codec) PgOption {
-	return func(r *PgEsRepository) {
+func WithCodec(codec eventstore.Codec) StoreOption {
+	return func(r *EsRepository) {
 		r.codec = codec
 	}
 }
 
-type PgProjectorFactory func(*sql.Tx) Projector
+type ProjectorFactory func(*sql.Tx) store.Projector
 
-func PgProjectorFactoryOption(fn PgProjectorFactory) PgOption {
-	return func(r *PgEsRepository) {
+func ProjectorFactoryOption(fn ProjectorFactory) StoreOption {
+	return func(r *EsRepository) {
 		r.projectorFactory = fn
 	}
 }
 
-type PgEsRepository struct {
+type EsRepository struct {
 	db               *sqlx.DB
 	factory          eventstore.Factory
 	codec            eventstore.Codec
-	projectorFactory PgProjectorFactory
+	projectorFactory ProjectorFactory
 }
 
-func NewPgEsRepository(dburl string, factory eventstore.Factory, options ...PgOption) (*PgEsRepository, error) {
+func NewStore(dburl string, factory eventstore.Factory, options ...StoreOption) (*EsRepository, error) {
 	db, err := sql.Open("postgres", dburl)
 	if err != nil {
 		return nil, err
 	}
-	return NewPgEsRepositoryDB(db, factory, options...)
+	return NewStoreDB(db, factory, options...)
 }
 
-// NewPgEsRepositoryDB creates a new instance of PgEsRepository
-func NewPgEsRepositoryDB(db *sql.DB, factory eventstore.Factory, options ...PgOption) (*PgEsRepository, error) {
+// NewStoreDB creates a new instance of PgEsRepository
+func NewStoreDB(db *sql.DB, factory eventstore.Factory, options ...StoreOption) (*EsRepository, error) {
 	dbx := sqlx.NewDb(db, "postgres")
-	r := &PgEsRepository{
+	r := &EsRepository{
 		db:      dbx,
 		factory: factory,
 		codec:   eventstore.JsonCodec{},
@@ -91,7 +92,7 @@ func NewPgEsRepositoryDB(db *sql.DB, factory eventstore.Factory, options ...PgOp
 	return r, nil
 }
 
-func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
+func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
 	labels, err := json.Marshal(eRec.Labels)
 	if err != nil {
 		return "", 0, err
@@ -100,7 +101,7 @@ func (r *PgEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRec
 	version := eRec.Version
 	var id string
 	err = r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
-		var projector Projector
+		var projector store.Projector
 		if r.projectorFactory != nil {
 			projector = r.projectorFactory(tx)
 		}
@@ -158,8 +159,8 @@ func isPgDup(err error) bool {
 	return false
 }
 
-func (r *PgEsRepository) GetSnapshot(ctx context.Context, aggregateID string, aggregate eventstore.Aggregater) error {
-	snap := PgSnapshot{}
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string, aggregate eventstore.Aggregater) error {
+	snap := Snapshot{}
 	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
@@ -169,13 +170,13 @@ func (r *PgEsRepository) GetSnapshot(ctx context.Context, aggregateID string, ag
 	return r.codec.Decode(snap.Body, aggregate)
 }
 
-func (r *PgEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
+func (r *EsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
 	body, err := r.codec.Encode(aggregate)
 	if err != nil {
 		return fmt.Errorf("Failed to create serialize snapshot: %w", err)
 	}
 
-	snap := &PgSnapshot{
+	snap := &Snapshot{
 		ID:               eventID,
 		AggregateID:      aggregate.GetID(),
 		AggregateVersion: aggregate.GetVersion(),
@@ -191,7 +192,7 @@ func (r *PgEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.
 	return err
 }
 
-func (r *PgEsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
+func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = $1")
 	args := []interface{}{aggregateID}
@@ -212,7 +213,7 @@ func (r *PgEsRepository) GetAggregateEvents(ctx context.Context, aggregateID str
 	return events, nil
 }
 
-func (r *PgEsRepository) withTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) (err error) {
+func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) (err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -233,7 +234,7 @@ func (r *PgEsRepository) withTx(ctx context.Context, fn func(context.Context, *s
 	return tx.Commit()
 }
 
-func (r *PgEsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
+func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
 	var exists int
 	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=$1 AND aggregate_type=$2) AS "EXISTS"`, idempotencyKey, aggregateID)
 	if err != nil {
@@ -242,7 +243,7 @@ func (r *PgEsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, ide
 	return exists != 0, nil
 }
 
-func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(interface{}) interface{}) error {
+func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(interface{}) interface{}) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
@@ -273,7 +274,7 @@ func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRe
 	}
 
 	// forget snapshots
-	snaps := []PgSnapshot{}
+	snaps := []Snapshot{}
 	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1", request.AggregateID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
@@ -305,7 +306,7 @@ func (r *PgEsRepository) Forget(ctx context.Context, request eventstore.ForgetRe
 	return nil
 }
 
-func (r *PgEsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter Filter) (string, error) {
+func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (string, error) {
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events ")
 	args := []interface{}{}
@@ -325,7 +326,7 @@ func (r *PgEsRepository) GetLastEventID(ctx context.Context, trailingLag time.Du
 	return eventID, nil
 }
 
-func (r *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, trailingLag time.Duration, filter Filter) ([]eventstore.Event, error) {
+func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error) {
 	args := []interface{}{afterEventID}
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > $1 ")
@@ -348,7 +349,7 @@ func (r *PgEsRepository) GetEvents(ctx context.Context, afterEventID string, bat
 	return rows, nil
 }
 
-func addFilter(filter Filter, query *bytes.Buffer, args []interface{}) []interface{} {
+func addFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
 	if len(filter.AggregateTypes) > 0 {
 		query.WriteString(" AND (")
 		for k, v := range filter.AggregateTypes {
@@ -379,7 +380,7 @@ func escape(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
-func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEventID string, args ...interface{}) ([]eventstore.Event, error) {
+func (r *EsRepository) queryEvents(ctx context.Context, query string, afterEventID string, args ...interface{}) ([]eventstore.Event, error) {
 	rows, err := r.db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -389,7 +390,7 @@ func (r *PgEsRepository) queryEvents(ctx context.Context, query string, afterEve
 	}
 	events := []eventstore.Event{}
 	for rows.Next() {
-		pg := PgEvent{}
+		pg := Event{}
 		err := rows.StructScan(&pg)
 		if err != nil {
 			return nil, fmt.Errorf("Unable to scan to struct: %w", err)

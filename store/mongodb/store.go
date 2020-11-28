@@ -1,4 +1,4 @@
-package store
+package mongodb
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/store"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -19,24 +20,24 @@ const (
 	snapshotCollection   = "snapshots"
 )
 
-// MongoEvent is the event data stored in the database
-type MongoEvent struct {
-	ID               string             `bson:"_id,omitempty"`
-	AggregateID      string             `bson:"aggregate_id,omitempty"`
-	AggregateVersion uint32             `bson:"aggregate_version,omitempty"`
-	AggregateType    string             `bson:"aggregate_type,omitempty"`
-	Details          []MongoEventDetail `bson:"details,omitempty"`
-	IdempotencyKey   string             `bson:"idempotency_key,omitempty"`
-	Labels           bson.M             `bson:"labels,omitempty"`
-	CreatedAt        time.Time          `bson:"created_at,omitempty"`
+// Event is the event data stored in the database
+type Event struct {
+	ID               string        `bson:"_id,omitempty"`
+	AggregateID      string        `bson:"aggregate_id,omitempty"`
+	AggregateVersion uint32        `bson:"aggregate_version,omitempty"`
+	AggregateType    string        `bson:"aggregate_type,omitempty"`
+	Details          []EventDetail `bson:"details,omitempty"`
+	IdempotencyKey   string        `bson:"idempotency_key,omitempty"`
+	Labels           bson.M        `bson:"labels,omitempty"`
+	CreatedAt        time.Time     `bson:"created_at,omitempty"`
 }
 
-type MongoEventDetail struct {
+type EventDetail struct {
 	Kind string `bson:"kind,omitempty"`
 	Body []byte `bson:"body,omitempty"`
 }
 
-type MongoSnapshot struct {
+type Snapshot struct {
 	ID               string    `bson:"_id,omitempty"`
 	AggregateID      string    `bson:"aggregate_id,omitempty"`
 	AggregateVersion uint32    `bson:"aggregate_version,omitempty"`
@@ -45,45 +46,45 @@ type MongoSnapshot struct {
 	CreatedAt        time.Time `bson:"created_at,omitempty"`
 }
 
-var _ eventstore.EsRepository = (*MongoEsRepository)(nil)
+var _ eventstore.EsRepository = (*EsRepository)(nil)
 
-type MgOption func(*MongoEsRepository)
+type StoreOption func(*EsRepository)
 
-func MgCodecOption(codec eventstore.Codec) MgOption {
-	return func(r *MongoEsRepository) {
+func WithCodec(codec eventstore.Codec) StoreOption {
+	return func(r *EsRepository) {
 		r.codec = codec
 	}
 }
 
-type MgProjectorFactory func(mongo.SessionContext) Projector
+type ProjectorFactory func(mongo.SessionContext) store.Projector
 
-func MgProjectorFactoryOption(fn MgProjectorFactory) MgOption {
-	return func(r *MongoEsRepository) {
+func WithProjectorFactory(fn ProjectorFactory) StoreOption {
+	return func(r *EsRepository) {
 		r.projectorFactory = fn
 	}
 }
 
-type MongoEsRepository struct {
+type EsRepository struct {
 	dbName           string
 	client           *mongo.Client
 	factory          eventstore.Factory
 	codec            eventstore.Codec
-	projectorFactory MgProjectorFactory
+	projectorFactory ProjectorFactory
 }
 
-func NewMongoEsRepository(connString string, dbName string, factory eventstore.Factory, opts ...MgOption) (*MongoEsRepository, error) {
+func NewStore(connString string, dbName string, factory eventstore.Factory, opts ...StoreOption) (*EsRepository, error) {
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
 		return nil, err
 	}
 
-	return NewMongoEsRepositoryDB(client, dbName, factory, opts...), nil
+	return NewStoreDB(client, dbName, factory, opts...), nil
 }
 
 // NewMongoEsRepositoryDB creates a new instance of MongoEsRepository
-func NewMongoEsRepositoryDB(client *mongo.Client, dbName string, factory eventstore.Factory, options ...MgOption) *MongoEsRepository {
-	r := &MongoEsRepository{
+func NewStoreDB(client *mongo.Client, dbName string, factory eventstore.Factory, options ...StoreOption) *EsRepository {
+	r := &EsRepository{
 		dbName:  dbName,
 		client:  client,
 		factory: factory,
@@ -96,30 +97,30 @@ func NewMongoEsRepositoryDB(client *mongo.Client, dbName string, factory eventst
 	return r
 }
 
-func (r *MongoEsRepository) collection(coll string) *mongo.Collection {
+func (r *EsRepository) collection(coll string) *mongo.Collection {
 	return r.client.Database(r.dbName).Collection(coll)
 }
 
-func (r *MongoEsRepository) eventsCollection() *mongo.Collection {
+func (r *EsRepository) eventsCollection() *mongo.Collection {
 	return r.collection(eventsCollection)
 }
 
-func (r *MongoEsRepository) snapshotCollection() *mongo.Collection {
+func (r *EsRepository) snapshotCollection() *mongo.Collection {
 	return r.collection(snapshotCollection)
 }
 
-func (r *MongoEsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
+func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
 	if len(eRec.Details) == 0 {
 		return "", 0, errors.New("No events to be saved")
 	}
-	details := make([]MongoEventDetail, 0, len(eRec.Details))
+	details := make([]EventDetail, 0, len(eRec.Details))
 	for _, e := range eRec.Details {
 		body, err := r.codec.Encode(e.Body)
 		if err != nil {
 			return "", 0, err
 		}
 
-		details = append(details, MongoEventDetail{
+		details = append(details, EventDetail{
 			Kind: e.Kind,
 			Body: body,
 		})
@@ -127,7 +128,7 @@ func (r *MongoEsRepository) SaveEvent(ctx context.Context, eRec eventstore.Event
 
 	version := eRec.Version + 1
 	id := common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
-	doc := MongoEvent{
+	doc := Event{
 		ID:               id,
 		AggregateID:      eRec.AggregateID,
 		AggregateType:    eRec.AggregateType,
@@ -190,7 +191,7 @@ func isMongoDup(err error) bool {
 	return false
 }
 
-func (r *MongoEsRepository) withTx(ctx context.Context, callback func(mongo.SessionContext) (interface{}, error)) (err error) {
+func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionContext) (interface{}, error)) (err error) {
 	session, err := r.client.StartSession()
 	if err != nil {
 		return err
@@ -205,8 +206,8 @@ func (r *MongoEsRepository) withTx(ctx context.Context, callback func(mongo.Sess
 	return nil
 }
 
-func (r *MongoEsRepository) GetSnapshot(ctx context.Context, aggregateID string, aggregate eventstore.Aggregater) error {
-	snap := MongoSnapshot{}
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string, aggregate eventstore.Aggregater) error {
+	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
 	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID}}, opts).Decode(&snap); err != nil {
@@ -218,12 +219,12 @@ func (r *MongoEsRepository) GetSnapshot(ctx context.Context, aggregateID string,
 	return r.codec.Decode(snap.Body, aggregate)
 }
 
-func (r *MongoEsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
+func (r *EsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
 	body, err := r.codec.Encode(aggregate)
 	if err != nil {
 		return fmt.Errorf("Failed to create serialize snapshot: %w", err)
 	}
-	snap := MongoSnapshot{
+	snap := Snapshot{
 		ID:               eventID,
 		AggregateID:      aggregate.GetID(),
 		AggregateVersion: aggregate.GetVersion(),
@@ -237,7 +238,7 @@ func (r *MongoEsRepository) SaveSnapshot(ctx context.Context, aggregate eventsto
 	return err
 }
 
-func (r *MongoEsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
+func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
 	filter := bson.D{
 		{"aggregate_id", bson.D{{"$eq", aggregateID}}},
 	}
@@ -259,10 +260,10 @@ func (r *MongoEsRepository) GetAggregateEvents(ctx context.Context, aggregateID 
 	return events, nil
 }
 
-func (r *MongoEsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
+func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
 	filter := bson.D{{"idempotency_key", idempotencyKey}, {"aggregate_type", aggregateID}}
 	opts := options.FindOne().SetProjection(bson.D{{"_id", 1}})
-	evt := MongoEvent{}
+	evt := Event{}
 	if err := r.eventsCollection().FindOne(ctx, filter, opts).Decode(&evt); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return false, nil
@@ -273,7 +274,7 @@ func (r *MongoEsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, 
 	return true, nil
 }
 
-func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(interface{}) interface{}) error {
+func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(interface{}) interface{}) error {
 	// FIXME use a transaction.
 	// FIXME in the end should also add a new event to the event store.
 
@@ -286,7 +287,7 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 	if err != nil && err != mongo.ErrNoDocuments {
 		return err
 	}
-	events := []MongoEvent{}
+	events := []Event{}
 	if err = cursor.All(ctx, &events); err != nil {
 		return fmt.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
@@ -328,7 +329,7 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 	if err != nil && err != mongo.ErrNoDocuments {
 		return err
 	}
-	snaps := []MongoSnapshot{}
+	snaps := []Snapshot{}
 	if err = cursor.All(ctx, &snaps); err != nil {
 		return fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", request.AggregateID, err)
 	}
@@ -364,7 +365,7 @@ func (r *MongoEsRepository) Forget(ctx context.Context, request eventstore.Forge
 	return nil
 }
 
-func (r *MongoEsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter Filter) (string, error) {
+func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (string, error) {
 	flt := bson.D{}
 
 	if trailingLag != time.Duration(0) {
@@ -376,7 +377,7 @@ func (r *MongoEsRepository) GetLastEventID(ctx context.Context, trailingLag time
 	opts := options.FindOne().
 		SetSort(bson.D{{"_id", -1}}).
 		SetProjection(bson.D{{"_id", 1}})
-	evt := MongoEvent{}
+	evt := Event{}
 	if err := r.eventsCollection().FindOne(ctx, flt, opts).Decode(&evt); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return "", nil
@@ -387,7 +388,7 @@ func (r *MongoEsRepository) GetLastEventID(ctx context.Context, trailingLag time
 	return evt.ID, nil
 }
 
-func (r *MongoEsRepository) GetEvents(ctx context.Context, afterMessageID string, batchSize int, trailingLag time.Duration, filter Filter) ([]eventstore.Event, error) {
+func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error) {
 	eventID, count, err := common.SplitMessageID(afterMessageID)
 	if err != nil {
 		return nil, err
@@ -418,7 +419,7 @@ func (r *MongoEsRepository) GetEvents(ctx context.Context, afterMessageID string
 	return rows, nil
 }
 
-func writeMongoFilter(filter Filter, flt bson.D) bson.D {
+func writeMongoFilter(filter store.Filter, flt bson.D) bson.D {
 	if len(filter.AggregateTypes) > 0 {
 		flt = append(flt, bson.E{"aggregate_type", bson.D{{"$in", filter.AggregateTypes}}})
 	}
@@ -439,7 +440,7 @@ func writeMongoFilter(filter Filter, flt bson.D) bson.D {
 	return flt
 }
 
-func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, error) {
+func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, error) {
 	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -448,7 +449,7 @@ func (r *MongoEsRepository) queryEvents(ctx context.Context, filter bson.D, opts
 		return nil, err
 	}
 
-	evts := []MongoEvent{}
+	evts := []Event{}
 	if err = cursor.All(ctx, &evts); err != nil {
 		return nil, err
 	}

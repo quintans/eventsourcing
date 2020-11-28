@@ -12,8 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/feed/pglistener"
-	"github.com/quintans/eventstore/store"
+	"github.com/quintans/eventstore/store/postgresql"
 	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,7 +50,7 @@ func (s *MockSink) Events() []eventstore.Event {
 }
 
 func TestPgListenere(t *testing.T) {
-	repository, err := store.NewPgEsRepository(dbURL, test.StructFactory{})
+	repository, err := postgresql.NewStore(dbURL, test.StructFactory{})
 	if err != nil {
 		log.Fatalf("Error instantiating event store: %v", err)
 	}
@@ -59,7 +58,7 @@ func TestPgListenere(t *testing.T) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	listener, err := pglistener.New(dbURL, repository, "events_channel")
+	listener, err := postgresql.NewFeed(dbURL, repository, "events_channel")
 
 	s := &MockSink{
 		events: []eventstore.Event{},

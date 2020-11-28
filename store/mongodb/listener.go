@@ -1,4 +1,4 @@
-package mongolistener
+package mongodb
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/feed"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,30 +13,30 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type MongoListener struct {
+type Feed struct {
 	dbName     string
 	client     *mongo.Client
 	partitions int
 }
 
-type Option func(*MongoListener)
+type FeedOption func(*Feed)
 
-func WithPartitions(partitions int) Option {
-	return func(p *MongoListener) {
+func WithPartitions(partitions int) FeedOption {
+	return func(p *Feed) {
 		if partitions > 0 {
 			p.partitions = partitions
 		}
 	}
 }
 
-func New(connString string, dbName string, opts ...Option) (MongoListener, error) {
+func NewFeed(connString string, dbName string, opts ...FeedOption) (Feed, error) {
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
-		return MongoListener{}, err
+		return Feed{}, err
 	}
 
-	m := MongoListener{
+	m := Feed{
 		dbName:     dbName,
 		client:     client,
 		partitions: 0,
@@ -50,11 +49,11 @@ func New(connString string, dbName string, opts ...Option) (MongoListener, error
 }
 
 type ChangeEvent struct {
-	FullDocument store.MongoEvent `bson:"fullDocument,omitempty"`
+	FullDocument Event `bson:"fullDocument,omitempty"`
 }
 
-func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
-	_, resumeToken, err := feed.LastEventIDInSink(ctx, sinker, m.partitions)
+func (m Feed) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
+	_, resumeToken, err := store.LastEventIDInSink(ctx, sinker, m.partitions)
 	if err != nil {
 		return err
 	}
@@ -102,6 +101,6 @@ func (m MongoListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...
 	return nil
 }
 
-func (m MongoListener) Close(ctx context.Context) error {
+func (m Feed) Close(ctx context.Context) error {
 	return m.client.Disconnect(ctx)
 }

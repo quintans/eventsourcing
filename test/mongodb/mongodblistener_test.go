@@ -12,8 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/feed/mongolistener"
-	"github.com/quintans/eventstore/store"
+	"github.com/quintans/eventstore/store/mongodb"
 	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,7 +56,7 @@ func (s *MockSink) Events() []eventstore.Event {
 }
 
 func TestMongoListenere(t *testing.T) {
-	repository, err := store.NewMongoEsRepository(dbURL, dbName, test.StructFactory{})
+	repository, err := mongodb.NewStore(dbURL, dbName, test.StructFactory{})
 	if err != nil {
 		log.Fatalf("Error instantiating event store: %v", err)
 	}
@@ -65,7 +64,7 @@ func TestMongoListenere(t *testing.T) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	listener, err := mongolistener.New(dbURL, dbName)
+	listener, err := mongodb.NewFeed(dbURL, dbName)
 
 	s := &MockSink{
 		events: []eventstore.Event{},
@@ -103,7 +102,7 @@ func TestMongoListenere(t *testing.T) {
 	listener.Close(context.Background())
 
 	// reconnecting
-	listener, err = mongolistener.New(dbURL, dbName)
+	listener, err = mongodb.NewFeed(dbURL, dbName)
 	ctx, cancel = context.WithCancel(context.Background())
 	go func() {
 		err := listener.Feed(ctx, s)

@@ -1,4 +1,4 @@
-package pglistener
+package postgresql
 
 import (
 	"context"
@@ -13,13 +13,12 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/eventid"
-	"github.com/quintans/eventstore/feed"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
 )
 
-type PgEvent struct {
+type FeedEvent struct {
 	ID               string      `json:"id,omitempty"`
 	AggregateID      string      `json:"aggregate_id,omitempty"`
 	AggregateVersion uint32      `json:"aggregate_version,omitempty"`
@@ -48,7 +47,7 @@ func (pgt *PgTime) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-type PgListener struct {
+type Feed struct {
 	play       player.Player
 	repository player.Repository
 	limit      int
@@ -58,39 +57,39 @@ type PgListener struct {
 	channel    string
 }
 
-type Option func(*PgListener)
+type FeedOption func(*Feed)
 
-func WithLimit(limit int) Option {
-	return func(p *PgListener) {
+func WithLimit(limit int) FeedOption {
+	return func(p *Feed) {
 		if limit > 0 {
 			p.limit = limit
 		}
 	}
 }
 
-func WithOffset(offset time.Duration) Option {
-	return func(p *PgListener) {
+func WithOffset(offset time.Duration) FeedOption {
+	return func(p *Feed) {
 		p.offset = offset
 	}
 }
 
-func WithPartitions(partitions int) Option {
-	return func(p *PgListener) {
+func WithPartitions(partitions int) FeedOption {
+	return func(p *Feed) {
 		if partitions > 0 {
 			p.partitions = partitions
 		}
 	}
 }
 
-// New instantiates a new PgListener.
+// NewFeed instantiates a new PgListener.
 // important:repo should NOT implement lag
-func New(dbUrl string, repository player.Repository, channel string, options ...Option) (PgListener, error) {
+func NewFeed(dbUrl string, repository player.Repository, channel string, options ...FeedOption) (Feed, error) {
 	pool, err := pgxpool.Connect(context.Background(), dbUrl)
 	if err != nil {
-		return PgListener{}, fmt.Errorf("Unable to connect to database: %w", err)
+		return Feed{}, fmt.Errorf("Unable to connect to database: %w", err)
 	}
 
-	p := PgListener{
+	p := Feed{
 		offset:     player.TrailingLag,
 		limit:      20,
 		repository: repository,
@@ -109,8 +108,8 @@ func New(dbUrl string, repository player.Repository, channel string, options ...
 
 // Feed will forward messages to the sinker
 // important: sinker.LastMessage should implement lag
-func (p PgListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
-	afterEventID, _, err := feed.LastEventIDInSink(ctx, sinker, p.partitions)
+func (p Feed) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
+	afterEventID, _, err := store.LastEventIDInSink(ctx, sinker, p.partitions)
 	if err != nil {
 		return err
 	}
@@ -119,7 +118,7 @@ func (p PgListener) Feed(ctx context.Context, sinker sink.Sinker, filters ...sto
 	return p.forward(ctx, afterEventID, sinker.Sink, filters...)
 }
 
-func (p PgListener) forward(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...store.FilterOption) error {
+func (p Feed) forward(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...store.FilterOption) error {
 	lastID := afterEventID
 	for {
 		conn, err := p.pool.Acquire(ctx)
@@ -175,7 +174,7 @@ func (p PgListener) forward(ctx context.Context, afterEventID string, handler pl
 	}
 }
 
-func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string, handler player.EventHandler) (lastID string, retry bool, err error) {
+func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string, handler player.EventHandler) (lastID string, retry bool, err error) {
 	defer conn.Release()
 
 	log.Infof("Listening for PostgreSQL notifications on channel %s starting at %s", p.channel, thresholdID)
@@ -191,7 +190,7 @@ func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID 
 		}
 
 		// the event is JSON encoded
-		pgEvent := PgEvent{}
+		pgEvent := FeedEvent{}
 		err = json.Unmarshal([]byte(msg.Payload), &pgEvent)
 		if err != nil {
 			return "", false, fmt.Errorf("Error unmarshalling Postgresql Event: %w", err)
@@ -226,6 +225,6 @@ func (p PgListener) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID 
 	}
 }
 
-func (p PgListener) Close() {
+func (p Feed) Close() {
 	p.pool.Close()
 }
