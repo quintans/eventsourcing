@@ -50,12 +50,6 @@ var _ eventstore.EsRepository = (*EsRepository)(nil)
 
 type StoreOption func(*EsRepository)
 
-func WithCodec(codec eventstore.Codec) StoreOption {
-	return func(r *EsRepository) {
-		r.codec = codec
-	}
-}
-
 type ProjectorFactory func(mongo.SessionContext) store.Projector
 
 func WithProjectorFactory(fn ProjectorFactory) StoreOption {
@@ -67,28 +61,24 @@ func WithProjectorFactory(fn ProjectorFactory) StoreOption {
 type EsRepository struct {
 	dbName           string
 	client           *mongo.Client
-	factory          eventstore.Factory
-	codec            eventstore.Codec
 	projectorFactory ProjectorFactory
 }
 
-func NewStore(connString string, dbName string, factory eventstore.Factory, opts ...StoreOption) (*EsRepository, error) {
+func NewStore(connString string, dbName string, opts ...StoreOption) (*EsRepository, error) {
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
 		return nil, err
 	}
 
-	return NewStoreDB(client, dbName, factory, opts...), nil
+	return NewStoreDB(client, dbName, opts...), nil
 }
 
 // NewMongoEsRepositoryDB creates a new instance of MongoEsRepository
-func NewStoreDB(client *mongo.Client, dbName string, factory eventstore.Factory, options ...StoreOption) *EsRepository {
+func NewStoreDB(client *mongo.Client, dbName string, options ...StoreOption) *EsRepository {
 	r := &EsRepository{
-		dbName:  dbName,
-		client:  client,
-		factory: factory,
-		codec:   eventstore.JsonCodec{},
+		dbName: dbName,
+		client: client,
 	}
 	for _, o := range options {
 		o(r)
@@ -115,14 +105,9 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 	}
 	details := make([]EventDetail, 0, len(eRec.Details))
 	for _, e := range eRec.Details {
-		body, err := r.codec.Encode(e.Body)
-		if err != nil {
-			return "", 0, err
-		}
-
 		details = append(details, EventDetail{
 			Kind: e.Kind,
-			Body: body,
+			Body: e.Body,
 		})
 	}
 
@@ -158,7 +143,6 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 					Body:             d.Body,
 					Labels:           doc.Labels,
 					CreatedAt:        doc.CreatedAt,
-					Decode:           eventstore.EventDecoder(r.factory, r.codec, d.Kind, d.Body),
 				}
 				projector.Project(evt)
 			}
@@ -206,34 +190,29 @@ func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionCo
 	return nil
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string, aggregate eventstore.Aggregater) error {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) ([]byte, error) {
 	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
 	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID}}, opts).Decode(&snap); err != nil {
 		if err == mongo.ErrNoDocuments {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return nil, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	return r.codec.Decode(snap.Body, aggregate)
+	return snap.Body, nil
 }
 
-func (r *EsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
-	body, err := r.codec.Encode(aggregate)
-	if err != nil {
-		return fmt.Errorf("Failed to create serialize snapshot: %w", err)
-	}
+func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Snapshot) error {
 	snap := Snapshot{
-		ID:               eventID,
-		AggregateID:      aggregate.GetID(),
-		AggregateVersion: aggregate.GetVersion(),
-		AggregateType:    aggregate.GetType(),
-		Body:             body,
-		CreatedAt:        time.Now().UTC(),
+		ID:               snapshot.ID,
+		AggregateID:      snapshot.AggregateID,
+		AggregateVersion: snapshot.AggregateVersion,
+		AggregateType:    snapshot.AggregateType,
+		Body:             snapshot.Body,
+		CreatedAt:        snapshot.CreatedAt,
 	}
-
-	_, err = r.snapshotCollection().InsertOne(ctx, snap)
+	_, err := r.snapshotCollection().InsertOne(ctx, snap)
 
 	return err
 }
@@ -274,9 +253,8 @@ func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idemp
 	return true, nil
 }
 
-func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(interface{}) interface{}) error {
-	// FIXME use a transaction.
-	// FIXME in the end should also add a new event to the event store.
+func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error {
+	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// for events
 	filter := bson.D{
@@ -293,17 +271,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	}
 	for _, evt := range events {
 		for k, d := range evt.Details {
-			e, err := r.factory.New(d.Kind)
-			if err != nil {
-				return err
-			}
-			err = r.codec.Decode(d.Body, e)
-			if err != nil {
-				return err
-			}
-			e = common.Dereference(e)
-			e = forget(e)
-			body, err := r.codec.Encode(e)
+			body, err := forget(d.Kind, d.Body)
 			if err != nil {
 				return err
 			}
@@ -335,17 +303,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	}
 
 	for _, s := range snaps {
-		e, err := r.factory.New(s.AggregateType)
-		if err != nil {
-			return err
-		}
-		err = r.codec.Decode(s.Body, e)
-		if err != nil {
-			return err
-		}
-		e = common.Dereference(e)
-		e = forget(e)
-		body, err := r.codec.Encode(e)
+		body, err := forget(s.AggregateType, s.Body)
 		if err != nil {
 			return err
 		}
@@ -470,7 +428,6 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 					IdempotencyKey:   v.IdempotencyKey,
 					Labels:           v.Labels,
 					CreatedAt:        v.CreatedAt,
-					Decode:           eventstore.EventDecoder(r.factory, r.codec, d.Kind, d.Body),
 				})
 			}
 		}

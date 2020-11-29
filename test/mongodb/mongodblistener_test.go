@@ -56,7 +56,7 @@ func (s *MockSink) Events() []eventstore.Event {
 }
 
 func TestMongoListenere(t *testing.T) {
-	repository, err := mongodb.NewStore(dbURL, dbName, test.StructFactory{})
+	repository, err := mongodb.NewStore(dbURL, dbName)
 	if err != nil {
 		log.Fatalf("Error instantiating event store: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestMongoListenere(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	es := eventstore.NewEventStore(repository, 3)
+	es := eventstore.NewEventStore(repository, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)

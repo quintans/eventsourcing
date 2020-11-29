@@ -94,7 +94,6 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 			IdempotencyKey:   v.IdempotencyKey,
 			Labels:           labels,
 			CreatedAt:        *createdAt,
-			Decode:           eventstore.EventDecoder(c.factory, c.decoder, v.Kind, v.Body),
 		}
 	}
 	return events, nil

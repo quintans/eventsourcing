@@ -151,12 +151,12 @@ func (a *Account) HandleOwnerUpdated(event OwnerUpdated) {
 	a.Owner = event.Owner
 }
 
-func ApplyChangeFromHistory(agg eventstore.Aggregater, e eventstore.Event) error {
+func ApplyChangeFromHistory(es eventstore.EventStore, agg eventstore.Aggregater, e eventstore.Event) error {
 	m := eventstore.EventMetadata{
 		AggregateVersion: e.AggregateVersion,
 		CreatedAt:        e.CreatedAt,
 	}
-	evt, err := e.Decode()
+	evt, err := es.Decode(e.Kind, e.Body)
 
 	if err != nil {
 		return err

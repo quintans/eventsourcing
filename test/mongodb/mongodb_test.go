@@ -36,8 +36,8 @@ func connect() (*mongo.Database, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName, test.StructFactory{})
-	es := eventstore.NewEventStore(r, 3)
+	r := mongodb.NewStoreDB(client, dbName)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -95,8 +95,8 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName, test.StructFactory{})
-	es := eventstore.NewEventStore(r, 3)
+	r := mongodb.NewStoreDB(client, dbName)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -111,7 +111,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r = mongodb.NewStoreDB(client, dbName, test.StructFactory{})
+	r = mongodb.NewStoreDB(client, dbName)
 	lm := poller.New(r)
 
 	done := make(chan struct{})
@@ -128,7 +128,7 @@ func TestPollListener(t *testing.T) {
 	}()
 	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
 			counter++
@@ -149,8 +149,8 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName, test.StructFactory{})
-	es := eventstore.NewEventStore(r, 3)
+	r := mongodb.NewStoreDB(client, dbName)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -165,13 +165,13 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository := mongodb.NewStoreDB(client, dbName, test.StructFactory{})
+	repository := mongodb.NewStoreDB(client, dbName)
 	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
 			counter++
@@ -198,8 +198,8 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName, test.StructFactory{})
-	es := eventstore.NewEventStore(r, 3)
+	r := mongodb.NewStoreDB(client, dbName)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -223,13 +223,13 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository := mongodb.NewStoreDB(client, dbName, test.StructFactory{})
+	repository := mongodb.NewStoreDB(client, dbName)
 	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
 			counter++
@@ -256,8 +256,8 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName, test.StructFactory{})
-	es := eventstore.NewEventStore(r, 3)
+	r := mongodb.NewStoreDB(client, dbName)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)

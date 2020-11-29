@@ -3,6 +3,7 @@ package eventstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/quintans/eventstore/common"
@@ -58,20 +59,28 @@ type Event struct {
 	IdempotencyKey   string
 	Labels           map[string]interface{}
 	CreatedAt        time.Time
-	Decode           func() (Eventer, error)
 }
 
 func (e Event) IsZero() bool {
 	return e.ID == ""
 }
 
+type Snapshot struct {
+	ID               string
+	AggregateID      string
+	AggregateVersion uint32
+	AggregateType    string
+	Body             []byte
+	CreatedAt        time.Time
+}
+
 type EsRepository interface {
 	SaveEvent(ctx context.Context, eRec EventRecord) (id string, version uint32, err error)
-	GetSnapshot(ctx context.Context, aggregateID string, aggregate Aggregater) error
-	SaveSnapshot(ctx context.Context, aggregate Aggregater, eventID string) error
+	GetSnapshot(ctx context.Context, aggregateID string) ([]byte, error)
+	SaveSnapshot(ctx context.Context, snapshot Snapshot) error
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
 	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
-	Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error
+	Forget(ctx context.Context, request ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error
 }
 
 type EventRecord struct {
@@ -86,7 +95,7 @@ type EventRecord struct {
 
 type EventRecordDetail struct {
 	Kind string
-	Body Eventer
+	Body []byte
 }
 
 type Options struct {
@@ -105,11 +114,21 @@ type EventStorer interface {
 
 var _ EventStorer = (*EventStore)(nil)
 
+type Option func(*EventStore)
+
+func WithCodec(codec Codec) Option {
+	return func(r *EventStore) {
+		r.codec = codec
+	}
+}
+
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, snapshotThreshold uint32) EventStore {
+func NewEventStore(repo EsRepository, snapshotThreshold uint32, factory Factory, options ...Options) EventStore {
 	return EventStore{
 		store:             repo,
 		snapshotThreshold: snapshotThreshold,
+		factory:           factory,
+		codec:             JsonCodec{},
 	}
 }
 
@@ -118,6 +137,8 @@ type EventStore struct {
 	store             EsRepository
 	snapshotThreshold uint32
 	upcaster          Upcaster
+	factory           Factory
+	codec             Codec
 }
 
 func (es *EventStore) SetUpcaster(upcaster Upcaster) {
@@ -125,9 +146,15 @@ func (es *EventStore) SetUpcaster(upcaster Upcaster) {
 }
 
 func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
-	err := es.store.GetSnapshot(ctx, aggregateID, aggregate)
+	body, err := es.store.GetSnapshot(ctx, aggregateID)
 	if err != nil {
 		return err
+	}
+	if len(body) == 0 {
+		err = es.codec.Decode(body, aggregate)
+		if err != nil {
+			return err
+		}
 	}
 
 	var events []Event
@@ -145,7 +172,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 			AggregateVersion: v.AggregateVersion,
 			CreatedAt:        v.CreatedAt,
 		}
-		e, err := v.Decode()
+		e, err := es.Decode(v.Kind, v.Body)
 		if err != nil {
 			return err
 		}
@@ -156,6 +183,19 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 	}
 
 	return nil
+}
+
+func (es EventStore) Decode(kind string, body []byte) (Eventer, error) {
+	e, err := es.factory.New(kind)
+	if err != nil {
+		return nil, err
+	}
+	err = es.codec.Decode(body, e)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to decode event %s: %w", kind, err)
+	}
+	e = common.Dereference(e)
+	return e.(Eventer), nil
 }
 
 func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Options) (err error) {
@@ -179,9 +219,13 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 	details := make([]EventRecordDetail, eventsLen)
 	for i := 0; i < eventsLen; i++ {
 		e := events[i]
+		body, err := es.codec.Encode(e)
+		if err != nil {
+			return err
+		}
 		details[i] = EventRecordDetail{
 			Kind: e.GetType(),
-			Body: e,
+			Body: body,
 		}
 	}
 
@@ -208,7 +252,21 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 		mod := oldCounter % es.snapshotThreshold
 		delta := newCounter - (oldCounter - mod)
 		if delta >= es.snapshotThreshold {
-			err := es.store.SaveSnapshot(ctx, aggregate, id)
+			body, err := es.codec.Encode(aggregate)
+			if err != nil {
+				return fmt.Errorf("Failed to create serialize snapshot: %w", err)
+			}
+
+			snap := Snapshot{
+				ID:               id,
+				AggregateID:      aggregate.GetID(),
+				AggregateVersion: aggregate.GetVersion(),
+				AggregateType:    aggregate.GetType(),
+				Body:             body,
+				CreatedAt:        time.Now().UTC(),
+			}
+
+			err = es.store.SaveSnapshot(ctx, snap)
 			if err != nil {
 				return err
 			}
@@ -229,5 +287,25 @@ type ForgetRequest struct {
 }
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
-	return es.store.Forget(ctx, request, forget)
+
+	fun := func(kind string, body []byte) ([]byte, error) {
+		e, err := es.factory.New(kind)
+		if err != nil {
+			return nil, err
+		}
+		err = es.codec.Decode(body, e)
+		if err != nil {
+			return nil, err
+		}
+		e = common.Dereference(e)
+		e = forget(e)
+		body, err = es.codec.Encode(e)
+		if err != nil {
+			return nil, err
+		}
+
+		return body, nil
+	}
+
+	return es.store.Forget(ctx, request, fun)
 }

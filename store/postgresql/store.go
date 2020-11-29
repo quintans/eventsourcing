@@ -47,12 +47,6 @@ var _ eventstore.EsRepository = (*EsRepository)(nil)
 
 type StoreOption func(*EsRepository)
 
-func WithCodec(codec eventstore.Codec) StoreOption {
-	return func(r *EsRepository) {
-		r.codec = codec
-	}
-}
-
 type ProjectorFactory func(*sql.Tx) store.Projector
 
 func ProjectorFactoryOption(fn ProjectorFactory) StoreOption {
@@ -63,26 +57,22 @@ func ProjectorFactoryOption(fn ProjectorFactory) StoreOption {
 
 type EsRepository struct {
 	db               *sqlx.DB
-	factory          eventstore.Factory
-	codec            eventstore.Codec
 	projectorFactory ProjectorFactory
 }
 
-func NewStore(dburl string, factory eventstore.Factory, options ...StoreOption) (*EsRepository, error) {
+func NewStore(dburl string, options ...StoreOption) (*EsRepository, error) {
 	db, err := sql.Open("postgres", dburl)
 	if err != nil {
 		return nil, err
 	}
-	return NewStoreDB(db, factory, options...)
+	return NewStoreDB(db, options...)
 }
 
 // NewStoreDB creates a new instance of PgEsRepository
-func NewStoreDB(db *sql.DB, factory eventstore.Factory, options ...StoreOption) (*EsRepository, error) {
+func NewStoreDB(db *sql.DB, options ...StoreOption) (*EsRepository, error) {
 	dbx := sqlx.NewDb(db, "postgres")
 	r := &EsRepository{
-		db:      dbx,
-		factory: factory,
-		codec:   eventstore.JsonCodec{},
+		db: dbx,
 	}
 
 	for _, o := range options {
@@ -106,17 +96,12 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 			projector = r.projectorFactory(tx)
 		}
 		for _, e := range eRec.Details {
-			body, err := r.codec.Encode(e.Body)
-			if err != nil {
-				return err
-			}
-
 			version++
 			id = common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, body, eRec.IdempotencyKey, labels, eRec.CreatedAt)
+				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, eRec.IdempotencyKey, labels, eRec.CreatedAt)
 
 			if err != nil {
 				if isPgDup(err) {
@@ -132,10 +117,9 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 					AggregateVersion: version,
 					AggregateType:    eRec.AggregateType,
 					Kind:             e.Kind,
-					Body:             body,
+					Body:             e.Body,
 					Labels:           eRec.Labels,
 					CreatedAt:        eRec.CreatedAt,
-					Decode:           eventstore.EventDecoder(r.factory, r.codec, e.Kind, body),
 				}
 				projector.Project(evt)
 			}
@@ -159,35 +143,29 @@ func isPgDup(err error) bool {
 	return false
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string, aggregate eventstore.Aggregater) error {
-	snap := Snapshot{}
-	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) ([]byte, error) {
+	body := []byte{}
+	if err := r.db.GetContext(ctx, &body, "SELECT body FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err == sql.ErrNoRows {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return nil, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	return r.codec.Decode(snap.Body, aggregate)
+	return body, nil
 }
 
-func (r *EsRepository) SaveSnapshot(ctx context.Context, aggregate eventstore.Aggregater, eventID string) error {
-	body, err := r.codec.Encode(aggregate)
-	if err != nil {
-		return fmt.Errorf("Failed to create serialize snapshot: %w", err)
+func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Snapshot) error {
+	s := Snapshot{
+		ID:               snapshot.ID,
+		AggregateID:      snapshot.AggregateID,
+		AggregateVersion: snapshot.AggregateVersion,
+		AggregateType:    snapshot.AggregateType,
+		Body:             snapshot.Body,
+		CreatedAt:        snapshot.CreatedAt,
 	}
-
-	snap := &Snapshot{
-		ID:               eventID,
-		AggregateID:      aggregate.GetID(),
-		AggregateVersion: aggregate.GetVersion(),
-		AggregateType:    aggregate.GetType(),
-		Body:             body,
-		CreatedAt:        time.Now().UTC(),
-	}
-
-	_, err = r.db.NamedExecContext(ctx,
+	_, err := r.db.NamedExecContext(ctx,
 		`INSERT INTO snapshots (id, aggregate_id, aggregate_version, aggregate_type, body, created_at)
-	     VALUES (:id, :aggregate_id, :aggregate_version, :aggregate_type, :body, :created_at)`, snap)
+	     VALUES (:id, :aggregate_id, :aggregate_version, :aggregate_type, :body, :created_at)`, s)
 
 	return err
 }
@@ -243,7 +221,7 @@ func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idemp
 	return exists != 0, nil
 }
 
-func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(interface{}) interface{}) error {
+func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
@@ -253,17 +231,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	}
 
 	for _, evt := range events {
-		e, err := r.factory.New(evt.Kind)
-		if err != nil {
-			return err
-		}
-		err = r.codec.Decode(evt.Body, e)
-		if err != nil {
-			return err
-		}
-		e = common.Dereference(e)
-		e = forget(e)
-		body, err := r.codec.Encode(e)
+		body, err := forget(evt.Kind, evt.Body)
 		if err != nil {
 			return err
 		}
@@ -283,17 +251,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	}
 
 	for _, snap := range snaps {
-		e, err := r.factory.New(snap.AggregateType)
-		if err != nil {
-			return err
-		}
-		err = r.codec.Decode(snap.Body, e)
-		if err != nil {
-			return err
-		}
-		e = common.Dereference(e)
-		e = forget(e)
-		body, err := r.codec.Encode(e)
+		body, err := forget(snap.AggregateType, snap.Body)
 		if err != nil {
 			return err
 		}
@@ -410,7 +368,6 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, afterEvent
 			Body:             pg.Body,
 			Labels:           labels,
 			CreatedAt:        pg.CreatedAt,
-			Decode:           eventstore.EventDecoder(r.factory, r.codec, pg.Kind, pg.Body),
 		})
 	}
 	return events, nil

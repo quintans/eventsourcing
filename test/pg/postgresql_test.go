@@ -34,9 +34,9 @@ func connect(dburl string) (*sqlx.DB, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL, test.StructFactory{})
+	r, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -83,9 +83,9 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL, test.StructFactory{})
+	r, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -100,7 +100,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbURL, test.StructFactory{})
+	repository, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
 	lm := poller.New(repository)
 
@@ -118,7 +118,7 @@ func TestPollListener(t *testing.T) {
 	}()
 	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
 			counter++
@@ -139,9 +139,9 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL, test.StructFactory{})
+	r, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -156,14 +156,14 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbURL, test.StructFactory{})
+	repository, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
 	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
 			counter++
@@ -190,9 +190,9 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL, test.StructFactory{})
+	r, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -216,14 +216,14 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := postgresql.NewStore(dbURL, test.StructFactory{})
+	repository, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
 	p := poller.New(repository)
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
-			if err := test.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
 			counter++
@@ -250,9 +250,9 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL, test.StructFactory{})
+	r, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3)
+	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -338,8 +338,8 @@ func TestForget(t *testing.T) {
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
-	r, _ := postgresql.NewStore(dbURL, test.StructFactory{})
-	es := eventstore.NewEventStore(r, 50)
+	r, _ := postgresql.NewStore(dbURL)
+	es := eventstore.NewEventStore(r, 50, test.StructFactory{})
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New().String()
