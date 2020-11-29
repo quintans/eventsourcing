@@ -122,6 +122,12 @@ func WithCodec(codec Codec) Option {
 	}
 }
 
+func WithUpcaster(upcaster Upcaster) Option {
+	return func(r *EventStore) {
+		r.upcaster = upcaster
+	}
+}
+
 // NewEventStore creates a new instance of ESPostgreSQL
 func NewEventStore(repo EsRepository, snapshotThreshold uint32, factory Factory, options ...Options) EventStore {
 	return EventStore{
@@ -139,10 +145,6 @@ type EventStore struct {
 	upcaster          Upcaster
 	factory           Factory
 	codec             Codec
-}
-
-func (es *EventStore) SetUpcaster(upcaster Upcaster) {
-	es.upcaster = upcaster
 }
 
 func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
@@ -176,9 +178,6 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 		if err != nil {
 			return err
 		}
-		if es.upcaster != nil {
-			e = es.upcaster.Upcast(e)
-		}
 		aggregate.ApplyChangeFromHistory(m, e)
 	}
 
@@ -186,16 +185,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate 
 }
 
 func (es EventStore) Decode(kind string, body []byte) (Eventer, error) {
-	e, err := es.factory.New(kind)
-	if err != nil {
-		return nil, err
-	}
-	err = es.codec.Decode(body, e)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to decode event %s: %w", kind, err)
-	}
-	e = common.Dereference(e)
-	return e.(Eventer), nil
+	return Decode(es.factory, es.codec, es.upcaster, kind, body)
 }
 
 func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Options) (err error) {

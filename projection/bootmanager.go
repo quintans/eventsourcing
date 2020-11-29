@@ -83,6 +83,7 @@ func NewBootableManager(
 		wait:       c,
 		release:    make(chan struct{}),
 	}
+
 	return mc
 }
 

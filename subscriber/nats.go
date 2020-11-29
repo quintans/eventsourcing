@@ -14,11 +14,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type NatsSubscriberOption func(*NatsSubscriber)
+type Option func(*NatsSubscriber)
 
-func MgCodecOption(codec sink.Codec) NatsSubscriberOption {
+func WithMessageCodec(codec sink.Codec) Option {
 	return func(r *NatsSubscriber) {
-		r.codec = codec
+		r.messageCodec = codec
 	}
 }
 
@@ -27,10 +27,18 @@ type NatsSubscriber struct {
 	stream       stan.Conn
 	topic        string
 	managerTopic string
-	codec        sink.Codec
+	messageCodec sink.Codec
 }
 
-func NewNatsSubscriber(ctx context.Context, addresses string, stanClusterID, clientID string, topic, managerTopic string, options ...NatsSubscriberOption) (*NatsSubscriber, error) {
+func NewNatsSubscriber(
+	ctx context.Context,
+	addresses string,
+	stanClusterID,
+	clientID string,
+	topic,
+	managerTopic string,
+	options ...Option,
+) (*NatsSubscriber, error) {
 	nc, err := nats.Connect(addresses)
 	if err != nil {
 		return nil, fmt.Errorf("Could not instantiate NATS client: %w", err)
@@ -52,7 +60,7 @@ func NewNatsSubscriber(ctx context.Context, addresses string, stanClusterID, cli
 		stream:       stream,
 		topic:        topic,
 		managerTopic: managerTopic,
-		codec:        sink.JsonCodec{},
+		messageCodec: sink.JsonCodec{},
 	}
 
 	for _, o := range options {
@@ -107,7 +115,7 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition int, resume
 			// ignore seq
 			return
 		}
-		e, err := s.codec.Decode(m.Data)
+		e, err := s.messageCodec.Decode(m.Data)
 		if err != nil {
 			log.WithError(err).Errorf("Unable to unmarshal event '%s'", string(m.Data))
 		}
