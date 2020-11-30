@@ -50,8 +50,8 @@ func (_ OwnerUpdated) GetType() string {
 
 type StructFactory struct{}
 
-func (_ StructFactory) New(kind string) (interface{}, error) {
-	var e interface{}
+func (_ StructFactory) New(kind string) (eventstore.Typer, error) {
+	var e eventstore.Typer
 	switch kind {
 	case "Account":
 		e = NewAccount()
@@ -156,7 +156,7 @@ func ApplyChangeFromHistory(es eventstore.EventStore, agg eventstore.Aggregater,
 		AggregateVersion: e.AggregateVersion,
 		CreatedAt:        e.CreatedAt,
 	}
-	evt, err := es.Decode(e.Kind, e.Body)
+	evt, err := es.DecodeEvent(e.Kind, e.Body)
 
 	if err != nil {
 		return err

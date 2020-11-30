@@ -190,17 +190,24 @@ func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionCo
 	return nil
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) ([]byte, error) {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventstore.Snapshot, error) {
 	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
 	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID}}, opts).Decode(&snap); err != nil {
 		if err == mongo.ErrNoDocuments {
-			return nil, nil
+			return eventstore.Snapshot{}, nil
 		}
-		return nil, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return eventstore.Snapshot{}, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	return snap.Body, nil
+	return eventstore.Snapshot{
+		ID:               snap.ID,
+		AggregateID:      snap.AggregateID,
+		AggregateVersion: snap.AggregateVersion,
+		AggregateType:    snap.AggregateType,
+		Body:             snap.Body,
+		CreatedAt:        snap.CreatedAt,
+	}, nil
 }
 
 func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Snapshot) error {

@@ -14,7 +14,7 @@ var (
 )
 
 type Factory interface {
-	New(kind string) (interface{}, error)
+	New(kind string) (Typer, error)
 }
 
 type Upcaster interface {
@@ -76,7 +76,7 @@ type Snapshot struct {
 
 type EsRepository interface {
 	SaveEvent(ctx context.Context, eRec EventRecord) (id string, version uint32, err error)
-	GetSnapshot(ctx context.Context, aggregateID string) ([]byte, error)
+	GetSnapshot(ctx context.Context, aggregateID string) (Snapshot, error)
 	SaveSnapshot(ctx context.Context, snapshot Snapshot) error
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
 	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
@@ -104,9 +104,23 @@ type Options struct {
 	Labels map[string]interface{}
 }
 
+type SaveOption func(*Options)
+
+func WithIdempotencyKey(key string) SaveOption {
+	return func(o *Options) {
+		o.IdempotencyKey = key
+	}
+}
+
+func WithLabels(labels map[string]interface{}) SaveOption {
+	return func(o *Options) {
+		o.Labels = labels
+	}
+}
+
 type EventStorer interface {
-	GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error
-	Save(ctx context.Context, aggregate Aggregater, options Options) error
+	GetByID(ctx context.Context, aggregateID string) (Aggregater, error)
+	Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) error
 	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
 	// Forget erases the values of the specified fields
 	Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error
@@ -147,48 +161,66 @@ type EventStore struct {
 	codec             Codec
 }
 
-func (es EventStore) GetByID(ctx context.Context, aggregateID string, aggregate Aggregater) error {
-	body, err := es.store.GetSnapshot(ctx, aggregateID)
+func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregater, error) {
+	snap, err := es.store.GetSnapshot(ctx, aggregateID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(body) == 0 {
-		err = es.codec.Decode(body, aggregate)
+	var aggregate Aggregater
+	if len(snap.Body) != 0 {
+		a, err := es.DecodeAggregate(snap.AggregateType, snap.Body)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		aggregate = a.(Aggregater)
 	}
 
 	var events []Event
-	if aggregate.GetID() != "" {
-		events, err = es.store.GetAggregateEvents(ctx, aggregateID, int(aggregate.GetVersion()))
+	if snap.AggregateID != "" {
+		events, err = es.store.GetAggregateEvents(ctx, aggregateID, int(snap.AggregateVersion))
 	} else {
 		events, err = es.store.GetAggregateEvents(ctx, aggregateID, -1)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, v := range events {
+		if aggregate == nil {
+			a, err := es.DecodeAggregate(v.AggregateType, nil)
+			if err != nil {
+				return nil, err
+			}
+			aggregate = a.(Aggregater)
+		}
 		m := EventMetadata{
 			AggregateVersion: v.AggregateVersion,
 			CreatedAt:        v.CreatedAt,
 		}
-		e, err := es.Decode(v.Kind, v.Body)
+		e, err := es.DecodeEvent(v.Kind, v.Body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		aggregate.ApplyChangeFromHistory(m, e)
 	}
 
-	return nil
+	return aggregate, nil
 }
 
-func (es EventStore) Decode(kind string, body []byte) (Eventer, error) {
-	return Decode(es.factory, es.codec, es.upcaster, kind, body)
+func (es EventStore) DecodeAggregate(kind string, body []byte) (Typer, error) {
+	return Decode(es.factory, es.codec, es.upcaster, kind, body, false)
 }
 
-func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Options) (err error) {
+func (es EventStore) DecodeEvent(kind string, body []byte) (Typer, error) {
+	return Decode(es.factory, es.codec, es.upcaster, kind, body, true)
+}
+
+func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) (err error) {
+	opts := Options{}
+	for _, fn := range options {
+		fn(&opts)
+	}
+
 	events := aggregate.GetEvents()
 	eventsLen := len(events)
 	if eventsLen == 0 {
@@ -223,8 +255,8 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options Opt
 		AggregateID:    aggregate.GetID(),
 		Version:        aggregate.GetVersion(),
 		AggregateType:  tName,
-		IdempotencyKey: options.IdempotencyKey,
-		Labels:         options.Labels,
+		IdempotencyKey: opts.IdempotencyKey,
+		Labels:         opts.Labels,
 		CreatedAt:      now,
 		Details:        details,
 	}
@@ -277,7 +309,6 @@ type ForgetRequest struct {
 }
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
-
 	fun := func(kind string, body []byte) ([]byte, error) {
 		e, err := es.factory.New(kind)
 		if err != nil {
@@ -287,9 +318,9 @@ func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget f
 		if err != nil {
 			return nil, err
 		}
-		e = common.Dereference(e)
-		e = forget(e)
-		body, err = es.codec.Encode(e)
+		e2 := common.Dereference(e)
+		e2 = forget(e2)
+		body, err = es.codec.Encode(e2)
 		if err != nil {
 			return nil, err
 		}

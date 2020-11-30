@@ -42,10 +42,10 @@ func TestSaveAndGet(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -71,9 +71,9 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, id, evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
 
-	acc2 := test.NewAccount()
-	err = es.GetByID(ctx, id, acc2)
+	a, err := es.GetByID(ctx, id)
 	require.NoError(t, err)
+	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(4), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
@@ -91,10 +91,10 @@ func TestPollListener(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -147,10 +147,10 @@ func TestListenerWithAggregateType(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -198,18 +198,10 @@ func TestListenerWithLabels(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.Options{
-		Labels: map[string]interface{}{
-			"geo": "EU",
-		},
-	})
+	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "EU"}))
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.Options{
-		Labels: map[string]interface{}{
-			"geo": "US",
-		},
-	})
+	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "US"}))
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -259,12 +251,12 @@ func TestForget(t *testing.T) {
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
@@ -347,7 +339,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 
 		for pb.Next() {
 			acc.Deposit(10)
-			_ = es.Save(ctx, acc, eventstore.Options{})
+			_ = es.Save(ctx, acc)
 		}
 	})
 }

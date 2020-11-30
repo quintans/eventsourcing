@@ -85,7 +85,7 @@ func TestMongoListenere(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)
@@ -116,7 +116,7 @@ func TestMongoListenere(t *testing.T) {
 	assert.Equal(t, 3, len(events), "event size")
 
 	acc.Withdraw(5)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)

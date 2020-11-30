@@ -79,7 +79,7 @@ func TestPgListenere(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write

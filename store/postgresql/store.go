@@ -143,15 +143,22 @@ func isPgDup(err error) bool {
 	return false
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) ([]byte, error) {
-	body := []byte{}
-	if err := r.db.GetContext(ctx, &body, "SELECT body FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventstore.Snapshot, error) {
+	snap := Snapshot{}
+	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil
+			return eventstore.Snapshot{}, nil
 		}
-		return nil, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return eventstore.Snapshot{}, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	return body, nil
+	return eventstore.Snapshot{
+		ID:               snap.ID,
+		AggregateID:      snap.AggregateID,
+		AggregateVersion: snap.AggregateVersion,
+		AggregateType:    snap.AggregateType,
+		Body:             snap.Body,
+		CreatedAt:        snap.CreatedAt,
+	}, nil
 }
 
 func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Snapshot) error {
