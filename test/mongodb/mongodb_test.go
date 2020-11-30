@@ -312,7 +312,7 @@ func TestForget(t *testing.T) {
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		snap := test.Account{}
+		snap := test.NewAccount()
 		codec.Decode(v.Body, &snap)
 		assert.NotEmpty(t, snap.Owner)
 	}
@@ -374,7 +374,7 @@ func TestForget(t *testing.T) {
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		snap := test.Account{}
+		snap := test.NewAccount()
 		codec.Decode(v.Body, &snap)
 		assert.Empty(t, snap.Owner)
 		assert.NotEmpty(t, snap.ID)

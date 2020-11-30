@@ -54,7 +54,7 @@ func (_ StructFactory) New(kind string) (interface{}, error) {
 	var e interface{}
 	switch kind {
 	case "Account":
-		e = &Account{}
+		e = NewAccount()
 	case "AccountCreated":
 		e = &AccountCreated{}
 	case "MoneyDeposited":
