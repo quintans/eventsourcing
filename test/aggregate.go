@@ -156,7 +156,7 @@ func ApplyChangeFromHistory(es eventstore.EventStore, agg eventstore.Aggregater,
 		AggregateVersion: e.AggregateVersion,
 		CreatedAt:        e.CreatedAt,
 	}
-	evt, err := es.DecodeEvent(e.Kind, e.Body)
+	evt, err := es.RehydrateEvent(e.Kind, e.Body)
 
 	if err != nil {
 		return err

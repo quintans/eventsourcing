@@ -168,7 +168,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 	}
 	var aggregate Aggregater
 	if len(snap.Body) != 0 {
-		a, err := es.DecodeAggregate(snap.AggregateType, snap.Body)
+		a, err := es.RehydrateAggregate(snap.AggregateType, snap.Body)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +187,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 
 	for _, v := range events {
 		if aggregate == nil {
-			a, err := es.DecodeAggregate(v.AggregateType, nil)
+			a, err := es.RehydrateAggregate(v.AggregateType, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -197,7 +197,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 			AggregateVersion: v.AggregateVersion,
 			CreatedAt:        v.CreatedAt,
 		}
-		e, err := es.DecodeEvent(v.Kind, v.Body)
+		e, err := es.RehydrateEvent(v.Kind, v.Body)
 		if err != nil {
 			return nil, err
 		}
@@ -207,12 +207,12 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 	return aggregate, nil
 }
 
-func (es EventStore) DecodeAggregate(kind string, body []byte) (Typer, error) {
-	return Decode(es.factory, es.codec, es.upcaster, kind, body, false)
+func (es EventStore) RehydrateAggregate(kind string, body []byte) (Typer, error) {
+	return RehydrateAggregate(es.factory, es.codec, es.upcaster, kind, body)
 }
 
-func (es EventStore) DecodeEvent(kind string, body []byte) (Typer, error) {
-	return Decode(es.factory, es.codec, es.upcaster, kind, body, true)
+func (es EventStore) RehydrateEvent(kind string, body []byte) (Typer, error) {
+	return RehydrateEvent(es.factory, es.codec, es.upcaster, kind, body)
 }
 
 func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) (err error) {
