@@ -24,6 +24,111 @@ A service **writes** to a **database** (the event store), a **forwarder** servic
 
 ![Design](eventstore-design.png)
 
+## How to
+
+I assume that the reader is familiar with the concepts of event sourcing and CQRS.
+
+### Aggregate
+
+The aggregate must "extend" `eventstore.RootAggregate`, that implements `eventstore.Aggregater` interface, and implement `eventstore.Typer` and `eventstore.EventHandler` interface.
+Any change to the aggregate is recorded as a series of events.
+
+You can find an example [here](./test/aggregate.go#L95)
+
+### Factory
+
+Since we will deserializing events we will need a factory to instantiate the aggregate and also the events. This factory can be reused on the read side, to instantiate the events.
+
+Example [here](./test/aggregate.go#L51)
+
+### Codec
+
+To encode and decode the events to and from binary data we need to provide a `eventstore.Codec`. This codec be as simple as a wrapper around `json.Marshaller/json.Unmarshaller` or a more complex implementation involving a schema registry.
+
+### Upcaster
+
+As the application evolves, domain events may change in a way that previously serialized events may no longer be compatible with the current event schema. So when we rehydrate an event, we must transform into an higher version of that event, and this is done by providing an implementation of the `eventstore.Upcaster` interface.
+
+### Events
+
+Events must implement the `eventstore.Eventer` interface.
+
+Example [here](./test/aggregate.go#L17)
+
+### Eventstore
+
+The event data can be stored in any database. Currently we have implementations for:
+* PostgreSQL
+* MongoDB
+
+After we choose one, we can instantiate our event store.
+
+```go
+esRepo := mongodb.NewStoreDB(client, cfg.EsName)
+es := eventstore.NewEventStore(esRepo, cfg.SnapshotThreshold, entity.Factory{})
+```
+
+After that we just interact normally with the aggregate and then we save.
+
+```go
+id := uuid.New().String()
+acc := test.CreateAccount("Paulo", id, 100)
+acc.Deposit(10)
+acc.Withdraw(20)
+es.Save(ctx, acc)
+```
+
+to get the aggregate
+
+```go
+a, _ = es.GetByID(ctx, id)
+acc2 := a.(*Account)
+```
+
+### Forwarder
+
+After storing the events in a database we need to publish them into an event bus.
+This is done with `eventstore.Forwarder` that takes a feed and a sink.
+To avoid duplication of events and to keep the order of events we should have only one active instance, and for that we use a distributed lock.
+Everything is coordinated by `common.BootMonitor`.
+
+```go
+sinker := sink.NewNatsSink(cfg.ConfigNats.Topic, 0, "test-cluster", "pusher-id", stan.NatsURL(cfg.ConfigNats.NatsAddress))
+defer sinker.Close()
+
+dbURL := // build db url
+listener, _ := mongodb.NewFeed(dbURL, cfg.EsName)
+forwarder := store.NewForwarder(listener, sinker)
+locker, _ := locks.NewRedisLock(cfg.RedisAddresses, "pusher", cfg.LockExpiry)
+monitor := common.NewBootMonitor("MongoDB -> NATS feeder", forwarder, common.WithLock(locker), common.WithRefreshInterval(cfg.LockExpiry/2))
+ctx, cancel := context.WithCancel(context.Background())
+go monitor.Start(ctx)
+```
+
+### Projection
+
+On the projection side we need to listen to the event bus and the same logic of having just one instance running also applies, therefore a need for a distributed lock.
+
+```go
+esRepo := player.NewGrpcRepository(cfg.EsAddress)
+natsSub, _ := subscriber.NewNatsSubscriber(ctx, cfg.NatsAddress, "test-cluster", "balance", cfg.Topic, NotificationTopic)
+
+prjCtrl := // instantiate the controller
+manager := projection.NewBootableManager(
+    prjCtrl,
+    natsSub,
+    projection.BootStages{
+        AggregateTypes: []string{event.AggregateType_Account},
+        Subscriber:     natsSub,
+        Repository:     esRepo,
+    },
+)
+locker, _ := locks.NewRedisLock(cfg.RedisAddresses, "balance", cfg.LockExpiry)
+
+monitor := common.NewBootMonitor("Balance Projection", manager, common.WithLock(locker), common.WithRefreshInterval(cfg.LockExpiry/2))
+go monitor.Start(ctx)
+```
+
 ## Rationale
 
 ### Event Bus
