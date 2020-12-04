@@ -7,6 +7,7 @@ import (
 
 	"github.com/nats-io/stan.go"
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/common"
 )
 
 type NatsSink struct {
@@ -53,12 +54,12 @@ func (p *NatsSink) Close() {
 }
 
 // LastMessage gets the last message sent to NATS
-func (p *NatsSink) LastMessage(ctx context.Context, partition int) (*eventstore.Event, error) {
+func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventstore.Event, error) {
 	type message struct {
 		sequence uint64
 		data     []byte
 	}
-	topic := TopicWithPartition(p.topic, partition)
+	topic := common.TopicWithPartition(p.topic, partition)
 	ch := make(chan message)
 	sub, err := p.client.Subscribe(topic, func(m *stan.Msg) {
 		ch <- message{
@@ -93,7 +94,7 @@ func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
 		return err
 	}
 
-	topic := PartitionTopic(e.AggregateID, p.topic, p.partitions)
+	topic := common.PartitionTopic(e.AggregateID, p.topic, p.partitions)
 	err = p.client.Publish(topic, b)
 	if err != nil {
 		return fmt.Errorf("Failed to send message: %w", err)

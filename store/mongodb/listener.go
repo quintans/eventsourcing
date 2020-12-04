@@ -14,18 +14,20 @@ import (
 )
 
 type Feed struct {
-	dbName     string
-	client     *mongo.Client
-	partitions int
+	dbName        string
+	client        *mongo.Client
+	partitions    uint32
+	partitionsLow uint32
+	partitionsHi  uint32
 }
 
 type FeedOption func(*Feed)
 
-func WithPartitions(partitions int) FeedOption {
+func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 	return func(p *Feed) {
-		if partitions > 0 {
-			p.partitions = partitions
-		}
+		p.partitions = partitions
+		p.partitionsLow = partitionsLow
+		p.partitionsHi = partitionsHi
 	}
 }
 
@@ -37,14 +39,13 @@ func NewFeed(connString string, dbName string, opts ...FeedOption) (Feed, error)
 	}
 
 	m := Feed{
-		dbName:     dbName,
-		client:     client,
-		partitions: 0,
+		dbName: dbName,
+		client: client,
 	}
+
 	for _, o := range opts {
 		o(&m)
 	}
-
 	return m, nil
 }
 
@@ -52,13 +53,18 @@ type ChangeEvent struct {
 	FullDocument Event `bson:"fullDocument,omitempty"`
 }
 
-func (m Feed) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
-	_, resumeToken, err := store.LastEventIDInSink(ctx, sinker, m.partitions)
+func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
+	_, resumeToken, err := store.LastEventIDInSink(ctx, sinker, m.partitionsLow, m.partitionsHi)
 	if err != nil {
 		return err
 	}
 
-	matchPipeline := bson.D{{Key: "$match", Value: bson.D{{Key: "operationType", Value: "insert"}}}}
+	match := bson.D{
+		{"operationType", "insert"},
+	}
+	match = append(match, partitionMatch("fullDocument.aggregate_id_hash", m.partitions, m.partitionsLow, m.partitionsHi)...)
+
+	matchPipeline := bson.D{{Key: "$match", Value: match}}
 	pipeline := mongo.Pipeline{matchPipeline}
 
 	eventsCollection := m.client.Database(m.dbName).Collection("events")
@@ -79,6 +85,13 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.Fil
 			return err
 		}
 		eventDoc := data.FullDocument
+
+		// check if the event is to be forwarded to the sinker
+		p := common.WhichPartition(eventDoc.AggregateID, m.partitions)
+		if p < m.partitionsLow || p > m.partitionsHi {
+			continue
+		}
+
 		for k, d := range eventDoc.Details {
 			event := eventstore.Event{
 				ID:               common.NewMessageID(eventDoc.ID, uint8(k)),
@@ -103,4 +116,37 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.Fil
 
 func (m Feed) Close(ctx context.Context) error {
 	return m.client.Disconnect(ctx)
+}
+
+func partitionMatch(field string, partitions, partitionsLow, partitionsHi uint32) bson.D {
+	if partitions == 0 {
+		return bson.D{}
+	}
+	if partitionsLow == partitionsHi {
+		return bson.D{
+			{"$eq",
+				bson.A{
+					bson.D{{"$mod", bson.A{field, partitions}}},
+					partitionsLow - 1,
+				},
+			},
+		}
+	} else {
+		return bson.D{
+			// {"$gte": [{"$mod" : [field, m.partitions]}],  m.partitionsLow - 1}
+			{"$gte",
+				bson.A{
+					bson.D{{"$mod", bson.A{field, partitions}}},
+					partitionsLow - 1,
+				},
+			},
+			// {"$lte": [{"$mod" : [field, m.partitions]}],  m.partitionsHi - 1}
+			{"$lte",
+				bson.A{
+					bson.D{{"$mod", bson.A{field, partitions}}},
+					partitionsHi - 1,
+				},
+			},
+		}
+	}
 }

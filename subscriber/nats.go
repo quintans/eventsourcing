@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/stan.go"
+	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/projection"
 	"github.com/quintans/eventstore/sink"
 	log "github.com/sirupsen/logrus"
@@ -78,9 +79,9 @@ func (s NatsSubscriber) GetStream() stan.Conn {
 	return s.stream
 }
 
-func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition int) (string, error) {
+func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition uint32) (string, error) {
 	ch := make(chan uint64)
-	topic := sink.TopicWithPartition(s.topic, partition)
+	topic := common.TopicWithPartition(s.topic, partition)
 	sub, err := s.stream.Subscribe(topic, func(m *stan.Msg) {
 		ch <- m.Sequence
 	}, stan.StartWithLastReceived())
@@ -98,7 +99,7 @@ func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition int) (stri
 	return strconv.FormatUint(sequence, 10), nil
 }
 
-func (s NatsSubscriber) StartConsumer(ctx context.Context, partition int, resumeToken string, projection projection.Projection, aggregateTypes []string) (chan struct{}, error) {
+func (s NatsSubscriber) StartConsumer(ctx context.Context, partition uint32, resumeToken string, projection projection.Projection, aggregateTypes []string) (chan struct{}, error) {
 	start := stan.DeliverAllAvailable()
 	var seq uint64
 	if resumeToken != "" {
@@ -109,7 +110,7 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition int, resume
 		}
 		start = stan.StartAtSequence(seq)
 	}
-	topic := sink.TopicWithPartition(s.topic, partition)
+	topic := common.TopicWithPartition(s.topic, partition)
 	sub, err := s.stream.Subscribe(topic, func(m *stan.Msg) {
 		if seq >= m.Sequence {
 			// ignore seq

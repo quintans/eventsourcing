@@ -34,7 +34,7 @@ func (s *MockSink) Sink(ctx context.Context, e eventstore.Event) error {
 	return nil
 }
 
-func (s *MockSink) LastMessage(ctx context.Context, partition int) (*eventstore.Event, error) {
+func (s *MockSink) LastMessage(ctx context.Context, partition uint32) (*eventstore.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.events) == 0 {

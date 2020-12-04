@@ -4,8 +4,9 @@ go 1.15
 
 require (
 	github.com/docker/go-connections v0.4.0
+	github.com/go-redis/redis/v8 v8.4.0
 	github.com/golang-migrate/migrate/v4 v4.11.0
-	github.com/golang/protobuf v1.4.1
+	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.1.2
 	github.com/jackc/pgx/v4 v4.8.1
 	github.com/jmoiron/sqlx v1.2.0

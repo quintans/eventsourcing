@@ -13,7 +13,6 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/store"
 	"github.com/quintans/eventstore/store/poller"
 	"github.com/quintans/eventstore/store/postgresql"
 	"github.com/quintans/eventstore/test"
@@ -158,7 +157,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	repository, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
-	p := poller.New(repository)
+	p := poller.New(repository, poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
@@ -173,7 +172,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 			}
 		}
 		return nil
-	}, store.WithAggregateTypes("Account"))
+	})
 
 	select {
 	case <-done:
@@ -210,7 +209,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 	repository, err := postgresql.NewStore(dbURL)
 	require.NoError(t, err)
-	p := poller.New(repository)
+	p := poller.New(repository, poller.WithLabel("geo", "EU"))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
@@ -225,7 +224,7 @@ func TestListenerWithLabels(t *testing.T) {
 			}
 		}
 		return nil
-	}, store.WithLabel("geo", "EU"))
+	})
 
 	select {
 	case <-done:

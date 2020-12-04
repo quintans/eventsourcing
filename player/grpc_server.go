@@ -63,9 +63,15 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	for k, v := range pbFilter.AggregateTypes {
 		types[k] = v
 	}
-	labels := make([]store.Label, len(pbFilter.Labels))
-	for k, v := range pbFilter.Labels {
-		labels[k] = store.NewLabel(v.Key, v.Value)
+	labels := store.Labels{}
+	for _, v := range pbFilter.Labels {
+		values := labels[v.Key]
+		if values == nil {
+			values = []string{v.Value}
+		} else {
+			values = append(values, v.Value)
+		}
+		labels[v.Key] = values
 	}
 	return store.Filter{AggregateTypes: types, Labels: labels}
 }

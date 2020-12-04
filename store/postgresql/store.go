@@ -98,10 +98,11 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		for _, e := range eRec.Details {
 			version++
 			id = common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
+			h := common.Hash(eRec.AggregateID)
 			_, err = tx.ExecContext(ctx,
-				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, eRec.IdempotencyKey, labels, eRec.CreatedAt)
+				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at, aggregate_id_hash)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, eRec.IdempotencyKey, labels, eRec.CreatedAt, h)
 
 			if err != nil {
 				if isPgDup(err) {
@@ -280,7 +281,7 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 		args = append(args, safetyMargin)
 		query.WriteString("created_at <= $1 ")
 	}
-	args = addFilter(filter, &query, args)
+	args = buildFilter(filter, &query, args)
 	query.WriteString(" ORDER BY id DESC LIMIT 1")
 	var eventID string
 	if err := r.db.GetContext(ctx, &eventID, query.String(), args...); err != nil {
@@ -300,7 +301,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batch
 		args = append(args, safetyMargin)
 		query.WriteString("AND created_at <= $2 ")
 	}
-	args = addFilter(filter, &query, args)
+	args = buildFilter(filter, &query, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -314,7 +315,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batch
 	return rows, nil
 }
 
-func addFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
+func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
 	if len(filter.AggregateTypes) > 0 {
 		query.WriteString(" AND (")
 		for k, v := range filter.AggregateTypes {
@@ -326,16 +327,30 @@ func addFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []i
 		}
 		query.WriteString(")")
 	}
+
+	if filter.Partitions > 0 {
+		size := len(args)
+		if filter.PartitionsLow == filter.PartitionsHi {
+			args = append(args, filter.Partitions, filter.PartitionsLow-1)
+			query.WriteString(fmt.Sprintf(" AND MOD(aggregate_id_hash, $%d) = $%d", size+1, size+2))
+		} else {
+			args = append(args, filter.Partitions, filter.PartitionsLow-1, filter.PartitionsHi-1)
+			query.WriteString(fmt.Sprintf(" AND MOD(aggregate_id_hash, $%d) BETWEEN $%d AND $%d", size+1, size+2, size+4))
+		}
+	}
+
 	if len(filter.Labels) > 0 {
-		for idx, v := range filter.Labels {
-			k := escape(v.Key)
+		for k, values := range filter.Labels {
+			k = escape(k)
 			query.WriteString(" AND (")
-			if idx > 0 {
-				query.WriteString(" OR ")
+			for idx, v := range values {
+				if idx > 0 {
+					query.WriteString(" OR ")
+				}
+				v = escape(v)
+				query.WriteString(fmt.Sprintf(`labels  @> '{"%s": "%s"}'`, k, v))
+				query.WriteString(")")
 			}
-			x := escape(v.Value)
-			query.WriteString(fmt.Sprintf(`labels  @> '{"%s": "%s"}'`, k, x))
-			query.WriteString(")")
 		}
 	}
 	return args

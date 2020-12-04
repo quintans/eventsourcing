@@ -11,7 +11,7 @@ import (
 )
 
 type Feeder interface {
-	Feed(ctx context.Context, sink sink.Sinker, filters ...FilterOption) error
+	Feed(ctx context.Context, sink sink.Sinker) error
 }
 
 type Forwarder struct {
@@ -61,9 +61,9 @@ func (f *Forwarder) Wait() <-chan struct{} {
 
 func (f *Forwarder) Cancel() {}
 
-func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitions int) (afterEventID string, resumeToken []byte, err error) {
+func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32) (afterEventID string, resumeToken []byte, err error) {
 	// looking for the lowest ID in all partitions
-	if partitions == 0 {
+	if partitionLow == 0 {
 		message, err := sinker.LastMessage(ctx, 0)
 		if err != nil {
 			return "", nil, fmt.Errorf("Unable to get the last event ID in sink (unpartitioned): %w", err)
@@ -74,7 +74,7 @@ func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitions int) 
 		}
 	} else {
 		afterEventID = common.MaxEventID
-		for i := 1; i <= partitions; i++ {
+		for i := partitionLow; i <= partitionHi; i++ {
 			message, err := sinker.LastMessage(ctx, i)
 			if err != nil {
 				return "", nil, fmt.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)

@@ -88,8 +88,20 @@ acc2 := a.(*Account)
 ### Forwarder
 
 After storing the events in a database we need to publish them into an event bus.
+This is done with a `eventstore.Feeder` and a `sink.Sinker`
+
+```go
+sinker := // targets an event bus
+sinker.Init()
+
+feeder := // listen to a inserts to a database
+feeder.Feed(ctx, sinker)
+```
+
+In a distributed system where we can have multiple replicas of a service, the above scenario does not avoid duplication of events.
+
+To avoid duplication and keep the order of events we should have only one active instance. For that we use a distributed lock.
 This is done with `eventstore.Forwarder` that takes a feed and a sink.
-To avoid duplication of events and to keep the order of events we should have only one active instance, and for that we use a distributed lock.
 Everything is coordinated by `common.BootMonitor`.
 
 ```go
@@ -104,6 +116,8 @@ monitor := common.NewBootMonitor("MongoDB -> NATS feeder", forwarder, common.Wit
 ctx, cancel := context.WithCancel(context.Background())
 go monitor.Start(ctx)
 ```
+
+`common.BootMonitor` also handles the restart from the last published  in case of service crash or restart.
 
 ### Projection
 
@@ -417,11 +431,22 @@ So, on the read side, consider that we are interested in creating 12 partitions 
 topicNr := hash(event.ID)%12
 ```
 
-On the consumer side each service would only consume its assigned range partition defined by an environment variable. For example, if had 3 instances running, we could say `PARTITIONS=1-4`.
+On the consumer side we would create partition slots and balance them through the available instances. Each service instance would keep track of all instances, and would release or grab the slots according to the number of instances.
 
-A downside is if an instance goes down, no other will pick this up. Of course this is not a big problem in the cloud since the instance is automatically restarted.
-Another downside is that this approach is not "elastic", in the sense that adding or removing a partition instance is a manual process.
-Starting with a reasonable large enough partitions will minimize the this impact.
+Example:
+
+Consider we have 3 replicas and an environment variable declaring 3 slots: `PARTITION_SLOTS=1-4,5-8,9-12`
+
+Consider that we also have a way to get the member list for a service (using hashicorp consul or a custom redis implementation where we keep track of the service replicas) and a distributed lock (consul, redis).
+
+At a given time, a service instance can only have `x` locked slots, where `x=(number of slots)/(number of members)`.
+
+On boot time, the first service would see that are no other members and would lock all the slots. `x=3/1=3`
+When the second instance comes up, the number of slots to lock become `x=3/2=1.5~2` so the instance #1 will release one instance (3 locked slots - 1) that will be locked instance #2.
+When the third instance comes we will have `x=3/3=1`, and instance #1 release one slot, and this slot will be locked by instance #3.
+
+A downside is that this approach is not "elastic", in the sense that adding or removing a partition instance is a manual process.
+Starting with a reasonable large enough of partitions will minimize the this impact.
 
 eg: 12 partitions
 2 instances

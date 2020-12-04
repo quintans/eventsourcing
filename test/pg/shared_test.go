@@ -86,6 +86,7 @@ func dbSchema() error {
 	CREATE TABLE IF NOT EXISTS events(
 		id VARCHAR (50) PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
+		aggregate_id_hash INTEGER NOT NULL,
 		aggregate_version INTEGER NOT NULL,
 		aggregate_type VARCHAR (50) NOT NULL,
 		kind VARCHAR (50) NOT NULL,

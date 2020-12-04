@@ -24,6 +24,7 @@ const (
 type Event struct {
 	ID               string        `bson:"_id,omitempty"`
 	AggregateID      string        `bson:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32        `bson:"aggregate_id_hash,omitempty"`
 	AggregateVersion uint32        `bson:"aggregate_version,omitempty"`
 	AggregateType    string        `bson:"aggregate_type,omitempty"`
 	Details          []EventDetail `bson:"details,omitempty"`
@@ -122,6 +123,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		IdempotencyKey:   eRec.IdempotencyKey,
 		Labels:           eRec.Labels,
 		CreatedAt:        eRec.CreatedAt,
+		AggregateIDHash:  common.Hash(eRec.AggregateID),
 	}
 
 	var err error
@@ -337,7 +339,7 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 		safetyMargin := time.Now().UTC().Add(-trailingLag)
 		flt = append(flt, bson.E{"created_at", bson.D{{"$lte", safetyMargin}}})
 	}
-	flt = writeMongoFilter(filter, flt)
+	flt = buildFilter(filter, flt)
 
 	opts := options.FindOne().
 		SetSort(bson.D{{"_id", -1}}).
@@ -368,7 +370,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, bat
 		safetyMargin := time.Now().UTC().Add(-trailingLag)
 		flt = append(flt, bson.E{"created_at", bson.D{{"$lte", safetyMargin}}})
 	}
-	flt = writeMongoFilter(filter, flt)
+	flt = buildFilter(filter, flt)
 
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
 	if batchSize > 0 {
@@ -384,21 +386,15 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, bat
 	return rows, nil
 }
 
-func writeMongoFilter(filter store.Filter, flt bson.D) bson.D {
+func buildFilter(filter store.Filter, flt bson.D) bson.D {
 	if len(filter.AggregateTypes) > 0 {
 		flt = append(flt, bson.E{"aggregate_type", bson.D{{"$in", filter.AggregateTypes}}})
 	}
+
+	flt = append(flt, partitionMatch("aggregate_id_hash", filter.Partitions, filter.PartitionsLow, filter.PartitionsHi)...)
+
 	if len(filter.Labels) > 0 {
-		m := map[string][]string{}
-		for _, v := range filter.Labels {
-			lbls := m[v.Key]
-			if lbls == nil {
-				lbls = []string{}
-			}
-			lbls = append(lbls, v.Value)
-			m[v.Key] = lbls
-		}
-		for k, v := range m {
+		for k, v := range filter.Labels {
 			flt = append(flt, bson.E{"labels." + k, bson.D{{"$in", v}}})
 		}
 	}

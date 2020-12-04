@@ -22,6 +22,7 @@ type Freezer interface {
 
 type Projection interface {
 	GetName() string
+	// GetResumeEventIDs gets the smallest of the latest event ID for each partitioned topic from the DB, per aggregate
 	GetResumeEventIDs(ctx context.Context) (map[string]string, error)
 	Handler(ctx context.Context, e eventstore.Event) error
 }
@@ -33,8 +34,8 @@ type Notifier interface {
 }
 
 type Subscriber interface {
-	StartConsumer(ctx context.Context, partition int, resumeToken string, projection Projection, aggregateTypes []string) (chan struct{}, error)
-	GetResumeToken(ctx context.Context, partition int) (string, error)
+	StartConsumer(ctx context.Context, partition uint32, resumeToken string, projection Projection, aggregateTypes []string) (chan struct{}, error)
+	GetResumeToken(ctx context.Context, partition uint32) (string, error)
 }
 
 type EventHandler func(ctx context.Context, e eventstore.Event) error
@@ -42,7 +43,7 @@ type EventHandler func(ctx context.Context, e eventstore.Event) error
 type BootableManager struct {
 	projection Projection
 	notifier   Notifier
-	stages     []BootStages
+	stages     []BootStage
 
 	cancel  context.CancelFunc
 	wait    chan struct{}
@@ -53,15 +54,17 @@ type BootableManager struct {
 	mu      sync.RWMutex
 }
 
-type BootStages struct {
+// BootStage represents the different aggregates used to build a projection.
+// This aggregates can come from different event stores
+type BootStage struct {
 	AggregateTypes []string
 	Subscriber     Subscriber
 	// Repository: Repository to the events
 	Repository player.Repository
-	// PartitionLo: first partition number. if zero, partitioning will ignored
-	PartitionLo int
-	// PartitionHi: last partition number. if zero, partitioning will ignored
-	PartitionHi int
+	// PartitionLo: low partition number. if zero, partitioning will ignored
+	PartitionLo uint32
+	// PartitionHi: high partition number. if zero, partitioning will ignored
+	PartitionHi uint32
 }
 
 // NewBootableManager creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
@@ -72,7 +75,7 @@ type BootStages struct {
 func NewBootableManager(
 	projection Projection,
 	notifier Notifier,
-	stages ...BootStages,
+	stages ...BootStage,
 ) *BootableManager {
 	c := make(chan struct{})
 	close(c)
@@ -126,18 +129,17 @@ func (m *BootableManager) OnBoot(ctx context.Context) error {
 }
 
 func (m *BootableManager) boot(ctx context.Context) error {
-	// get the smallest of the latest event ID for each partitioned topic from the DB, per aggregate
 	prjEventIDs, err := m.projection.GetResumeEventIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("Could not get last event ID from the projection: %w", err)
 	}
 
-	// To avoid the creation of  potential massive buffer size
+	// To avoid the creation of a potential massive buffer size
 	// and to ensure that events are not lost, between the switch to the consumer,
 	// we execute the fetch in several steps.
 	// 1) Process all events from the ES from the begginning - it may be a long operation
 	// 2) start the consumer to track new events from now on
-	// 3) process any event that may have arrived between the switch
+	// 3) process any event that may have arrived during the switch
 	// 4) start consuming events from the last position
 	handler := m.projection.Handler
 
@@ -174,7 +176,7 @@ func (m *BootableManager) boot(ctx context.Context) error {
 		// grab the last events sequences in the topic (partitioned)
 		partitionSize := stage.PartitionHi - stage.PartitionLo + 1
 		tokens := make([]string, partitionSize)
-		for i := 0; i < partitionSize; i++ {
+		for i := uint32(0); i < partitionSize; i++ {
 			tokens[i], err = stage.Subscriber.GetResumeToken(ctx, stage.PartitionLo+i)
 			if err != nil {
 				return fmt.Errorf("Could not retrieve resume token: %w", err)
@@ -196,7 +198,7 @@ func (m *BootableManager) boot(ctx context.Context) error {
 		}
 
 		// start consuming events from the last available position
-		for i := 0; i < partitionSize; i++ {
+		for i := uint32(0); i < partitionSize; i++ {
 			ch, err := stage.Subscriber.StartConsumer(ctx, stage.PartitionLo+i, tokens[i], m.projection, stage.AggregateTypes)
 			if err != nil {
 				return fmt.Errorf("Unable to start consumer: %w", err)

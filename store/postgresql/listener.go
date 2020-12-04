@@ -48,13 +48,17 @@ func (pgt *PgTime) UnmarshalJSON(b []byte) error {
 }
 
 type Feed struct {
-	play       player.Player
-	repository player.Repository
-	limit      int
-	partitions int
-	pool       *pgxpool.Pool
-	offset     time.Duration
-	channel    string
+	play           player.Player
+	repository     player.Repository
+	limit          int
+	pool           *pgxpool.Pool
+	offset         time.Duration
+	channel        string
+	aggregateTypes []string
+	labels         store.Labels
+	partitions     uint32
+	partitionsLow  uint32
+	partitionsHi   uint32
 }
 
 type FeedOption func(*Feed)
@@ -73,11 +77,11 @@ func WithOffset(offset time.Duration) FeedOption {
 	}
 }
 
-func WithPartitions(partitions int) FeedOption {
-	return func(p *Feed) {
-		if partitions > 0 {
-			p.partitions = partitions
-		}
+func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
+	return func(f *Feed) {
+		f.partitions = partitions
+		f.partitionsLow = partitionsLow
+		f.partitionsHi = partitionsHi
 	}
 }
 
@@ -108,17 +112,17 @@ func NewFeed(dbUrl string, repository player.Repository, channel string, options
 
 // Feed will forward messages to the sinker
 // important: sinker.LastMessage should implement lag
-func (p Feed) Feed(ctx context.Context, sinker sink.Sinker, filters ...store.FilterOption) error {
-	afterEventID, _, err := store.LastEventIDInSink(ctx, sinker, p.partitions)
+func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
+	afterEventID, _, err := store.LastEventIDInSink(ctx, sinker, p.partitionsLow, p.partitionsHi)
 	if err != nil {
 		return err
 	}
 
 	log.Println("Starting to feed from event ID:", afterEventID)
-	return p.forward(ctx, afterEventID, sinker.Sink, filters...)
+	return p.forward(ctx, afterEventID, sinker.Sink)
 }
 
-func (p Feed) forward(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...store.FilterOption) error {
+func (p Feed) forward(ctx context.Context, afterEventID string, handler player.EventHandler) error {
 	lastID := afterEventID
 	for {
 		conn, err := p.pool.Acquire(ctx)
@@ -140,6 +144,11 @@ func (p Feed) forward(ctx context.Context, afterEventID string, handler player.E
 		}
 
 		log.Infof("Replaying events from %s", lastID)
+		filters := []store.FilterOption{
+			store.WithAggregateTypes(p.aggregateTypes...),
+			store.WithLabels(p.labels),
+			store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
+		}
 		lastID, err = p.play.Replay(ctx, handler, lastID, filters...)
 		if err != nil {
 			return fmt.Errorf("Error replaying events: %w", err)
@@ -199,6 +208,12 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 
 		if pgEvent.ID <= thresholdID {
 			// ignore events already handled
+			continue
+		}
+
+		// check if the event is to be forwarded to the sinker
+		part := common.WhichPartition(pgEvent.AggregateID, p.partitions)
+		if part < p.partitionsLow || part > p.partitionsHi {
 			continue
 		}
 
