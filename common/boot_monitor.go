@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -54,6 +52,10 @@ func NewBootMonitor(name string, lockable Booter, options ...Option) BootMonitor
 	return l
 }
 
+func (l BootMonitor) Name() string {
+	return l.name
+}
+
 func (l BootMonitor) IsRunning() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -69,7 +71,7 @@ func (l *BootMonitor) Stop() {
 	l.mu.Unlock()
 }
 
-func (l BootMonitor) Start(ctx context.Context, lockCh chan struct{}) {
+func (l BootMonitor) Start(ctx context.Context, lockReleased chan struct{}) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	l.mu.Lock()
@@ -93,7 +95,7 @@ func (l BootMonitor) Start(ctx context.Context, lockCh chan struct{}) {
 	// happens when the latch was cancelled
 	case <-ctx.Done():
 	case <-frozen:
-	case <-lockCh:
+	case <-lockReleased:
 		l.lockable.Cancel()
 	}
 }
@@ -137,125 +139,4 @@ func ParseSlot(slot string) (PartitionSlot, error) {
 		s.To = s.From
 	}
 	return s, nil
-}
-
-type Memberlister interface {
-	PingAndCount(context.Context) (int, error)
-}
-
-type RedisMemberlist struct {
-	rdb        *redis.Client
-	prefix     string
-	name       string
-	expiration time.Duration
-}
-
-func NewRedisMemberlist(address string, prefix string, expiration time.Duration) *RedisMemberlist {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     address,
-		Password: "", // no password set
-		DB:       0,  // use default DB
-	})
-	return &RedisMemberlist{
-		rdb:        rdb,
-		prefix:     prefix,
-		name:       prefix + "-" + uuid.New().String(),
-		expiration: expiration,
-	}
-}
-
-func (r *RedisMemberlist) PingAndCount(ctx context.Context) (int, error) {
-	err := r.rdb.Set(ctx, r.name, r.prefix, r.expiration).Err()
-	if err != nil {
-		return 0, err
-	}
-
-	var cursor uint64
-	var n int
-	for {
-		var keys []string
-		var err error
-		keys, cursor, err = r.rdb.Scan(ctx, cursor, r.prefix+"-*", 10).Result()
-		if err != nil {
-			panic(err)
-		}
-		n += len(keys)
-		if cursor == 0 {
-			break
-		}
-	}
-	return n, nil
-}
-
-type LockMonitor struct {
-	Lock    Locker
-	Monitor *BootMonitor
-}
-
-func BalancePartitions(ctx context.Context, member Memberlister, lms []LockMonitor, heartbeat time.Duration) {
-	ticker := time.NewTicker(heartbeat)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			run(ctx, member, lms)
-			err := run(ctx, member, lms)
-			if err != nil {
-				log.Warnf("Error while balancing partitions: %v", err)
-				continue
-			}
-		}
-	}
-}
-
-func run(ctx context.Context, member Memberlister, lms []LockMonitor) error {
-	count, err := member.PingAndCount(ctx)
-	if err != nil {
-		return err
-	}
-
-	monitorsNo := len(lms)
-	slots := monitorsNo / count
-	if monitorsNo%count != 0 {
-		slots++
-	}
-
-	balance(ctx, lms, slots)
-
-	return nil
-}
-
-func balance(ctx context.Context, lms []LockMonitor, slots int) {
-	running := 0
-	for _, v := range lms {
-		if v.Monitor.IsRunning() {
-			running++
-		}
-	}
-
-	if running == slots {
-		return
-	}
-
-	for _, v := range lms {
-		if running > slots {
-			if v.Monitor.IsRunning() {
-				v.Monitor.Stop()
-				running--
-			}
-		} else {
-			if !v.Monitor.IsRunning() {
-				quitCh, _ := v.Lock.Lock()
-				if quitCh != nil {
-					go v.Monitor.Start(ctx, quitCh)
-					running++
-				}
-			}
-		}
-		if running == slots {
-			return
-		}
-	}
 }
