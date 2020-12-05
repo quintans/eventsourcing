@@ -19,18 +19,9 @@ type Booter interface {
 }
 
 type Locker interface {
-	Lock() (bool, error)
-	Extend() (bool, error)
-	Unlock() (bool, error)
+	Lock() (chan struct{}, error)
+	Unlock() error
 }
-
-type WaitResult int
-
-const (
-	Done WaitResult = iota + 1
-	Extend
-	Released
-)
 
 // BootMonitor is responsible for refreshing the lease
 type BootMonitor struct {
@@ -78,7 +69,7 @@ func (l *BootMonitor) Stop() {
 	l.mu.Unlock()
 }
 
-func (l BootMonitor) Start(ctx context.Context, locker Locker) {
+func (l BootMonitor) Start(ctx context.Context, lockCh chan struct{}) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	l.mu.Lock()
@@ -89,7 +80,7 @@ func (l BootMonitor) Start(ctx context.Context, locker Locker) {
 		l.Stop()
 	}()
 
-	release := l.lockable.Wait()
+	frozen := l.lockable.Wait()
 	// acquired lock
 	// OnBoot may take some time (minutes) to finish since it will be doing synchronisation
 	go func() {
@@ -98,34 +89,12 @@ func (l BootMonitor) Start(ctx context.Context, locker Locker) {
 			log.Error("Error booting:", err)
 		}
 	}()
-	for {
-		switch l.waitOn(ctx.Done(), release) {
-		case Done:
-			return
-		case Extend:
-			ok, _ := locker.Extend()
-			if !ok {
-				l.lockable.Cancel()
-				return
-			}
-		case Released:
-			locker.Unlock()
-			return
-		}
-	}
-}
-
-func (l BootMonitor) waitOn(done <-chan struct{}, release <-chan struct{}) WaitResult {
-	timer := time.NewTimer(l.refresh)
-	defer timer.Stop()
 	select {
 	// happens when the latch was cancelled
-	case <-done:
-		return Done
-	case <-timer.C:
-		return Extend
-	case <-release:
-		return Released
+	case <-ctx.Done():
+	case <-frozen:
+	case <-lockCh:
+		l.lockable.Cancel()
 	}
 }
 
@@ -278,9 +247,9 @@ func balance(ctx context.Context, lms []LockMonitor, slots int) {
 			}
 		} else {
 			if !v.Monitor.IsRunning() {
-				ok, _ := v.Lock.Lock()
-				if ok {
-					go v.Monitor.Start(ctx, v.Lock)
+				quitCh, _ := v.Lock.Lock()
+				if quitCh != nil {
+					go v.Monitor.Start(ctx, quitCh)
 					running++
 				}
 			}

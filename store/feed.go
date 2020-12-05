@@ -15,25 +15,25 @@ type Feeder interface {
 }
 
 type Forwarder struct {
-	feeder  Feeder
-	sinker  sink.Sinker
-	release chan struct{}
-	mu      sync.RWMutex
+	feeder Feeder
+	sinker sink.Sinker
+	frozen chan struct{}
+	mu     sync.RWMutex
 }
 
 func NewForwarder(feeder Feeder, sinker sink.Sinker) *Forwarder {
 	return &Forwarder{
 		feeder: feeder,
 		sinker: sinker,
+		frozen: make(chan struct{}),
 	}
 }
 
 func (f *Forwarder) OnBoot(ctx context.Context) error {
-	f.release = make(chan struct{})
 	go func() {
 		defer func() {
 			f.mu.Lock()
-			close(f.release)
+			close(f.frozen)
 			f.mu.Unlock()
 		}()
 
@@ -56,7 +56,7 @@ func (f *Forwarder) Wait() <-chan struct{} {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return f.release
+	return f.frozen
 }
 
 func (f *Forwarder) Cancel() {}
