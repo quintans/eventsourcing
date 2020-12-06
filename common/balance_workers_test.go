@@ -15,41 +15,69 @@ func TestMembersList(t *testing.T) {
 	members := &sync.Map{}
 
 	// node #1
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	member1 := NewInMemMemberList(ctx1, members)
-	w1 := getWorkers()
-	go common.BalanceWorkers(ctx1, member1, w1, time.Second)
+	w1, cancel1 := newBalancer(members)
 
 	time.Sleep(time.Second)
-	count := countWorkersRunning(w1)
-	require.Equal(t, 3, count)
+	count := countRunningWorkers(w1)
+	require.Equal(t, 4, count)
 
 	// node #2
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	member2 := NewInMemMemberList(ctx2, members)
-	w2 := getWorkers()
-	go common.BalanceWorkers(ctx2, member2, w2, time.Second)
+	w2, cancel2 := newBalancer(members)
 
 	time.Sleep(3 * time.Second)
-	count = countWorkersRunning(w1)
-	require.True(t, count != 0)
-	count2 := countWorkersRunning(w2)
-	require.True(t, count2 != 0)
+	count = countRunningWorkers(w1)
+	require.Equal(t, 2, count)
+	count = countRunningWorkers(w2)
+	require.Equal(t, 2, count)
 
-	require.Equal(t, 3, count+count2)
+	// node #3
+	w3, cancel3 := newBalancer(members)
+
+	time.Sleep(3 * time.Second)
+	count1 := countRunningWorkers(w1)
+	require.True(t, count1 >= 1 && count1 <= 2)
+	count2 := countRunningWorkers(w2)
+	require.True(t, count2 >= 1 && count2 <= 2)
+	count3 := countRunningWorkers(w3)
+	require.True(t, count3 >= 1 && count3 <= 2)
+
+	require.Equal(t, 4, count+count2+count3)
+
+	// after a while we expect to still have he same values
+	time.Sleep(3 * time.Second)
+	count1B := countRunningWorkers(w1)
+	require.Equal(t, count1, count1B)
+	count2B := countRunningWorkers(w2)
+	require.Equal(t, count2, count2B)
+	count3B := countRunningWorkers(w3)
+	require.Equal(t, count3, count3B)
 
 	// kill node #1
 	cancel1()
 	time.Sleep(3 * time.Second)
-	count = countWorkersRunning(w1)
-	require.Equal(t, 0, count)
-	count = countWorkersRunning(w2)
-	require.Equal(t, 3, count)
+	count = countRunningWorkers(w2)
+	require.Equal(t, 2, count)
+	count = countRunningWorkers(w3)
+	require.Equal(t, 2, count)
 
+	// kill node #2
 	cancel2()
+	time.Sleep(3 * time.Second)
+	count = countRunningWorkers(w3)
+	require.Equal(t, 4, count)
+
+	cancel3()
 }
 
-func countWorkersRunning(workers []common.LockWorker) int {
+func newBalancer(members *sync.Map) ([]common.LockWorker, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	member := NewInMemMemberList(ctx, members)
+	ws := getWorkers()
+	go common.BalanceWorkers(ctx, member, ws, time.Second)
+	return ws, cancel
+}
+
+func countRunningWorkers(workers []common.LockWorker) int {
 	count := 0
 	for _, w := range workers {
 		if w.Worker.IsRunning() {
@@ -72,6 +100,10 @@ func getWorkers() []common.LockWorker {
 		{
 			Lock:   NewInMemLocker(),
 			Worker: NewInMemWorker("worker-three"),
+		},
+		{
+			Lock:   NewInMemLocker(),
+			Worker: NewInMemWorker("worker-four"),
 		},
 	}
 }

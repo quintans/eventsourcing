@@ -2,7 +2,6 @@ package common
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -132,16 +131,23 @@ func run(ctx context.Context, member Memberlister, workers []LockWorker) error {
 
 	monitorsNo := len(workers)
 	workersToAcquire := monitorsNo / membersCount
-	if monitorsNo%membersCount != 0 {
-		workersToAcquire++
-	}
 
+	// check if all nodes have the minimum workers. Only after that can the any extra worker be picked up.
+	hasMinWorkers := true
 	workersInUse := map[string]bool{}
 	for _, m := range members {
+		if workersToAcquire > len(m.Workers) {
+			hasMinWorkers = false
+		}
 		for _, v := range m.Workers {
 			workersInUse[v] = true
 		}
 	}
+
+	if hasMinWorkers && monitorsNo%membersCount != 0 {
+		workersToAcquire++
+	}
+
 	locks := balance(ctx, workers, workersToAcquire, workersInUse)
 	member.Register(ctx, locks)
 
@@ -149,7 +155,6 @@ func run(ctx context.Context, member Memberlister, workers []LockWorker) error {
 }
 
 func balance(ctx context.Context, workers []LockWorker, workersToAcquire int, workersInUse map[string]bool) []string {
-	fmt.Printf("===> workersToAcquire: %d, workersInUse: %v\n", workersToAcquire, workersInUse)
 	myRunningWorkers := map[string]bool{}
 	for _, v := range workers {
 		if v.Worker.IsRunning() {
