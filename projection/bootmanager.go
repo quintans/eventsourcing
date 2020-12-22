@@ -14,12 +14,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type Freezer interface {
+// Canceller is the interface for cancelling a running projection
+type Canceller interface {
 	Name() string
-	Freeze() bool
-	Unfreeze()
+	Cancel()
 }
 
+// Projection is the interface that a projection needs to implement
 type Projection interface {
 	GetName() string
 	// GetResumeEventIDs gets the smallest of the latest event ID for each partitioned topic from the DB, per aggregate
@@ -27,10 +28,10 @@ type Projection interface {
 	Handler(ctx context.Context, e eventstore.Event) error
 }
 
+// Notifier represents the interface that a message queue needs to implement to able to cancel distributed projections execution
 type Notifier interface {
-	ListenForNotifications(ctx context.Context, freezer Freezer) error
-	FreezeProjection(ctx context.Context, projectionName string) error
-	UnfreezeProjection(ctx context.Context, projectionName string) error
+	ListenCancelProjection(ctx context.Context, restarter Canceller) error
+	CancelProjection(ctx context.Context, projectionName string, partitions int) error
 }
 
 type Subscriber interface {
@@ -40,18 +41,15 @@ type Subscriber interface {
 
 type EventHandler func(ctx context.Context, e eventstore.Event) error
 
-type BootableManager struct {
-	projection Projection
-	notifier   Notifier
-	stages     []BootStage
+type ProjectionPartition struct {
+	restartLock common.WaitForUnlocker
+	projection  Projection
+	notifier    Notifier
+	stages      []BootStage
 
-	cancel  context.CancelFunc
-	wait    chan struct{}
-	release chan struct{}
-	closed  bool
-	frozen  []chan struct{}
-	hasLock bool // acquired the lock
-	mu      sync.RWMutex
+	cancel        context.CancelFunc
+	doneConsumers []chan struct{}
+	mu            sync.RWMutex
 }
 
 // BootStage represents the different aggregates used to build a projection.
@@ -67,68 +65,73 @@ type BootStage struct {
 	PartitionHi uint32
 }
 
-// NewBootableManager creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
+// NewProjectionPartition creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
 // Arguments:
 // @param projection: the projection
 // @param notifier: handles all interaction with freezing/unfreezing notifications
 // @param stages: booting can be done in stages, since different event stores can be involved
-func NewBootableManager(
+func NewProjectionPartition(
+	restartLock common.WaitForUnlocker,
 	projection Projection,
 	notifier Notifier,
 	stages ...BootStage,
-) *BootableManager {
-	c := make(chan struct{})
-	close(c)
-	mc := &BootableManager{
-		projection: projection,
-		notifier:   notifier,
-		stages:     stages,
-		wait:       c,
-		release:    make(chan struct{}),
+) *ProjectionPartition {
+	mc := &ProjectionPartition{
+		restartLock: restartLock,
+		projection:  projection,
+		notifier:    notifier,
+		stages:      stages,
 	}
 
 	return mc
 }
 
-func (m *BootableManager) Name() string {
+// Name returns the name of this projection
+func (m *ProjectionPartition) Name() string {
 	return m.projection.GetName()
 }
 
-// Wait block the call if the MonitorableConsumer was put on hold
-func (m *BootableManager) Wait() <-chan struct{} {
-	m.mu.Lock()
-	wait := m.wait
-	m.mu.Unlock()
+// Run action to be executed on boot
+func (m *ProjectionPartition) Run(ctx context.Context) error {
+	for {
+		m.restartLock.WaitForUnlock(ctx)
 
-	<-wait
+		ctx2, cancel := context.WithCancel(ctx)
+		m.mu.Lock()
+		m.cancel = cancel
+		m.mu.Unlock()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.release = make(chan struct{})
-	return m.release
+		err := m.bootAndListen(ctx2)
+		if err != nil {
+			cancel()
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+	}
 }
 
-// OnBoot action to be executed on boot
-func (m *BootableManager) OnBoot(ctx context.Context) error {
-	var ctx2 context.Context
-	ctx2, m.cancel = context.WithCancel(ctx)
-	err := m.boot(ctx2)
+func (m *ProjectionPartition) bootAndListen(ctx context.Context) error {
+	err := m.boot(ctx)
 	if err != nil {
-		m.cancel()
 		return err
 	}
 
-	err = m.notifier.ListenForNotifications(ctx, m)
+	err = m.notifier.ListenCancelProjection(ctx, m)
 	if err != nil {
-		m.cancel()
 		return err
 	}
 
-	m.hasLock = true
+	<-ctx.Done()
+
 	return nil
 }
 
-func (m *BootableManager) boot(ctx context.Context) error {
+func (m *ProjectionPartition) boot(ctx context.Context) error {
 	prjEventIDs, err := m.projection.GetResumeEventIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("Could not get last event ID from the projection: %w", err)
@@ -208,64 +211,21 @@ func (m *BootableManager) boot(ctx context.Context) error {
 	}
 
 	m.mu.Lock()
-	m.frozen = frozen
+	m.doneConsumers = frozen
 	m.mu.Unlock()
 
 	return nil
 }
 
-func (m *BootableManager) Cancel() {
+func (m *ProjectionPartition) Cancel() {
 	m.mu.Lock()
 	if m.cancel != nil {
 		m.cancel()
 	}
-	m.mu.Unlock()
-}
-
-// Freeze blocks calls to Wait() return true if this instance was locked
-func (m *BootableManager) Freeze() bool {
-	m.mu.Lock()
-	if m.cancel != nil {
-		m.cancel()
+	// wait for the closing subscriber
+	for _, ch := range m.doneConsumers {
+		<-ch
 	}
-	m.wait = make(chan struct{})
-	m.closed = false
-	close(m.release)
-	m.release = make(chan struct{})
-
-	if m.hasLock {
-		// wait for the closing subscriber
-		for _, ch := range m.frozen {
-			<-ch
-		}
-	}
-	locked := m.hasLock
-	m.hasLock = false
 
 	m.mu.Unlock()
-
-	return locked
-}
-
-// Unfreeze releases any blocking call to Wait()
-// points the cursor to the first available record
-func (m *BootableManager) Unfreeze() {
-	m.mu.Lock()
-	if !m.closed {
-		close(m.wait)
-		m.closed = true
-	}
-	m.mu.Unlock()
-}
-
-type Action int
-
-const (
-	Freeze Action = iota + 1
-	Unfreeze
-)
-
-type Notification struct {
-	Projection string `json:"projection"`
-	Action
 }

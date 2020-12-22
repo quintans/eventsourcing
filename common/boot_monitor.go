@@ -5,64 +5,44 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 )
 
-type Booter interface {
-	OnBoot(context.Context) error
-	Wait() <-chan struct{} // block if not ready
+type Runner interface {
+	Run(context.Context) error
 	Cancel()
 }
 
 type Locker interface {
-	Lock() (chan struct{}, error)
-	Unlock() error
+	Lock(context.Context) (chan struct{}, error)
+	Unlock(context.Context) error
+}
+
+type WaitForUnlocker interface {
+	WaitForUnlock(context.Context) error
 }
 
 // BootMonitor is responsible for refreshing the lease
-type BootMonitor struct {
-	name     string
-	refresh  time.Duration
-	lockable Booter
-	cancel   context.CancelFunc
-	mu       sync.RWMutex
+type RunWorker struct {
+	name   string
+	runner Runner
+	cancel context.CancelFunc
+	mu     sync.RWMutex
 }
 
-type Option func(r *BootMonitor)
-
-func WithRefreshInterval(refresh time.Duration) func(r *BootMonitor) {
-	return func(r *BootMonitor) {
-		r.refresh = refresh
+func NewRunWorker(name string, runner Runner) *RunWorker {
+	return &RunWorker{
+		name:   name,
+		runner: runner,
 	}
 }
 
-func NewBootMonitor(name string, lockable Booter, options ...Option) BootMonitor {
-	l := BootMonitor{
-		name:     name,
-		refresh:  10 * time.Second,
-		lockable: lockable,
-	}
-
-	for _, o := range options {
-		o(&l)
-	}
-
-	return l
-}
-
-func (l BootMonitor) Name() string {
+func (l *RunWorker) Name() string {
 	return l.name
 }
 
-func (l BootMonitor) IsRunning() bool {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.cancel != nil
-}
-
-func (l *BootMonitor) Stop() {
+func (l *RunWorker) Stop() {
 	l.mu.Lock()
 	if l.cancel != nil {
 		l.cancel()
@@ -71,7 +51,13 @@ func (l *BootMonitor) Stop() {
 	l.mu.Unlock()
 }
 
-func (l BootMonitor) Start(ctx context.Context, lockReleased chan struct{}) {
+func (l *RunWorker) IsRunning() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.cancel != nil
+}
+
+func (l *RunWorker) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	l.mu.Lock()
@@ -82,22 +68,18 @@ func (l BootMonitor) Start(ctx context.Context, lockReleased chan struct{}) {
 		l.Stop()
 	}()
 
-	frozen := l.lockable.Wait()
 	// acquired lock
 	// OnBoot may take some time (minutes) to finish since it will be doing synchronisation
 	go func() {
-		err := l.lockable.OnBoot(ctx)
+		err := l.runner.Run(ctx)
 		if err != nil {
-			log.Error("Error booting:", err)
+			log.Error("Error while running:", err)
 		}
 	}()
 	select {
-	// happens when the latch was cancelled
 	case <-ctx.Done():
-	case <-frozen:
-	case <-lockReleased:
-		l.lockable.Cancel()
 	}
+	l.runner.Cancel()
 }
 
 type PartitionSlot struct {

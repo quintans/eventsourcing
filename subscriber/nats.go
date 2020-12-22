@@ -153,7 +153,7 @@ func in(test string, values ...string) bool {
 	return false
 }
 
-func (s NatsSubscriber) ListenForNotifications(ctx context.Context, freezer projection.Freezer) error {
+func (s NatsSubscriber) ListenCancelProjection(ctx context.Context, canceller projection.Canceller) error {
 	sub, err := s.queue.Subscribe(s.managerTopic, func(msg *nats.Msg) {
 		n := projection.Notification{}
 		err := json.Unmarshal(msg.Data, &n)
@@ -161,24 +161,16 @@ func (s NatsSubscriber) ListenForNotifications(ctx context.Context, freezer proj
 			log.Errorf("Unable to unmarshal %v", err)
 			return
 		}
-		if n.Projection != freezer.Name() {
+		if n.Projection != canceller.Name() {
 			return
 		}
 
 		switch n.Action {
-		case projection.Freeze:
-			if freezer.Freeze() {
-				err := msg.Respond([]byte("..."))
-				if err != nil {
-					log.WithError(err).Error("Unable to respond to notification")
-				}
-			}
-		case projection.Unfreeze:
-			freezer.Unfreeze()
+		case projection.Release:
+			canceller.Cancel()
 		default:
 			log.WithField("notification", n).Error("Unknown notification")
 		}
-
 	})
 	if err != nil {
 		return err
@@ -192,27 +184,49 @@ func (s NatsSubscriber) ListenForNotifications(ctx context.Context, freezer proj
 	return nil
 }
 
-func (s NatsSubscriber) FreezeProjection(ctx context.Context, projectionName string) error {
-	log.WithField("projection", projectionName).Info("Freezing projection")
-	payload, err := json.Marshal(projection.Notification{
-		Projection: projectionName,
-		Action:     projection.Freeze,
-	})
-	if err != nil {
-		return err
-	}
-	_, err = s.queue.Request(s.managerTopic, payload, 500*time.Millisecond)
-	return err
-}
+func (s NatsSubscriber) CancelProjection(ctx context.Context, projectionName string, partitions int) error {
+	log.WithField("projection", projectionName).Info("Cancelling projection")
 
-func (s NatsSubscriber) UnfreezeProjection(ctx context.Context, projectionName string) error {
-	log.WithField("projection", projectionName).Info("Unfreezing projection")
 	payload, err := json.Marshal(projection.Notification{
 		Projection: projectionName,
-		Action:     projection.Unfreeze,
+		Action:     projection.Release,
 	})
 	if err != nil {
 		return err
 	}
-	return s.queue.Publish(s.managerTopic, payload)
+
+	replyTo := s.managerTopic + "-reply"
+	sub, err := s.queue.SubscribeSync(replyTo)
+	if err != nil {
+		return err
+	}
+	err = s.queue.Flush()
+	if err != nil {
+		return err
+	}
+
+	// Send the request
+	err = s.queue.PublishRequest(s.managerTopic, replyTo, []byte(payload))
+	if err != nil {
+		return err
+	}
+
+	// Wait for a single response
+	max := 500 * time.Millisecond
+	start := time.Now()
+	count := 0
+	for time.Now().Sub(start) < max {
+		_, err = sub.NextMsg(1 * time.Second)
+		if err != nil {
+			break
+		}
+
+		count++
+		if count >= partitions {
+			break
+		}
+	}
+	sub.Unsubscribe()
+
+	return nil
 }

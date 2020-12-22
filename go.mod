@@ -8,6 +8,7 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.11.0
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.1.2
+	github.com/hashicorp/consul/api v1.8.0
 	github.com/jackc/pgx/v4 v4.8.1
 	github.com/jmoiron/sqlx v1.2.0
 	github.com/lib/pq v1.7.0

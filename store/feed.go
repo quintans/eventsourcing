@@ -29,7 +29,7 @@ func NewForwarder(feeder Feeder, sinker sink.Sinker) *Forwarder {
 	}
 }
 
-func (f *Forwarder) OnBoot(ctx context.Context) error {
+func (f *Forwarder) Run(ctx context.Context) error {
 	go func() {
 		defer func() {
 			f.mu.Lock()

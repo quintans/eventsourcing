@@ -116,13 +116,17 @@ func NewInMemLocker() *InMemLocker {
 	return &InMemLocker{}
 }
 
-func (l *InMemLocker) Lock() (chan struct{}, error) {
+func (l *InMemLocker) Lock(context.Context) (chan struct{}, error) {
 	l.done = make(chan struct{})
 	return l.done, nil
 }
 
-func (l *InMemLocker) Unlock() error {
+func (l *InMemLocker) Unlock(context.Context) error {
 	close(l.done)
+	return nil
+}
+
+func (l *InMemLocker) WaitForUnlock(context.Context) error {
 	return nil
 }
 
@@ -152,7 +156,7 @@ func (w *InMemWorker) IsRunning() bool {
 	return w.running
 }
 
-func (w *InMemWorker) Start(ctx context.Context, released chan struct{}) {
+func (w *InMemWorker) Start(ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -160,7 +164,6 @@ func (w *InMemWorker) Start(ctx context.Context, released chan struct{}) {
 	go func() {
 		select {
 		case <-ctx.Done():
-		case <-released:
 		}
 		w.Stop()
 	}()
