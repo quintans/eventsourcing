@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/stan.go"
 	"github.com/quintans/eventstore/common"
@@ -35,7 +36,7 @@ func NewNatsSubscriber(
 	ctx context.Context,
 	addresses string,
 	stanClusterID,
-	clientID string,
+	clientIDPrefix string,
 	topic,
 	managerTopic string,
 	options ...Option,
@@ -44,6 +45,9 @@ func NewNatsSubscriber(
 	if err != nil {
 		return nil, fmt.Errorf("Could not instantiate NATS client: %w", err)
 	}
+
+	// since we are not using durable subscriptions we randomize the client
+	clientID := clientIDPrefix + "-" + uuid.New().String()
 
 	stream, err := stan.Connect(stanClusterID, clientID, stan.NatsURL(addresses))
 	if err != nil {

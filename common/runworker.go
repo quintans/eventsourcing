@@ -9,7 +9,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type Runner interface {
+// Tasker is the interface for tasks that need to be balanced among a set of workers
+type Tasker interface {
 	Run(context.Context) error
 	Cancel()
 }
@@ -26,12 +27,12 @@ type WaitForUnlocker interface {
 // BootMonitor is responsible for refreshing the lease
 type RunWorker struct {
 	name   string
-	runner Runner
+	runner Tasker
 	cancel context.CancelFunc
 	mu     sync.RWMutex
 }
 
-func NewRunWorker(name string, runner Runner) *RunWorker {
+func NewRunWorker(name string, runner Tasker) *RunWorker {
 	return &RunWorker{
 		name:   name,
 		runner: runner,

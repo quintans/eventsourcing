@@ -100,47 +100,107 @@ feeder.Feed(ctx, sinker)
 
 In a distributed system where we can have multiple replicas of a service, the above scenario does not avoid duplication of events.
 
-To avoid duplication and keep the order of events we should have only one active instance. For that we use a distributed lock.
-This is done with `eventstore.Forwarder` that takes a feed and a sink.
-Everything is coordinated by `common.BootMonitor`.
+To avoid duplication and keep the order of events we could have only one active instance using a distributed lock to elect the leader.
+But we can go further by partitioning the events and balance the different partitions across the existing instances of the forwarder service.
+
+This is done with `store.Forwarder` that takes a *feed* and a *sink*. `store.Forwarder` implements `common.Tasker` so that it can be balanced among a set of workers. All workers are managed by `common.BalanceWorkers`
 
 ```go
-sinker := sink.NewNatsSink(cfg.ConfigNats.Topic, 0, "test-cluster", "pusher-id", stan.NatsURL(cfg.ConfigNats.NatsAddress))
+sinker := sink.NewNatsSink(cfg.ConfigNats.Topic, partitions, "test-cluster", "pusher-id", stan.NatsURL(cfg.ConfigNats.NatsAddress))
 defer sinker.Close()
 
-dbURL := // build db url
-listener, _ := mongodb.NewFeed(dbURL, cfg.EsName)
-forwarder := store.NewForwarder(listener, sinker)
-locker, _ := locks.NewRedisLock(cfg.RedisAddresses, "pusher", cfg.LockExpiry)
-monitor := common.NewBootMonitor("MongoDB -> NATS feeder", forwarder, common.WithLock(locker), common.WithRefreshInterval(cfg.LockExpiry/2))
-ctx, cancel := context.WithCancel(context.Background())
-go monitor.Start(ctx)
+dbURL := fmt.Sprintf("mongodb://%s:%s@%s:%d?connect=direct", cfg.EsUser, cfg.EsPassword, cfg.EsHost, cfg.EsPort)
+pool, _ := locks.NewConsulLockPool(cfg.ConsulAddress)
+
+lockMonitors := make([]common.LockWorker, len(partitionSlots))
+for i, v := range partitionSlots {
+    listener, _ := mongodb.NewFeed(dbURL, cfg.EsName, mongodb.WithPartitions(feedPartitions, v.From, v.To))
+
+    lockMonitors[i] = common.LockWorker{
+        Lock: pool.NewLock("forwarder-lock", cfg.LockExpiry),
+        Worker: common.NewRunWorker("MongoDB -> NATS feeder", store.NewForwarder(
+            listener,
+            sinker,
+        )),
+    }
+}
+
+memberlist := common.NewRedisMemberlist(cfg.ConsulAddress, "forwarder-member", cfg.LockExpiry)
+go common.BalanceWorkers(ctx, memberlist, lockMonitors, cfg.LockExpiry/2)
 ```
 
-`common.BootMonitor` also handles the restart from the last published  in case of service crash or restart.
+`common.RunWorker` also handles the restart from the last published in case of service crash or restart.
 
 ### Projection
 
-On the projection side we need to listen to the event bus and the same logic of having just one instance running also applies, therefore a need for a distributed lock.
+Since events are being partitioned we use the same approach of spreading the partitions over a set of workers and then balance them over the service instances.
+
+![Balancing Projection Partitioning](balancing-projection-partitions.png)
+
+The above picture depicts the this balancing over several instances.
+
+Consider a Projection A that listens for messages coming from topic X and Y.
+If messages are partitioned into 2 partitions, we create a worker for each partition (we could also group partitions per worker). Each worker has an associated lock and a service instance can only run a worker for which it has a lock for. So `Projection A1` consumes messages in partition `X1` and `Y1` and `Worker 1` manages the `Projection A1` instance lifecycle.
+
+To avoid a an instance to lock all the workers, we rely in a distributed member list.
+This way a specific instance will only attempt to lock its share of workers.
+For example, if we have 2 instances and 4 workers, one instance will only attempt to lock 2 workers as per the formula `locks = workers / instances`.
+If the remainder is non zero, then every instance will attempt to lock one more worker, but only after all the instances have locked their share.
+This is to avoid the following scenario.
+
+Consider that we have 4 workers and 2 service instances and eagerly lock the extra worker.
+Balancing them, as the instances come online, would happen int the following manner:
+
+    1 instance -> 4 workers
+    2 instances -> balanced to 2 workers each
+    3 instances -> due to the non remainder, each would try to lock 2 workers, but since the first 2 instances already have a lock, they would not release it and the 3rd instance would have zero workers locked, ending in an unfair distribution.
+
+I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection.
+
+Request Rebuild projections
+- Acquire Freeze Lock
+- Emit Cancel projection notification
+- Wait for all partitions listeners to acknowledge stopping (timeout 1s)
+- Clean table(s)
+- Release Freeze Lock
+
+Boot Partitioned Projection
+- Wait for lock release (if any)
+- Boot from the last position for this partition(s). The view stores the partition number and the - last event id.
+- Start consuming the stream from the last event position
+- Listen to Cancel projection notification
+
+
+All that is handled by the following pseudo code (it may change since development is ongoing)
 
 ```go
 esRepo := player.NewGrpcRepository(cfg.EsAddress)
 natsSub, _ := subscriber.NewNatsSubscriber(ctx, cfg.NatsAddress, "test-cluster", "balance", cfg.Topic, NotificationTopic)
 
+balancePartitions, err := common.ParseSlots(cfg.PartitionSlots)
 prjCtrl := // instantiate the controller
-manager := projection.NewBootableManager(
-    prjCtrl,
-    natsSub,
-    projection.BootStages{
-        AggregateTypes: []string{event.AggregateType_Account},
-        Subscriber:     natsSub,
-        Repository:     esRepo,
-    },
-)
-locker, _ := locks.NewRedisLock(cfg.RedisAddresses, "balance", cfg.LockExpiry)
 
-monitor := common.NewBootMonitor("Balance Projection", manager, common.WithLock(locker), common.WithRefreshInterval(cfg.LockExpiry/2))
-go monitor.Start(ctx)
+workers := make([]common.LockWorker, len(balancePartitions))
+for i, v := range balancePartitions {
+    workers[i] = common.LockWorker{
+        Lock: pool.NewLock("balance-worker", cfg.LockExpiry),
+        Worker: common.NewRunWorker("Balance Projection", projection.NewProjectionPartition(
+            balanceRebuild,
+            prjCtrl,
+            natsSub,
+            projection.BootStage{
+                AggregateTypes: []string{event.AggregateType_Account},
+                Subscriber:     natsSub,
+                Repository:     esRepo,
+                PartitionLo:    v.From,
+                PartitionHi:    v.To,
+            },
+        )),
+    }
+}
+
+memberlist, _ := common.NewConsulMemberList(cfg.ConsulAddress, "balance-member", cfg.LockExpiry)
+go common.BalanceWorkers(ctx, memberlist, workers, cfg.LockExpiry/2)
 ```
 
 ## Rationale

@@ -52,13 +52,6 @@ func (f *Forwarder) Run(ctx context.Context) error {
 	return nil
 }
 
-func (f *Forwarder) Wait() <-chan struct{} {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	return f.frozen
-}
-
 func (f *Forwarder) Cancel() {}
 
 func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32) (afterEventID string, resumeToken []byte, err error) {
