@@ -11,7 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/encoding"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store/poller"
 	"github.com/quintans/eventstore/store/postgresql"
@@ -263,7 +263,7 @@ func TestForget(t *testing.T) {
 
 	db, err := connect(dbURL)
 	require.NoError(t, err)
-	evts := []common.Json{}
+	evts := []encoding.Json{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -274,7 +274,7 @@ func TestForget(t *testing.T) {
 		assert.NotEmpty(t, ou.Owner)
 	}
 
-	bodies := []common.Json{}
+	bodies := []encoding.Json{}
 	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
@@ -304,7 +304,7 @@ func TestForget(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	evts = []common.Json{}
+	evts = []encoding.Json{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -315,7 +315,7 @@ func TestForget(t *testing.T) {
 		assert.Empty(t, ou.Owner)
 	}
 
-	bodies = []common.Json{}
+	bodies = []encoding.Json{}
 	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))

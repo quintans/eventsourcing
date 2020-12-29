@@ -71,7 +71,9 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsto
 		return nil, err
 	}
 	defer sub.Close()
-	ctx, _ = context.WithTimeout(ctx, 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
 	var msg message
 	select {
 	case msg = <-ch:

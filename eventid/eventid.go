@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventstore/base32"
+	"github.com/quintans/eventstore/encoding"
 )
 
 const (
@@ -35,14 +35,14 @@ func New(instant time.Time, aggregateID uuid.UUID, version uint32) EventID {
 }
 
 func (e EventID) String() string {
-	return base32.Marshal(e[:])
+	return encoding.Marshal(e[:])
 }
 
 func Parse(encoded string) (EventID, error) {
 	if len(encoded) != EncodedStringSize {
 		return EventID{}, ErrInvalidStringSize
 	}
-	a, err := base32.Unmarshal(encoded)
+	a, err := encoding.Unmarshal(encoded)
 	if err != nil {
 		return EventID{}, err
 	}
@@ -62,13 +62,13 @@ func Parse(encoded string) (EventID, error) {
 func (e EventID) Time() time.Time {
 	b := make([]byte, 8)
 	copy(b[2:], e[:TimestampSize])
-	ts := base32.Btoi64(b)
+	ts := encoding.Btoi64(b)
 	return Time(ts)
 }
 
 func (e *EventID) SetTime(instant time.Time) {
 	ts := Timestamp(instant)
-	bts := base32.I64tob(ts) // 8 bytes
+	bts := encoding.I64tob(ts) // 8 bytes
 	// using only 6 bytes will give us 12293 years
 	copy(e[:], bts[2:])
 }
@@ -88,11 +88,11 @@ func (e *EventID) SetAggregateID(aggregateID uuid.UUID) {
 func (e EventID) Version() uint32 {
 	b := make([]byte, 4)
 	copy(b[1:], e[TimestampSize+UuidSize:])
-	return base32.Btoi32(b)
+	return encoding.Btoi32(b)
 }
 
 func (e *EventID) SetVersion(version uint32) {
-	bver := base32.I32tob(version)             // 4 bytes
+	bver := encoding.I32tob(version)           // 4 bytes
 	copy(e[TimestampSize+UuidSize:], bver[1:]) // 3bytes
 }
 

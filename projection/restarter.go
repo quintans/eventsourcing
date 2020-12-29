@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/worker"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -27,11 +27,11 @@ type Restarter interface {
 }
 
 type NotifierLockRestarter struct {
-	lock     common.Locker
+	lock     worker.Locker
 	notifier Notifier
 }
 
-func NewNotifierLockRestarter(lock common.Locker, notifier Notifier) *NotifierLockRestarter {
+func NewNotifierLockRestarter(lock worker.Locker, notifier Notifier) *NotifierLockRestarter {
 	return &NotifierLockRestarter{
 		lock:     lock,
 		notifier: notifier,

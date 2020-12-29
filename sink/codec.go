@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/encoding"
 )
 
 type Codec interface {
@@ -23,12 +23,12 @@ type Decoder interface {
 
 type Event struct {
 	ID               string                 `json:"id,omitempty"`
-	ResumeToken      common.Base64          `json:"resume_token,omitempty"`
+	ResumeToken      encoding.Base64        `json:"resume_token,omitempty"`
 	AggregateID      string                 `json:"aggregate_id,omitempty"`
 	AggregateVersion uint32                 `json:"aggregate_version,omitempty"`
 	AggregateType    string                 `json:"aggregate_type,omitempty"`
 	Kind             string                 `json:"kind,omitempty"`
-	Body             common.Base64          `json:"body,omitempty"`
+	Body             encoding.Base64        `json:"body,omitempty"`
 	IdempotencyKey   string                 `json:"idempotency_key,omitempty"`
 	Labels           map[string]interface{} `json:"labels,omitempty"`
 	CreatedAt        time.Time              `json:"created_at,omitempty"`

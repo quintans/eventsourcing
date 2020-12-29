@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/encoding"
 )
 
 var (
@@ -50,12 +51,12 @@ type Aggregater interface {
 // Event represents the event data
 type Event struct {
 	ID               string
-	ResumeToken      common.Base64
+	ResumeToken      encoding.Base64
 	AggregateID      string
 	AggregateVersion uint32
 	AggregateType    string
 	Kind             string
-	Body             common.Base64
+	Body             encoding.Base64
 	IdempotencyKey   string
 	Labels           map[string]interface{}
 	CreatedAt        time.Time

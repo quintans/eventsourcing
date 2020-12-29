@@ -1,4 +1,4 @@
-package common_test
+package worker_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/worker"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,15 +69,15 @@ func TestMembersList(t *testing.T) {
 	cancel3()
 }
 
-func newBalancer(members *sync.Map) ([]common.LockWorker, context.CancelFunc) {
+func newBalancer(members *sync.Map) ([]worker.LockWorker, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	member := NewInMemMemberList(ctx, members)
 	ws := getWorkers()
-	go common.BalanceWorkers(ctx, member, ws, time.Second)
+	go worker.BalanceWorkers(ctx, member, ws, time.Second)
 	return ws, cancel
 }
 
-func countRunningWorkers(workers []common.LockWorker) int {
+func countRunningWorkers(workers []worker.LockWorker) int {
 	count := 0
 	for _, w := range workers {
 		if w.Worker.IsRunning() {
@@ -87,8 +87,8 @@ func countRunningWorkers(workers []common.LockWorker) int {
 	return count
 }
 
-func getWorkers() []common.LockWorker {
-	return []common.LockWorker{
+func getWorkers() []worker.LockWorker {
+	return []worker.LockWorker{
 		{
 			Lock:   NewInMemLocker(),
 			Worker: NewInMemWorker("worker-one"),
@@ -198,10 +198,10 @@ func (m InMemMemberList) Name() string {
 	return m.name
 }
 
-func (m InMemMemberList) List(context.Context) ([]common.MemberWorkers, error) {
-	members := []common.MemberWorkers{}
+func (m InMemMemberList) List(context.Context) ([]worker.MemberWorkers, error) {
+	members := []worker.MemberWorkers{}
 	m.db.Range(func(key, value interface{}) bool {
-		members = append(members, common.MemberWorkers{
+		members = append(members, worker.MemberWorkers{
 			Name:    key.(string),
 			Workers: value.([]string),
 		})

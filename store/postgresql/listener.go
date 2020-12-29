@@ -12,6 +12,7 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/encoding"
 	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/sink"
@@ -19,15 +20,15 @@ import (
 )
 
 type FeedEvent struct {
-	ID               string      `json:"id,omitempty"`
-	AggregateID      string      `json:"aggregate_id,omitempty"`
-	AggregateVersion uint32      `json:"aggregate_version,omitempty"`
-	AggregateType    string      `json:"aggregate_type,omitempty"`
-	Kind             string      `json:"kind,omitempty"`
-	Body             common.Json `json:"body,omitempty"`
-	IdempotencyKey   string      `json:"idempotency_key,omitempty"`
-	Labels           common.Json `json:"labels,omitempty"`
-	CreatedAt        PgTime      `json:"created_at,omitempty"`
+	ID               string        `json:"id,omitempty"`
+	AggregateID      string        `json:"aggregate_id,omitempty"`
+	AggregateVersion uint32        `json:"aggregate_version,omitempty"`
+	AggregateType    string        `json:"aggregate_type,omitempty"`
+	Kind             string        `json:"kind,omitempty"`
+	Body             encoding.Json `json:"body,omitempty"`
+	IdempotencyKey   string        `json:"idempotency_key,omitempty"`
+	Labels           encoding.Json `json:"labels,omitempty"`
+	CreatedAt        PgTime        `json:"created_at,omitempty"`
 }
 
 type PgTime time.Time

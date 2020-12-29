@@ -1,7 +1,6 @@
 package common
 
 import (
-	"hash/fnv"
 	"strconv"
 )
 
@@ -23,10 +22,4 @@ func PartitionTopic(key, topic string, partitions uint32) string {
 func WhichPartition(s string, partitions uint32) uint32 {
 	hash := Hash(s)
 	return (hash % partitions) + 1
-}
-
-func Hash(s string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return h.Sum32()
 }
