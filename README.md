@@ -88,7 +88,7 @@ acc2 := a.(*Account)
 ### Forwarder
 
 After storing the events in a database we need to publish them into an event bus.
-This is done with a `eventstore.Feeder` and a `sink.Sinker`
+This is done with a `store.Feeder` and a `sink.Sinker`
 
 ```go
 sinker := // targets an event bus
@@ -98,10 +98,13 @@ feeder := // listen to a inserts to a database
 feeder.Feed(ctx, sinker)
 ```
 
-In a distributed system where we can have multiple replicas of a service, the above scenario does not avoid duplication of events.
+In a distributed system where we can have multiple instance replicas of a service, we need to avoid duplication of events being forwarded to the message bus.
+To avoid duplication and **keep the order of events** we could have only one active instance using a distributed lock to elect the leader.
+But this would mean that we would have an idle instance and it is just a wast of resources.
+To take advantage of all the replicas we can partition the events and balance the different partitions across the existing instances of the forwarder service.
 
-To avoid duplication and keep the order of events we could have only one active instance using a distributed lock to elect the leader.
-But we can go further by partitioning the events and balance the different partitions across the existing instances of the forwarder service.
+**Example**: consider 2 forwarder instances and and we want to partition the events into 12 partitions.
+Each forwarder instance would be responsible 6 partitions.
 
 This is done with `store.Forwarder` that takes a *feed* and a *sink*. `store.Forwarder` implements `common.Tasker` so that it can be balanced among a set of workers. All workers are managed by `common.BalanceWorkers`
 
