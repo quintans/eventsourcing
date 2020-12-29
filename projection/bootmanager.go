@@ -11,6 +11,7 @@ import (
 	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store"
+	"github.com/quintans/eventstore/worker"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -42,7 +43,7 @@ type Subscriber interface {
 type EventHandler func(ctx context.Context, e eventstore.Event) error
 
 type ProjectionPartition struct {
-	restartLock common.WaitForUnlocker
+	restartLock worker.WaitForUnlocker
 	projection  Projection
 	notifier    Notifier
 	stages      []BootStage
@@ -71,7 +72,7 @@ type BootStage struct {
 // @param notifier: handles all interaction with freezing/unfreezing notifications
 // @param stages: booting can be done in stages, since different event stores can be involved
 func NewProjectionPartition(
-	restartLock common.WaitForUnlocker,
+	restartLock worker.WaitForUnlocker,
 	projection Projection,
 	notifier Notifier,
 	stages ...BootStage,
@@ -152,10 +153,14 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		// for the aggregates of this stage find the smallest
 		prjEventID := common.MaxEventID
 		for _, at := range aggregateTypes {
-			tmp := prjEventIDs[at]
-			if tmp < prjEventID {
+			tmp, ok := prjEventIDs[at]
+			if ok && tmp < prjEventID {
 				prjEventID = tmp
 			}
+		}
+		// if no event was found in all aggregates, then use the min event id
+		if prjEventID == common.MaxEventID {
+			prjEventID = common.MinEventID
 		}
 
 		// replay oldest events

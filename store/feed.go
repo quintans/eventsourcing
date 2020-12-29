@@ -76,9 +76,11 @@ func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, pa
 			if message != nil && message.ID < afterEventID {
 				afterEventID = message.ID
 				resumeToken = message.ResumeToken
-			} else {
-				afterEventID = common.MinEventID
 			}
+		}
+		// if no message was found in all partitions, then use the min event id
+		if afterEventID == common.MaxEventID {
+			afterEventID = common.MinEventID
 		}
 	}
 
