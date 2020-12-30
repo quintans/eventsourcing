@@ -26,6 +26,7 @@ const (
 type Event struct {
 	ID               string    `db:"id"`
 	AggregateID      string    `db:"aggregate_id"`
+	AggregateIDHash  int32     `db:"aggregate_id_hash"`
 	AggregateVersion uint32    `db:"aggregate_version"`
 	AggregateType    string    `db:"aggregate_type"`
 	Kind             string    `db:"kind"`
@@ -99,7 +100,9 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		for _, e := range eRec.Details {
 			version++
 			id = common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
-			h := common.Hash(eRec.AggregateID)
+			x := common.Hash(eRec.AggregateID)
+			h := int32ring(x)
+
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at, aggregate_id_hash)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -134,6 +137,17 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 	}
 
 	return id, version, nil
+}
+
+func int32ring(x uint32) int32 {
+	h := int32(x)
+	// we want a positive value so that partitioning (mod) results in a positive value.
+	// if h overflows, becoming negative, setting sign bit to zero will make the overflow start from zero
+	if h < 0 {
+		// setting sign bit to zero
+		h &= 0x7fffffff
+	}
+	return h
 }
 
 func isPgDup(err error) bool {
@@ -367,7 +381,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, afterEvent
 		if err == sql.ErrNoRows {
 			return []eventstore.Event{}, nil
 		}
-		return nil, err
+		return nil, faults.Errorf("Unable to query events: %w", err)
 	}
 	events := []eventstore.Event{}
 	for rows.Next() {
