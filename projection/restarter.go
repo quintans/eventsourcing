@@ -2,9 +2,9 @@ package projection
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/quintans/eventstore/worker"
+	"github.com/quintans/toolkit/faults"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -47,7 +47,7 @@ func (r *NotifierLockRestarter) Restart(ctx context.Context, projection string, 
 	logger.Info("Acquiring rebuild projection lock")
 	_, err := r.lock.Lock(ctx)
 	if err != nil {
-		return fmt.Errorf("Unable to acquire rebuild lock for projection %s: %w", projection, err)
+		return faults.Errorf("Unable to acquire rebuild lock for projection %s: %w", projection, err)
 	}
 
 	defer func() {

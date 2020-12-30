@@ -2,9 +2,9 @@ package eventstore
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/toolkit/faults"
 )
 
 type JsonCodec struct{}
@@ -33,7 +33,7 @@ func rehydrate(factory Factory, decoder Decoder, upcaster Upcaster, kind string,
 	if len(body) > 0 {
 		err = decoder.Decode(body, e)
 		if err != nil {
-			return nil, fmt.Errorf("Unable to decode event %s: %w", kind, err)
+			return nil, faults.Errorf("Unable to decode event %s: %w", kind, err)
 		}
 	}
 	if upcaster != nil {

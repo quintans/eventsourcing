@@ -2,7 +2,6 @@ package projection
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/eventstore/worker"
+	"github.com/quintans/toolkit/faults"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -135,7 +135,7 @@ func (m *ProjectionPartition) bootAndListen(ctx context.Context) error {
 func (m *ProjectionPartition) boot(ctx context.Context) error {
 	prjEventIDs, err := m.projection.GetResumeEventIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("Could not get last event ID from the projection: %w", err)
+		return faults.Errorf("Could not get last event ID from the projection: %w", err)
 	}
 
 	// To avoid the creation of a potential massive buffer size
@@ -166,7 +166,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		// replay oldest events
 		prjEventID, err = eventid.DelayEventID(prjEventID, player.TrailingLag)
 		if err != nil {
-			return fmt.Errorf("Error delaying the eventID: %w", err)
+			return faults.Errorf("Error delaying the eventID: %w", err)
 		}
 		log.Printf("Booting %s from '%s'", m.projection.GetName(), prjEventID)
 
@@ -174,7 +174,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		filter := store.WithAggregateTypes(aggregateTypes...)
 		lastEventID, err := replayer.Replay(ctx, handler, prjEventID, filter)
 		if err != nil {
-			return fmt.Errorf("Could not replay all events (first part): %w", err)
+			return faults.Errorf("Could not replay all events (first part): %w", err)
 		}
 		lastEventIDs = append(lastEventIDs, lastEventID)
 	}
@@ -187,7 +187,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		for i := uint32(0); i < partitionSize; i++ {
 			tokens[i], err = stage.Subscriber.GetResumeToken(ctx, stage.PartitionLo+i)
 			if err != nil {
-				return fmt.Errorf("Could not retrieve resume token: %w", err)
+				return faults.Errorf("Could not retrieve resume token: %w", err)
 			}
 		}
 
@@ -196,12 +196,12 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			AggregateTypes: stage.AggregateTypes,
 		})
 		if err != nil {
-			return fmt.Errorf("Could not replay all events (second part): %w", err)
+			return faults.Errorf("Could not replay all events (second part): %w", err)
 		}
 		for _, event := range events {
 			err = handler(ctx, event)
 			if err != nil {
-				return fmt.Errorf("Error handling event %+v: %w", event, err)
+				return faults.Errorf("Error handling event %+v: %w", event, err)
 			}
 		}
 
@@ -209,7 +209,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		for i := uint32(0); i < partitionSize; i++ {
 			ch, err := stage.Subscriber.StartConsumer(ctx, stage.PartitionLo+i, tokens[i], m.projection, stage.AggregateTypes)
 			if err != nil {
-				return fmt.Errorf("Unable to start consumer: %w", err)
+				return faults.Errorf("Unable to start consumer: %w", err)
 			}
 			frozen = append(frozen, ch)
 		}

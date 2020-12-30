@@ -2,12 +2,12 @@ package sink
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/nats-io/stan.go"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/toolkit/faults"
 )
 
 type NatsSink struct {
@@ -40,7 +40,7 @@ func (p *NatsSink) SetCodec(codec Codec) {
 func (p *NatsSink) Init() error {
 	c, err := stan.Connect(p.stanClusterID, p.clientID, p.options...)
 	if err != nil {
-		return fmt.Errorf("Could not instantiate Nats connection: %w", err)
+		return faults.Errorf("Could not instantiate Nats connection: %w", err)
 	}
 	p.client = c
 	return nil
@@ -99,7 +99,7 @@ func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
 	topic := common.PartitionTopic(e.AggregateID, p.topic, p.partitions)
 	err = p.client.Publish(topic, b)
 	if err != nil {
-		return fmt.Errorf("Failed to send message: %w", err)
+		return faults.Errorf("Failed to send message: %w", err)
 	}
 	return nil
 }

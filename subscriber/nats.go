@@ -3,7 +3,6 @@ package subscriber
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/projection"
 	"github.com/quintans/eventstore/sink"
+	"github.com/quintans/toolkit/faults"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -43,7 +43,7 @@ func NewNatsSubscriber(
 ) (*NatsSubscriber, error) {
 	nc, err := nats.Connect(addresses)
 	if err != nil {
-		return nil, fmt.Errorf("Could not instantiate NATS client: %w", err)
+		return nil, faults.Errorf("Could not instantiate NATS client: %w", err)
 	}
 
 	// since we are not using durable subscriptions we randomize the client
@@ -51,7 +51,7 @@ func NewNatsSubscriber(
 
 	stream, err := stan.Connect(stanClusterID, clientID, stan.NatsURL(addresses))
 	if err != nil {
-		return nil, fmt.Errorf("Could not instantiate NATS stream connection: %w", err)
+		return nil, faults.Errorf("Could not instantiate NATS stream connection: %w", err)
 	}
 
 	go func() {
@@ -110,7 +110,7 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition uint32, res
 		var err error
 		seq, err = strconv.ParseUint(resumeToken, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("Unable to parse resume token %s: %w", resumeToken, err)
+			return nil, faults.Errorf("Unable to parse resume token %s: %w", resumeToken, err)
 		}
 		start = stan.StartAtSequence(seq)
 	}

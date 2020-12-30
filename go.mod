@@ -16,6 +16,7 @@ require (
 	github.com/nats-io/nats-streaming-server v0.18.0 // indirect
 	github.com/nats-io/nats.go v1.10.0
 	github.com/nats-io/stan.go v0.7.0
+	github.com/quintans/toolkit v0.0.3
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.6.1
 	github.com/testcontainers/testcontainers-go v0.9.0
@@ -24,3 +25,5 @@ require (
 	google.golang.org/protobuf v1.25.0
 	gotest.tools v0.0.0-20181223230014-1083505acf35
 )
+
+replace github.com/quintans/toolkit => ../toolkit

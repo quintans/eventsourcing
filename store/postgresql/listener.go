@@ -3,7 +3,6 @@ package postgresql
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
+	"github.com/quintans/toolkit/faults"
 )
 
 type FeedEvent struct {
@@ -91,7 +91,7 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 func NewFeed(dbUrl string, repository player.Repository, channel string, options ...FeedOption) (Feed, error) {
 	pool, err := pgxpool.Connect(context.Background(), dbUrl)
 	if err != nil {
-		return Feed{}, fmt.Errorf("Unable to connect to database: %w", err)
+		return Feed{}, faults.Errorf("Unable to connect to database: %w", err)
 	}
 
 	p := Feed{
@@ -128,20 +128,20 @@ func (p Feed) forward(ctx context.Context, afterEventID string, handler player.E
 	for {
 		conn, err := p.pool.Acquire(ctx)
 		if err != nil {
-			return fmt.Errorf("Error acquiring connection: %w", err)
+			return faults.Errorf("Error acquiring connection: %w", err)
 		}
 		defer conn.Release()
 
 		// start listening for events
 		_, err = conn.Exec(ctx, "listen "+p.channel)
 		if err != nil {
-			return fmt.Errorf("Error listening to %s channel: %w", p.channel, err)
+			return faults.Errorf("Error listening to %s channel: %w", p.channel, err)
 		}
 
 		// replay events applying a safety margin, in case we missed events
 		lastID, err = eventid.DelayEventID(lastID, p.offset)
 		if err != nil {
-			return fmt.Errorf("Error offsetting event ID: %w", err)
+			return faults.Errorf("Error offsetting event ID: %w", err)
 		}
 
 		log.Infof("Replaying events from %s", lastID)
@@ -152,7 +152,7 @@ func (p Feed) forward(ctx context.Context, afterEventID string, handler player.E
 		}
 		lastID, err = p.play.Replay(ctx, handler, lastID, filters...)
 		if err != nil {
-			return fmt.Errorf("Error replaying events: %w", err)
+			return faults.Errorf("Error replaying events: %w", err)
 		}
 		filter := store.Filter{}
 		for _, f := range filters {
@@ -161,12 +161,12 @@ func (p Feed) forward(ctx context.Context, afterEventID string, handler player.E
 		// remaining records due to the safety margin
 		events, err := p.repository.GetEvents(ctx, lastID, 0, p.offset, filter)
 		if err != nil {
-			return fmt.Errorf("Error getting all events events: %w", err)
+			return faults.Errorf("Error getting all events events: %w", err)
 		}
 		for _, event := range events {
 			err = handler(ctx, event)
 			if err != nil {
-				return fmt.Errorf("Error handling event %+v: %w", event, err)
+				return faults.Errorf("Error handling event %+v: %w", event, err)
 			}
 			lastID = event.ID
 		}
@@ -176,7 +176,7 @@ func (p Feed) forward(ctx context.Context, afterEventID string, handler player.E
 		lastID, retry, err = p.listen(ctx, conn, lastID, handler)
 		if !retry {
 			if err != nil {
-				return fmt.Errorf("Error while listening PostgreSQL: %w", err)
+				return faults.Errorf("Error while listening PostgreSQL: %w", err)
 			}
 			return nil
 		}
@@ -195,7 +195,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 			return lastID, false, nil
 		default:
 			if err != nil {
-				return lastID, true, fmt.Errorf("Error waiting for notification: %w", err)
+				return lastID, true, faults.Errorf("Error waiting for notification: %w", err)
 			}
 		}
 
@@ -203,7 +203,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		pgEvent := FeedEvent{}
 		err = json.Unmarshal([]byte(msg.Payload), &pgEvent)
 		if err != nil {
-			return "", false, fmt.Errorf("Error unmarshalling Postgresql Event: %w", err)
+			return "", false, faults.Errorf("Error unmarshalling Postgresql Event: %w", err)
 		}
 		lastID = pgEvent.ID
 
@@ -221,7 +221,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		labels := map[string]interface{}{}
 		err = json.Unmarshal(pgEvent.Labels, &labels)
 		if err != nil {
-			return "", false, fmt.Errorf("Unable unmarshal labels to map: %w", err)
+			return "", false, faults.Errorf("Unable unmarshal labels to map: %w", err)
 		}
 		event := eventstore.Event{
 			ID:               pgEvent.ID,
@@ -236,7 +236,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		}
 		err = handler(ctx, event)
 		if err != nil {
-			return "", false, fmt.Errorf("Error handling event %+v: %w", event, err)
+			return "", false, faults.Errorf("Error handling event %+v: %w", event, err)
 		}
 	}
 }

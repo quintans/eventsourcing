@@ -9,6 +9,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/store"
+	"github.com/quintans/toolkit/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -102,7 +103,7 @@ func (r *EsRepository) snapshotCollection() *mongo.Collection {
 
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
 	if len(eRec.Details) == 0 {
-		return "", 0, errors.New("No events to be saved")
+		return "", 0, faults.New("No events to be saved")
 	}
 	details := make([]EventDetail, 0, len(eRec.Details))
 	for _, e := range eRec.Details {
@@ -158,7 +159,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		if isMongoDup(err) {
 			return "", 0, eventstore.ErrConcurrentModification
 		}
-		return "", 0, fmt.Errorf("Unable to insert event: %w", err)
+		return "", 0, faults.Errorf("Unable to insert event: %w", err)
 	}
 
 	return id, version, nil
@@ -200,7 +201,7 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 		if err == mongo.ErrNoDocuments {
 			return eventstore.Snapshot{}, nil
 		}
-		return eventstore.Snapshot{}, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return eventstore.Snapshot{}, faults.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
 	return eventstore.Snapshot{
 		ID:               snap.ID,
@@ -239,10 +240,10 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 
 	events, err := r.queryEvents(ctx, filter, opts, "", 0)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
+		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
 	if len(events) == 0 {
-		return nil, fmt.Errorf("Aggregate '%s' events were not found: %w", aggregateID, err)
+		return nil, faults.Errorf("Aggregate '%s' events were not found: %w", aggregateID, err)
 	}
 
 	return events, nil
@@ -256,7 +257,7 @@ func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idemp
 		if err == mongo.ErrNoDocuments {
 			return false, nil
 		}
-		return false, fmt.Errorf("Unable to verify the existence of the idempotency key: %w", err)
+		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
 	}
 
 	return true, nil
@@ -276,7 +277,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	}
 	events := []Event{}
 	if err = cursor.All(ctx, &events); err != nil {
-		return fmt.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
+		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
 	for _, evt := range events {
 		for k, d := range evt.Details {
@@ -293,7 +294,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 			}
 			_, err = r.eventsCollection().UpdateOne(ctx, filter, update)
 			if err != nil {
-				return fmt.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
+				return faults.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
 			}
 		}
 	}
@@ -308,7 +309,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	}
 	snaps := []Snapshot{}
 	if err = cursor.All(ctx, &snaps); err != nil {
-		return fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", request.AggregateID, err)
+		return faults.Errorf("Unable to get snapshot for aggregate '%s': %w", request.AggregateID, err)
 	}
 
 	for _, s := range snaps {
@@ -325,7 +326,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 		}
 		_, err = r.snapshotCollection().UpdateOne(ctx, filter, update)
 		if err != nil {
-			return fmt.Errorf("Unable to forget snapshot with ID %s: %w", s.ID, err)
+			return faults.Errorf("Unable to forget snapshot with ID %s: %w", s.ID, err)
 		}
 	}
 
@@ -349,7 +350,7 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 		if err == mongo.ErrNoDocuments {
 			return "", nil
 		}
-		return "", fmt.Errorf("Unable to get the last event ID: %w", err)
+		return "", faults.Errorf("Unable to get the last event ID: %w", err)
 	}
 
 	return evt.ID, nil
@@ -381,7 +382,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, bat
 
 	rows, err := r.queryEvents(ctx, flt, opts, eventID, count)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get events after '%s' for filter %+v: %w", eventID, filter, err)
+		return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", eventID, filter, err)
 	}
 	return rows, nil
 }

@@ -3,8 +3,9 @@ package encoding
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
+
+	"github.com/quintans/toolkit/faults"
 )
 
 // Base64 is a []byte base64 encoded value.
@@ -22,11 +23,11 @@ func (m Base64) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON sets *m to a decoded base64.
 func (m *Base64) UnmarshalJSON(data []byte) error {
 	if m == nil {
-		return errors.New("common.Base64: UnmarshalJSON on nil pointer")
+		return faults.New("common.Base64: UnmarshalJSON on nil pointer")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil {
-		return fmt.Errorf("common.Base64: decode error: %w", err)
+		return faults.Errorf("common.Base64: decode error: %w", err)
 	}
 
 	*m = append((*m)[0:0], decoded...)

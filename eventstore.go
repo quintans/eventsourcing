@@ -3,11 +3,11 @@ package eventstore
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/toolkit/faults"
 )
 
 var (
@@ -277,7 +277,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 		if delta >= es.snapshotThreshold {
 			body, err := es.codec.Encode(aggregate)
 			if err != nil {
-				return fmt.Errorf("Failed to create serialize snapshot: %w", err)
+				return faults.Errorf("Failed to create serialize snapshot: %w", err)
 			}
 
 			snap := Snapshot{

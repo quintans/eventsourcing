@@ -15,6 +15,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/store"
+	"github.com/quintans/toolkit/faults"
 )
 
 const (
@@ -108,7 +109,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 				if isPgDup(err) {
 					return eventstore.ErrConcurrentModification
 				}
-				return fmt.Errorf("Unable to insert event: %w", err)
+				return faults.Errorf("Unable to insert event: %w", err)
 			}
 
 			if projector != nil {
@@ -150,7 +151,7 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 		if err == sql.ErrNoRows {
 			return eventstore.Snapshot{}, nil
 		}
-		return eventstore.Snapshot{}, fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return eventstore.Snapshot{}, faults.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
 	return eventstore.Snapshot{
 		ID:               snap.ID,
@@ -190,10 +191,10 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 
 	events, err := r.queryEvents(ctx, query.String(), "", args...)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
+		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
 	if len(events) == 0 {
-		return nil, fmt.Errorf("Aggregate '%s' was not found: %w", aggregateID, err)
+		return nil, faults.Errorf("Aggregate '%s' was not found: %w", aggregateID, err)
 	}
 
 	return events, nil
@@ -224,7 +225,7 @@ func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idemp
 	var exists int
 	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=$1 AND aggregate_type=$2) AS "EXISTS"`, idempotencyKey, aggregateID)
 	if err != nil {
-		return false, fmt.Errorf("Unable to verify the existence of the idempotency key: %w", err)
+		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
 	}
 	return exists != 0, nil
 }
@@ -235,7 +236,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	// Forget events
 	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", "", request.AggregateID, request.EventKind)
 	if err != nil {
-		return fmt.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
+		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
 
 	for _, evt := range events {
@@ -245,7 +246,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 		}
 		_, err = r.db.ExecContext(ctx, "UPDATE events SET body = $1 WHERE ID = $2", body, evt.ID)
 		if err != nil {
-			return fmt.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
+			return faults.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
 		}
 	}
 
@@ -255,7 +256,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 		if err == sql.ErrNoRows {
 			return nil
 		}
-		return fmt.Errorf("Unable to get snapshot for aggregate '%s': %w", request.AggregateID, err)
+		return faults.Errorf("Unable to get snapshot for aggregate '%s': %w", request.AggregateID, err)
 	}
 
 	for _, snap := range snaps {
@@ -265,7 +266,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 		}
 		_, err = r.db.ExecContext(ctx, "UPDATE snapshots SET body = $1 WHERE ID = $2", body, snap.ID)
 		if err != nil {
-			return fmt.Errorf("Unable to forget snapshot ID %s: %w", snap.ID, err)
+			return faults.Errorf("Unable to forget snapshot ID %s: %w", snap.ID, err)
 		}
 	}
 
@@ -286,7 +287,7 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 	var eventID string
 	if err := r.db.GetContext(ctx, &eventID, query.String(), args...); err != nil {
 		if err != sql.ErrNoRows {
-			return "", fmt.Errorf("Unable to get the last event ID: %w", err)
+			return "", faults.Errorf("Unable to get the last event ID: %w", err)
 		}
 	}
 	return eventID, nil
@@ -310,7 +311,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batch
 
 	rows, err := r.queryEvents(ctx, query.String(), afterEventID, args...)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
+		return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
 	}
 	return rows, nil
 }
@@ -373,12 +374,12 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, afterEvent
 		pg := Event{}
 		err := rows.StructScan(&pg)
 		if err != nil {
-			return nil, fmt.Errorf("Unable to scan to struct: %w", err)
+			return nil, faults.Errorf("Unable to scan to struct: %w", err)
 		}
 		labels := map[string]interface{}{}
 		err = json.Unmarshal(pg.Labels, &labels)
 		if err != nil {
-			return nil, fmt.Errorf("Unable to unmarshal labels to map: %w", err)
+			return nil, faults.Errorf("Unable to unmarshal labels to map: %w", err)
 		}
 
 		events = append(events, eventstore.Event{

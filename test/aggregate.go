@@ -1,9 +1,8 @@
 package test
 
 import (
-	"fmt"
-
 	"github.com/quintans/eventstore"
+	"github.com/quintans/toolkit/faults"
 )
 
 type Status string
@@ -65,7 +64,7 @@ func (_ StructFactory) New(kind string) (eventstore.Typer, error) {
 		e = &OwnerUpdated{}
 	}
 	if e == nil {
-		return nil, fmt.Errorf("Unknown event kind: %s", kind)
+		return nil, faults.Errorf("Unknown event kind: %s", kind)
 	}
 	return e, nil
 }

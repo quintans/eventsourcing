@@ -2,11 +2,11 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/sink"
+	"github.com/quintans/toolkit/faults"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -59,7 +59,7 @@ func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, pa
 	if partitionLow == 0 {
 		message, err := sinker.LastMessage(ctx, 0)
 		if err != nil {
-			return "", nil, fmt.Errorf("Unable to get the last event ID in sink (unpartitioned): %w", err)
+			return "", nil, faults.Errorf("Unable to get the last event ID in sink (unpartitioned): %w", err)
 		}
 		if message != nil {
 			afterEventID = message.ID
@@ -70,7 +70,7 @@ func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, pa
 		for i := partitionLow; i <= partitionHi; i++ {
 			message, err := sinker.LastMessage(ctx, i)
 			if err != nil {
-				return "", nil, fmt.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
+				return "", nil, faults.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
 			}
 			// lowest
 			if message != nil && message.ID < afterEventID {

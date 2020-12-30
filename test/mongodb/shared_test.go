@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/quintans/toolkit/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -78,15 +79,15 @@ func dockerCompose(ctx context.Context) (func(), error) {
 
 func checkIfError(err testcontainers.ExecError) error {
 	if err.Error != nil {
-		return fmt.Errorf("Failed when running %v: %v", err.Command, err.Error)
+		return faults.Errorf("Failed when running %v: %v", err.Command, err.Error)
 	}
 
 	if err.Stdout != nil {
-		return fmt.Errorf("An error in Stdout happened when running %v: %v", err.Command, err.Stdout)
+		return faults.Errorf("An error in Stdout happened when running %v: %v", err.Command, err.Stdout)
 	}
 
 	if err.Stderr != nil {
-		return fmt.Errorf("An error in Stderr happened when running %v: %v", err.Command, err.Stderr)
+		return faults.Errorf("An error in Stderr happened when running %v: %v", err.Command, err.Stderr)
 	}
 	return nil
 }

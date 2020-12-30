@@ -1,13 +1,13 @@
 package common
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore/encoding"
 	"github.com/quintans/eventstore/eventid"
+	"github.com/quintans/toolkit/faults"
 )
 
 const (
@@ -42,7 +42,7 @@ func SplitMessageID(messageID string) (eventID string, count uint8, err error) {
 
 	splits := strings.Split(messageID, countSplitter)
 	if len(splits) != 2 {
-		return "", 0, fmt.Errorf("Bad formated message ID. Message ID '%s' does not '%s' separator", messageID, countSplitter)
+		return "", 0, faults.Errorf("Bad formated message ID. Message ID '%s' does not '%s' separator", messageID, countSplitter)
 	}
 	id := splits[0]
 	b, err := encoding.Unmarshal(splits[1])

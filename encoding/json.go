@@ -2,8 +2,9 @@ package encoding
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
+
+	"github.com/quintans/toolkit/faults"
 )
 
 // Json is a raw encoded JSON value.
@@ -22,7 +23,7 @@ func (m Json) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON sets *m to a copy of data.
 func (m *Json) UnmarshalJSON(data []byte) error {
 	if m == nil {
-		return errors.New("common.Json: UnmarshalJSON on nil pointer")
+		return faults.New("common.Json: UnmarshalJSON on nil pointer")
 	}
 	*m = append((*m)[0:0], data...)
 	return nil
