@@ -16,7 +16,7 @@ import (
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 type FeedEvent struct {
@@ -42,7 +42,7 @@ func (pgt *PgTime) UnmarshalJSON(b []byte) error {
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 	*pgt = PgTime(t)
 	return nil

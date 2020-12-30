@@ -2,7 +2,7 @@ package test
 
 import (
 	"github.com/quintans/eventstore"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 type Status string

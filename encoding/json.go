@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 // Json is a raw encoded JSON value.

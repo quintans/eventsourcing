@@ -4,17 +4,19 @@ import (
 	"encoding/json"
 
 	"github.com/quintans/eventstore/common"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 type JsonCodec struct{}
 
 func (_ JsonCodec) Encode(v interface{}) ([]byte, error) {
-	return json.Marshal(v)
+	b, err := json.Marshal(v)
+	return b, faults.Wrap(err)
 }
 
 func (_ JsonCodec) Decode(data []byte, v interface{}) error {
-	return json.Unmarshal(data, v)
+	err := json.Unmarshal(data, v)
+	return faults.Wrap(err)
 }
 
 func RehydrateAggregate(factory Factory, decoder Decoder, upcaster Upcaster, kind string, body []byte) (Typer, error) {

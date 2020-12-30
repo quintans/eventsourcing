@@ -9,7 +9,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/store"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -70,7 +70,7 @@ func NewStore(connString string, dbName string, opts ...StoreOption) (*EsReposit
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	return NewStoreDB(client, dbName, opts...), nil
@@ -132,7 +132,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		r.withTx(ctx, func(mCtx mongo.SessionContext) (interface{}, error) {
 			res, err := r.eventsCollection().InsertOne(mCtx, doc)
 			if err != nil {
-				return nil, err
+				return nil, faults.Wrap(err)
 			}
 
 			projector := r.projectorFactory(mCtx)
@@ -181,13 +181,13 @@ func isMongoDup(err error) bool {
 func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionContext) (interface{}, error)) (err error) {
 	session, err := r.client.StartSession()
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 	defer session.EndSession(ctx)
 
 	_, err = session.WithTransaction(ctx, callback)
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 
 	return nil
@@ -224,7 +224,7 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Sna
 	}
 	_, err := r.snapshotCollection().InsertOne(ctx, snap)
 
-	return err
+	return faults.Wrap(err)
 }
 
 func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
@@ -273,7 +273,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	}
 	cursor, err := r.eventsCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
-		return err
+		return faults.Wrap(err)
 	}
 	events := []Event{}
 	if err = cursor.All(ctx, &events); err != nil {
@@ -305,7 +305,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	}
 	cursor, err = r.snapshotCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
-		return err
+		return faults.Wrap(err)
 	}
 	snaps := []Snapshot{}
 	if err = cursor.All(ctx, &snaps); err != nil {
@@ -408,12 +408,12 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 		if err == mongo.ErrNoDocuments {
 			return []eventstore.Event{}, nil
 		}
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	evts := []Event{}
 	if err = cursor.All(ctx, &evts); err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	events := []eventstore.Event{}

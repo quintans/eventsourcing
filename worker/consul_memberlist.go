@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/consul/api"
+	"github.com/quintans/faults"
 )
 
 var _ Memberlister = (*ConsulMemberList)(nil)
@@ -22,7 +23,7 @@ type ConsulMemberList struct {
 func NewConsulMemberList(address string, prefix string, expiration time.Duration) (*ConsulMemberList, error) {
 	client, err := api.NewClient(&api.Config{Address: address})
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	sEntry := &api.SessionEntry{
@@ -31,7 +32,7 @@ func NewConsulMemberList(address string, prefix string, expiration time.Duration
 	}
 	sID, _, err := client.Session().Create(sEntry, nil)
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	return &ConsulMemberList{
@@ -53,12 +54,12 @@ func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 	options = options.WithContext(ctx)
 	keys, _, err := c.client.KV().Keys(c.prefix+"-", "", options)
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 	for _, v := range keys {
 		kvPair, _, err := c.client.KV().Get(v, options)
 		if err != nil {
-			return nil, err
+			return nil, faults.Wrap(err)
 		}
 		s := strings.Split(string(kvPair.Value), ",")
 		members = append(members, MemberWorkers{
@@ -85,9 +86,6 @@ func (c *ConsulMemberList) Register(ctx context.Context, workers []string) error
 		Value:   []byte(s),
 	}
 	_, err := c.client.KV().Put(putKv, options)
-	if err != nil {
-		return err
-	}
 
-	return nil
+	return faults.Wrap(err)
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"github.com/quintans/faults"
 )
 
 var _ Memberlister = (*RedisMemberList)(nil)
@@ -44,12 +45,12 @@ func (r *RedisMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 		var err error
 		keys, cursor, err = r.rdb.Scan(ctx, cursor, r.prefix+"-*", 10).Result()
 		if err != nil {
-			return nil, err
+			return nil, faults.Wrap(err)
 		}
 		for _, v := range keys {
 			val, err := r.rdb.Get(ctx, v).Result()
 			if err != nil {
-				return nil, err
+				return nil, faults.Wrap(err)
 			}
 			s := strings.Split(val, ",")
 			members = append(members, MemberWorkers{
@@ -67,5 +68,5 @@ func (r *RedisMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 func (r *RedisMemberList) Register(ctx context.Context, workers []string) error {
 	s := strings.Join(workers, ",")
 	err := r.rdb.Set(ctx, r.name, s, r.expiration).Err()
-	return err
+	return faults.Wrap(err)
 }

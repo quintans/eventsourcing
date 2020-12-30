@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 // Base64 is a []byte base64 encoded value.

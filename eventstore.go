@@ -7,7 +7,7 @@ import (
 
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/encoding"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 var (

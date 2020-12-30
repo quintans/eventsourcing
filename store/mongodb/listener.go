@@ -8,6 +8,7 @@ import (
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
+	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -75,14 +76,14 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline)
 	}
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 	defer eventsStream.Close(ctx)
 
 	for eventsStream.Next(ctx) {
 		var data ChangeEvent
 		if err := eventsStream.Decode(&data); err != nil {
-			return err
+			return faults.Wrap(err)
 		}
 		eventDoc := data.FullDocument
 

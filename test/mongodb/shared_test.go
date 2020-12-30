@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"

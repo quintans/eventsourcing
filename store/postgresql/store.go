@@ -15,7 +15,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/store"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 const (
@@ -65,7 +65,7 @@ type EsRepository struct {
 func NewStore(dburl string, options ...StoreOption) (*EsRepository, error) {
 	db, err := sql.Open("postgres", dburl)
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 	return NewStoreDB(db, options...)
 }
@@ -87,7 +87,7 @@ func NewStoreDB(db *sql.DB, options ...StoreOption) (*EsRepository, error) {
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
 	labels, err := json.Marshal(eRec.Labels)
 	if err != nil {
-		return "", 0, err
+		return "", 0, faults.Wrap(err)
 	}
 
 	version := eRec.Version
@@ -190,7 +190,7 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Sna
 		`INSERT INTO snapshots (id, aggregate_id, aggregate_version, aggregate_type, body, created_at)
 	     VALUES (:id, :aggregate_id, :aggregate_version, :aggregate_type, :body, :created_at)`, s)
 
-	return err
+	return faults.Wrap(err)
 }
 
 func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
@@ -217,7 +217,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) (err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 	defer func() {
 		if r := recover(); r != nil {

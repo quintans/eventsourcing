@@ -6,7 +6,7 @@ import (
 
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/sink"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 	log "github.com/sirupsen/logrus"
 )
 

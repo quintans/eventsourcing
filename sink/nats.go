@@ -7,7 +7,7 @@ import (
 	"github.com/nats-io/stan.go"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 type NatsSink struct {
@@ -68,7 +68,7 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsto
 		}
 	}, stan.StartWithLastReceived())
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 	defer sub.Close()
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)

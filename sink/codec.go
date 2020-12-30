@@ -6,6 +6,7 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/faults"
 )
 
 type Codec interface {
@@ -51,7 +52,7 @@ func (_ JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
 	}
 	b, err := json.Marshal(event)
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 	return b, nil
 }
@@ -60,7 +61,7 @@ func (_ JsonCodec) Decode(data []byte) (eventstore.Event, error) {
 	e := Event{}
 	err := json.Unmarshal(data, &e)
 	if err != nil {
-		return eventstore.Event{}, err
+		return eventstore.Event{}, faults.Wrap(err)
 	}
 
 	event := eventstore.Event{

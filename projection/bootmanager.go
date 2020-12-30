@@ -11,7 +11,7 @@ import (
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/eventstore/worker"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 	log "github.com/sirupsen/logrus"
 )
 

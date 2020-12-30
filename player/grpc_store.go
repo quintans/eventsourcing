@@ -10,7 +10,7 @@ import (
 	"github.com/quintans/eventstore"
 	pb "github.com/quintans/eventstore/api/proto"
 	"github.com/quintans/eventstore/store"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 )
 
@@ -121,7 +121,7 @@ func tsToTime(ts *timestamp.Timestamp) (*time.Time, error) {
 	if ts != nil {
 		t, err := ptypes.Timestamp(ts)
 		if err != nil {
-			return nil, err
+			return nil, faults.Wrap(err)
 		}
 		exp = &t
 	}

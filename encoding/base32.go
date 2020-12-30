@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"strings"
+
+	"github.com/quintans/faults"
 )
 
 const (
@@ -75,7 +77,7 @@ func Unmarshal(encoded string) ([]byte, error) {
 	for i := 0; i < encodeSize; i++ {
 		idx := strings.Index(Encoding, string(encoded[i]))
 		if idx < 0 {
-			return nil, ErrInvalidString
+			return nil, faults.Wrap(ErrInvalidString)
 		}
 		b := byte(idx) << shift2
 		result[decSize] |= b

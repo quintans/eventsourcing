@@ -10,7 +10,7 @@ import (
 	_ "github.com/lib/pq"
 	pb "github.com/quintans/eventstore/api/proto"
 	"github.com/quintans/eventstore/store"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 )
 

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/quintans/eventstore/worker"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 	log "github.com/sirupsen/logrus"
 )
 

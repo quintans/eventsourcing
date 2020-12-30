@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore/encoding"
 	"github.com/quintans/eventstore/eventid"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 )
 
 const (

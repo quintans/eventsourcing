@@ -12,7 +12,7 @@ import (
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/projection"
 	"github.com/quintans/eventstore/sink"
-	"github.com/quintans/toolkit/faults"
+	"github.com/quintans/faults"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -90,7 +90,7 @@ func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition uint32) (s
 		ch <- m.Sequence
 	}, stan.StartWithLastReceived())
 	if err != nil {
-		return "", err
+		return "", faults.Wrap(err)
 	}
 	defer sub.Close()
 	ctx, _ = context.WithTimeout(ctx, 100*time.Millisecond)
@@ -134,7 +134,7 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition uint32, res
 		}
 	}, start, stan.MaxInflight(1))
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	stopped := make(chan struct{})
@@ -162,7 +162,7 @@ func (s NatsSubscriber) ListenCancelProjection(ctx context.Context, canceller pr
 		n := projection.Notification{}
 		err := json.Unmarshal(msg.Data, &n)
 		if err != nil {
-			log.Errorf("Unable to unmarshal %v", err)
+			log.Errorf("Unable to unmarshal %v", faults.Wrap(err))
 			return
 		}
 		if n.Projection != canceller.Name() {
@@ -177,7 +177,7 @@ func (s NatsSubscriber) ListenCancelProjection(ctx context.Context, canceller pr
 		}
 	})
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 
 	go func() {
@@ -196,23 +196,23 @@ func (s NatsSubscriber) CancelProjection(ctx context.Context, projectionName str
 		Action:     projection.Release,
 	})
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 
 	replyTo := s.managerTopic + "-reply"
 	sub, err := s.queue.SubscribeSync(replyTo)
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 	err = s.queue.Flush()
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 
 	// Send the request
 	err = s.queue.PublishRequest(s.managerTopic, replyTo, []byte(payload))
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 
 	// Wait for a single response

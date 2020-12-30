@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/quintans/faults"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -109,13 +110,13 @@ func ParseSlot(slot string) (PartitionSlot, error) {
 	s := PartitionSlot{}
 	from, err := strconv.Atoi(ps[0])
 	if err != nil {
-		return PartitionSlot{}, err
+		return PartitionSlot{}, faults.Wrap(err)
 	}
 	s.From = uint32(from)
 	if len(ps) == 2 {
 		to, err := strconv.Atoi(ps[1])
 		if err != nil {
-			return PartitionSlot{}, err
+			return PartitionSlot{}, faults.Wrap(err)
 		}
 		s.To = uint32(to)
 	} else {
