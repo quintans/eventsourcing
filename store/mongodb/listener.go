@@ -26,6 +26,9 @@ type FeedOption func(*Feed)
 
 func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 	return func(p *Feed) {
+		if partitions <= 1 {
+			return
+		}
 		p.partitions = partitions
 		p.partitionsLow = partitionsLow
 		p.partitionsHi = partitionsHi
@@ -63,7 +66,9 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	match := bson.D{
 		{"operationType", "insert"},
 	}
-	match = append(match, partitionMatch("fullDocument.aggregate_id_hash", m.partitions, m.partitionsLow, m.partitionsHi)...)
+	if m.partitions > 1 {
+		match = append(match, partitionFilter("fullDocument.aggregate_id_hash", m.partitions, m.partitionsLow, m.partitionsHi))
+	}
 
 	matchPipeline := bson.D{{Key: "$match", Value: match}}
 	pipeline := mongo.Pipeline{matchPipeline}
@@ -72,11 +77,13 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var eventsStream *mongo.ChangeStream
 	if len(resumeToken) != 0 {
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(resumeToken)))
+		err = faults.Wrap(err)
 	} else {
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline)
+		err = faults.Wrap(err)
 	}
 	if err != nil {
-		return faults.Wrap(err)
+		return err
 	}
 	defer eventsStream.Close(ctx)
 
@@ -117,37 +124,4 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 
 func (m Feed) Close(ctx context.Context) error {
 	return m.client.Disconnect(ctx)
-}
-
-func partitionMatch(field string, partitions, partitionsLow, partitionsHi uint32) bson.D {
-	if partitions == 0 {
-		return bson.D{}
-	}
-	if partitionsLow == partitionsHi {
-		return bson.D{
-			{"$eq",
-				bson.A{
-					bson.D{{"$mod", bson.A{field, partitions}}},
-					partitionsLow - 1,
-				},
-			},
-		}
-	} else {
-		return bson.D{
-			// {"$gte": [{"$mod" : [field, m.partitions]}],  m.partitionsLow - 1}
-			{"$gte",
-				bson.A{
-					bson.D{{"$mod", bson.A{field, partitions}}},
-					partitionsLow - 1,
-				},
-			},
-			// {"$lte": [{"$mod" : [field, m.partitions]}],  m.partitionsHi - 1}
-			{"$lte",
-				bson.A{
-					bson.D{{"$mod", bson.A{field, partitions}}},
-					partitionsHi - 1,
-				},
-			},
-		}
-	}
 }

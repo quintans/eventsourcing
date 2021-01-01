@@ -392,7 +392,9 @@ func buildFilter(filter store.Filter, flt bson.D) bson.D {
 		flt = append(flt, bson.E{"aggregate_type", bson.D{{"$in", filter.AggregateTypes}}})
 	}
 
-	flt = append(flt, partitionMatch("aggregate_id_hash", filter.Partitions, filter.PartitionsLow, filter.PartitionsHi)...)
+	if filter.Partitions > 1 {
+		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Partitions, filter.PartitionsLow, filter.PartitionsHi))
+	}
 
 	if len(filter.Labels) > 0 {
 		for k, v := range filter.Labels {
@@ -400,6 +402,48 @@ func buildFilter(filter store.Filter, flt bson.D) bson.D {
 		}
 	}
 	return flt
+}
+
+func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint32) bson.E {
+	field = "$" + field
+	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, m.partitions]}],  m.partitionsLow - 1]} }
+	if partitionsLow == partitionsHi {
+		return bson.E{"$expr",
+			bson.D{
+				{"$eq", bson.A{
+					bson.D{
+						{"$mod", bson.A{field, partitions}},
+					},
+					partitionsLow - 1,
+				}},
+			},
+		}
+	}
+
+	// {$expr: {$and: [{"$gte": [ { "$mod" : [$field, m.partitions] }, m.partitionsLow - 1 ]}, {$lte: [ { $mod : [$field, m.partitions] }, partitionsHi - 1 ]}  ] }});
+	return bson.E{"$expr",
+		bson.D{
+			{"$and", bson.A{
+				bson.D{
+					{"$gte", bson.A{
+						bson.D{
+							{"$mod", bson.A{field, partitions}},
+						},
+						partitionsLow - 1,
+					}},
+				},
+				bson.D{
+					{"$lte", bson.A{
+						bson.D{
+							{"$mod", bson.A{field, partitions}},
+						},
+						partitionsHi - 1,
+					}},
+				},
+			}},
+		},
+	}
+
 }
 
 func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, error) {
