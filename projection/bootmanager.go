@@ -94,7 +94,9 @@ func (m *ProjectionPartition) Name() string {
 
 // Run action to be executed on boot
 func (m *ProjectionPartition) Run(ctx context.Context) error {
+	logger := log.WithField("projection", m.projection.GetName())
 	for {
+		logger.Infof("Waiting for Unlock on", m.projection.GetName())
 		m.restartLock.WaitForUnlock(ctx)
 
 		ctx2, cancel := context.WithCancel(ctx)
@@ -133,6 +135,8 @@ func (m *ProjectionPartition) bootAndListen(ctx context.Context) error {
 }
 
 func (m *ProjectionPartition) boot(ctx context.Context) error {
+	logger := log.WithField("projection", m.projection.GetName())
+
 	prjEventIDs, err := m.projection.GetResumeEventIDs(ctx)
 	if err != nil {
 		return faults.Errorf("Could not get last event ID from the projection: %w", err)
@@ -168,7 +172,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		if err != nil {
 			return faults.Errorf("Error delaying the eventID: %w", err)
 		}
-		log.Printf("Booting %s from '%s'", m.projection.GetName(), prjEventID)
+		logger.Infof("Booting from event ID '%s'", prjEventID)
 
 		replayer := player.New(stage.Repository)
 		filter := store.WithAggregateTypes(aggregateTypes...)
