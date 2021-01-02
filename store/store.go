@@ -51,6 +51,9 @@ func WithLabels(labels Labels) FilterOption {
 
 func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption {
 	return func(f *Filter) {
+		if partitions <= 1 {
+			return
+		}
 		f.Partitions = partitions
 		f.PartitionsLow = partitionsLow
 		f.PartitionsHi = partitionsHi

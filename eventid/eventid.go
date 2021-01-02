@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/encoding"
 )
 
@@ -117,18 +118,18 @@ func Time(ms uint64) time.Time {
 }
 
 func DelayEventID(eventID string, offset time.Duration) (string, error) {
-	// if event ID is not empty, offset
-	if eventID != "" {
-		id, err := Parse(eventID)
-		if err != nil {
-			return "", err
-		}
-		t := id.Time()
-		// add a safety margin.
-		// afterEventID might have pointing to an ID that might have skipped other events
-		t = t.Add(-offset)
-		id.SetTime(t)
-		eventID = id.String()
+	if eventID == common.MinEventID {
+		return eventID, nil
 	}
-	return eventID, nil
+
+	id, err := Parse(eventID)
+	if err != nil {
+		return "", err
+	}
+	t := id.Time()
+	// add a safety margin (offset).
+	t = t.Add(-offset)
+	id.SetTime(t)
+
+	return id.String(), nil
 }

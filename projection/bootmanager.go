@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store"
@@ -24,8 +23,8 @@ type Canceller interface {
 // Projection is the interface that a projection needs to implement
 type Projection interface {
 	GetName() string
-	// GetResumeEventIDs gets the smallest of the latest event ID for each partitioned topic from the DB, per aggregate
-	GetResumeEventIDs(ctx context.Context) (map[string]string, error)
+	// GetResumeEventIDs gets the smallest of the latest event ID for a partition topic from the DB, for the aggregate group
+	GetResumeEventIDs(ctx context.Context, aggregateTypes []string, partition uint32) (string, error)
 	Handler(ctx context.Context, e eventstore.Event) error
 }
 
@@ -46,6 +45,7 @@ type ProjectionPartition struct {
 	restartLock worker.WaitForUnlocker
 	projection  Projection
 	notifier    Notifier
+	partitions  uint32
 	stages      []BootStage
 
 	cancel        context.CancelFunc
@@ -56,6 +56,7 @@ type ProjectionPartition struct {
 // BootStage represents the different aggregates used to build a projection.
 // This aggregates can come from different event stores
 type BootStage struct {
+	// AggregateTypes is the list of aggregates on the same topic
 	AggregateTypes []string
 	Subscriber     Subscriber
 	// Repository: Repository to the events
@@ -75,12 +76,14 @@ func NewProjectionPartition(
 	restartLock worker.WaitForUnlocker,
 	projection Projection,
 	notifier Notifier,
+	partitions uint32,
 	stages ...BootStage,
 ) *ProjectionPartition {
 	mc := &ProjectionPartition{
 		restartLock: restartLock,
 		projection:  projection,
 		notifier:    notifier,
+		partitions:  partitions,
 		stages:      stages,
 	}
 
@@ -134,86 +137,104 @@ func (m *ProjectionPartition) bootAndListen(ctx context.Context) error {
 	return nil
 }
 
+type replayResult struct {
+	partition   uint32
+	lastEventID string
+	err         error
+}
+
 func (m *ProjectionPartition) boot(ctx context.Context) error {
 	logger := log.WithField("projection", m.projection.GetName())
 
-	prjEventIDs, err := m.projection.GetResumeEventIDs(ctx)
-	if err != nil {
-		return faults.Errorf("Could not get last event ID from the projection: %w", err)
-	}
-
-	// To avoid the creation of a potential massive buffer size
-	// and to ensure that events are not lost, between the switch to the consumer,
-	// we execute the fetch in several steps.
-	// 1) Process all events from the ES from the begginning - it may be a long operation
-	// 2) start the consumer to track new events from now on
-	// 3) process any event that may have arrived during the switch
-	// 4) start consuming events from the last position
 	handler := m.projection.Handler
 
-	lastEventIDs := []string{}
-	for _, stage := range m.stages {
-		aggregateTypes := stage.AggregateTypes
-		// for the aggregates of this stage find the smallest
-		prjEventID := common.MaxEventID
-		for _, at := range aggregateTypes {
-			tmp, ok := prjEventIDs[at]
-			if ok && tmp < prjEventID {
-				prjEventID = tmp
-			}
-		}
-		// if no event was found in all aggregates, then use the min event id
-		if prjEventID == common.MaxEventID {
-			prjEventID = common.MinEventID
-		}
-
-		// replay oldest events
-		prjEventID, err = eventid.DelayEventID(prjEventID, player.TrailingLag)
-		if err != nil {
-			return faults.Errorf("Error delaying the eventID: %w", err)
-		}
-		logger.Infof("Booting from event ID '%s'", prjEventID)
-
-		replayer := player.New(stage.Repository)
-		filter := store.WithAggregateTypes(aggregateTypes...)
-		lastEventID, err := replayer.Replay(ctx, handler, prjEventID, filter)
-		if err != nil {
-			return faults.Errorf("Could not replay all events (first part): %w", err)
-		}
-		lastEventIDs = append(lastEventIDs, lastEventID)
-	}
-
 	frozen := make([]chan struct{}, 0)
-	for k, stage := range m.stages {
-		// grab the last events sequences in the topic (partitioned)
+	for _, stage := range m.stages {
+		// To avoid the creation of a potential massive buffer size
+		// and to ensure that events are not lost, between the switch to the consumer,
+		// we execute the fetch in several steps.
+		// EACH PARTITION CAN BE INDEPENDENT OF EACH OTHER AND CAN BE TREATED AS IF IT IS THE ONLY PARTITION
+		// 1) Process all events from the ES from the begginning - it may be a long operation
+		// 2) start the consumer to track new events from now on
+		// 3) process any event that may have arrived during the switch
+		// 4) start consuming events from the last position
+
 		partitionSize := stage.PartitionHi - stage.PartitionLo + 1
-		tokens := make([]string, partitionSize)
-		for i := uint32(0); i < partitionSize; i++ {
-			tokens[i], err = stage.Subscriber.GetResumeToken(ctx, stage.PartitionLo+i)
+		ch := make(chan replayResult, partitionSize)
+		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
+			// for the aggregate group in the same partition (=same source), gets the latest event ID.
+			prjEventID, err := m.projection.GetResumeEventIDs(ctx, stage.AggregateTypes, partition)
 			if err != nil {
-				return faults.Errorf("Could not retrieve resume token: %w", err)
+				return faults.Errorf("Could not get last event ID from the projection: %w", err)
+			}
+
+			// to make sure we don't miss any event due to clock skews, we start replaying a bit earlier
+			prjEventID, err = eventid.DelayEventID(prjEventID, player.TrailingLag)
+			if err != nil {
+				return faults.Errorf("Error delaying the eventID: %w", err)
+			}
+
+			logger.Infof("Booting from event ID '%s'", prjEventID)
+
+			stg := stage
+			part := partition
+			go func() {
+				replayer := player.New(stage.Repository)
+				filterAggregates := store.WithAggregateTypes(stg.AggregateTypes...)
+				filterPartitions := store.WithPartitions(m.partitions, part, part)
+				lastEventID, err := replayer.Replay(ctx, handler, prjEventID, filterAggregates, filterPartitions)
+				if err != nil {
+					ch <- replayResult{err: faults.Errorf("Could not replay all events (first part): %w", err)}
+					return
+				}
+
+				ch <- replayResult{
+					partition:   part - stg.PartitionLo,
+					lastEventID: lastEventID,
+				}
+
+			}()
+		}
+
+		logger.Info("Collecting partitions last Event IDs")
+		lastEventIDs := make([]string, partitionSize)
+		count := 0
+		for {
+			result := <-ch
+			if result.err != nil {
+				return result.err
+			}
+			lastEventIDs[int(result.partition)] = result.lastEventID
+			count++
+			if count == len(m.stages) {
+				break
 			}
 		}
 
-		// consume potential missed events events between the switch to the consumer
-		events, err := stage.Repository.GetEvents(ctx, lastEventIDs[k], 0, time.Duration(0), store.Filter{
-			AggregateTypes: stage.AggregateTypes,
-		})
-		if err != nil {
-			return faults.Errorf("Could not replay all events (second part): %w", err)
-		}
-		for _, event := range events {
-			err = handler(ctx, event)
+		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
+			// grab the last events sequences in the partition
+			token, err := stage.Subscriber.GetResumeToken(ctx, partition)
 			if err != nil {
-				return faults.Errorf("Error handling event %+v: %w", event, err)
+				return faults.Errorf("Could not retrieve resume token for projection %s and partition %d: %w", m.projection.GetName(), partition, err)
 			}
-		}
 
-		// start consuming events from the last available position
-		for i := uint32(0); i < partitionSize; i++ {
-			ch, err := stage.Subscriber.StartConsumer(ctx, stage.PartitionLo+i, tokens[i], m.projection, stage.AggregateTypes)
+			// consume potential missed events events between the switch to the consumer
+			events, err := stage.Repository.GetEvents(ctx, lastEventIDs[partition-stage.PartitionLo], 0, time.Duration(0), store.Filter{
+				AggregateTypes: stage.AggregateTypes,
+			})
 			if err != nil {
-				return faults.Errorf("Unable to start consumer: %w", err)
+				return faults.Errorf("Could not replay all events for projection %s (second part): %w", m.projection.GetName(), err)
+			}
+			for _, event := range events {
+				err = handler(ctx, event)
+				if err != nil {
+					return faults.Errorf("Error handling event %+v projection %s: %w", event, m.projection.GetName(), err)
+				}
+			}
+			// start consuming events from the last available position
+			ch, err := stage.Subscriber.StartConsumer(ctx, partition, token, m.projection, stage.AggregateTypes)
+			if err != nil {
+				return faults.Errorf("Unable to start consumer projection %s: %w", m.projection.GetName(), err)
 			}
 			frozen = append(frozen, ch)
 		}

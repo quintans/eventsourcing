@@ -13,11 +13,7 @@ import (
 const (
 	// countSplitter separates the eventID and the event count
 	countSplitter = "-"
-)
 
-var (
-	// MaxEventID marks the highest event ID - also undefined
-	MaxEventID = string([]byte{255})
 	// MinEventID is the lowest event ID
 	MinEventID = ""
 )

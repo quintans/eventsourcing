@@ -54,8 +54,10 @@ func (f *Forwarder) Run(ctx context.Context) error {
 
 func (f *Forwarder) Cancel() {}
 
+// LastEventIDInSink retrieves the highest event ID and resume token found in the partition range
 func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32) (afterEventID string, resumeToken []byte, err error) {
-	// looking for the lowest ID in all partitions
+	// looking for the highest message ID in all partitions.
+	// Sending a message to partitions is done synchronously, so we should start from the last successful sent message.
 	if partitionLow == 0 {
 		message, err := sinker.LastMessage(ctx, 0)
 		if err != nil {
@@ -66,21 +68,17 @@ func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, pa
 			resumeToken = message.ResumeToken
 		}
 	} else {
-		afterEventID = common.MaxEventID
+		afterEventID = common.MinEventID
 		for i := partitionLow; i <= partitionHi; i++ {
 			message, err := sinker.LastMessage(ctx, i)
 			if err != nil {
 				return "", nil, faults.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
 			}
-			// lowest
-			if message != nil && message.ID < afterEventID {
+			// highest
+			if message != nil && message.ID > afterEventID {
 				afterEventID = message.ID
 				resumeToken = message.ResumeToken
 			}
-		}
-		// if no message was found in all partitions, then use the min event id
-		if afterEventID == common.MaxEventID {
-			afterEventID = common.MinEventID
 		}
 	}
 
