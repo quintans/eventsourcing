@@ -188,10 +188,11 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 
 			return event.AggregateID > eID
 		}
-		replayer := player.New(stage.Repository)
-		filterAggregates := store.WithAggregateTypes(stage.AggregateTypes...)
-		filterPartitions := store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi)
-		lastEventID, err := replayer.Replay(ctx, handler, smallestEventID, filterAggregates, filterPartitions, store.WithCustomFilter(handlerFilter))
+		replayer := player.New(stage.Repository, player.WithCustomFilter(handlerFilter))
+		lastEventID, err := replayer.Replay(ctx, handler, smallestEventID,
+			store.WithAggregateTypes(stage.AggregateTypes...),
+			store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi),
+		)
 		if err != nil {
 			return faults.Errorf("Could not replay all events (first part): %w", err)
 		}
@@ -203,21 +204,18 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 				return faults.Errorf("Could not retrieve resume token for projection %s and partition %d: %w", m.projection.GetName(), partition, err)
 			}
 
-			events, err := stage.Repository.GetEvents(ctx, lastEventID, 0, time.Duration(0), store.Filter{
-				AggregateTypes: stage.AggregateTypes,
-				Partitions:     m.partitions,
-				PartitionsLow:  stage.PartitionLo,
-				PartitionsHi:   stage.PartitionHi,
-			})
+			p := player.New(stage.Repository,
+				player.WithBatchSize(0),
+				player.WithTrailingLag(time.Duration(0)),
+			)
+			_, err = p.Replay(ctx, handler, lastEventID,
+				store.WithAggregateTypes(stage.AggregateTypes...),
+				store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi),
+			)
 			if err != nil {
 				return faults.Errorf("Could not replay all events for projection %s (second part): %w", m.projection.GetName(), err)
 			}
-			for _, event := range events {
-				err = handler(ctx, event)
-				if err != nil {
-					return faults.Errorf("Error handling event %+v projection %s: %w", event, m.projection.GetName(), err)
-				}
-			}
+
 			// start consuming events from the last available position
 			ch, err := stage.Subscriber.StartConsumer(ctx, partition, token, m.projection, stage.AggregateTypes)
 			if err != nil {

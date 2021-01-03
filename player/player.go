@@ -40,7 +40,8 @@ type Player struct {
 	store     Repository
 	batchSize int
 	// lag to account for on same millisecond concurrent inserts and clock skews
-	trailingLag time.Duration
+	trailingLag  time.Duration
+	customFilter func(eventstore.Event) bool
 }
 
 func WithBatchSize(batchSize int) Option {
@@ -54,6 +55,12 @@ func WithBatchSize(batchSize int) Option {
 func WithTrailingLag(trailingLag time.Duration) Option {
 	return func(r *Player) {
 		r.trailingLag = trailingLag
+	}
+}
+
+func WithCustomFilter(fn func(events eventstore.Event) bool) Option {
+	return func(p *Player) {
+		p.customFilter = fn
 	}
 }
 
@@ -126,7 +133,7 @@ func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, after
 			return "", err
 		}
 		for _, evt := range events {
-			if filter.CustomFilter == nil || filter.CustomFilter(evt) {
+			if p.customFilter == nil || p.customFilter(evt) {
 				err := handler(ctx, evt)
 				if err != nil {
 					return "", faults.Wrap(err)
