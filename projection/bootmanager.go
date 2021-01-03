@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store"
@@ -137,12 +138,6 @@ func (m *ProjectionPartition) bootAndListen(ctx context.Context) error {
 	return nil
 }
 
-type replayResult struct {
-	partition   uint32
-	lastEventID string
-	err         error
-}
-
 func (m *ProjectionPartition) boot(ctx context.Context) error {
 	logger := log.WithField("projection", m.projection.GetName())
 
@@ -159,8 +154,8 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		// 3) process any event that may have arrived during the switch
 		// 4) start consuming events from the last position
 
-		partitionSize := stage.PartitionHi - stage.PartitionLo + 1
-		ch := make(chan replayResult, partitionSize)
+		prjEventIDs := map[uint32]string{}
+		smallestEventID := string([]byte{255})
 		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
 			// for the aggregate group in the same partition (=same source), gets the latest event ID.
 			prjEventID, err := m.projection.GetResumeEventIDs(ctx, stage.AggregateTypes, partition)
@@ -174,41 +169,31 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 				return faults.Errorf("Error delaying the eventID: %w", err)
 			}
 
-			logger.Infof("Booting from event ID '%s'", prjEventID)
+			if smallestEventID > prjEventID {
+				smallestEventID = prjEventID
+			}
 
-			stg := stage
-			part := partition
-			go func() {
-				replayer := player.New(stage.Repository)
-				filterAggregates := store.WithAggregateTypes(stg.AggregateTypes...)
-				filterPartitions := store.WithPartitions(m.partitions, part, part)
-				lastEventID, err := replayer.Replay(ctx, handler, prjEventID, filterAggregates, filterPartitions)
-				if err != nil {
-					ch <- replayResult{err: faults.Errorf("Could not replay all events (first part): %w", err)}
-					return
-				}
-
-				ch <- replayResult{
-					partition:   part - stg.PartitionLo,
-					lastEventID: lastEventID,
-				}
-
-			}()
+			prjEventIDs[partition] = prjEventID
 		}
 
-		logger.Info("Collecting partitions last Event IDs")
-		lastEventIDs := make([]string, partitionSize)
-		count := 0
-		for {
-			result := <-ch
-			if result.err != nil {
-				return result.err
-			}
-			lastEventIDs[int(result.partition)] = result.lastEventID
-			count++
-			if count == len(m.stages) {
-				break
-			}
+		logger.Infof("Booting from event ID '%s'", smallestEventID)
+
+		// replaying events for each partition, rather than replay from the smallest event of the partition range,
+		// probably is faster because the projection does not have to handle repeated events.
+
+		// will only handle events that have not been handled for a given partition
+		handlerFilter := func(event eventstore.Event) bool {
+			p := common.WhichPartition(event.AggregateIDHash, m.partitions)
+			eID := prjEventIDs[p]
+
+			return event.AggregateID > eID
+		}
+		replayer := player.New(stage.Repository)
+		filterAggregates := store.WithAggregateTypes(stage.AggregateTypes...)
+		filterPartitions := store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi)
+		lastEventID, err := replayer.Replay(ctx, handler, smallestEventID, filterAggregates, filterPartitions, store.WithCustomFilter(handlerFilter))
+		if err != nil {
+			return faults.Errorf("Could not replay all events (first part): %w", err)
 		}
 
 		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
@@ -218,9 +203,11 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 				return faults.Errorf("Could not retrieve resume token for projection %s and partition %d: %w", m.projection.GetName(), partition, err)
 			}
 
-			// consume potential missed events events between the switch to the consumer
-			events, err := stage.Repository.GetEvents(ctx, lastEventIDs[partition-stage.PartitionLo], 0, time.Duration(0), store.Filter{
+			events, err := stage.Repository.GetEvents(ctx, lastEventID, 0, time.Duration(0), store.Filter{
 				AggregateTypes: stage.AggregateTypes,
+				Partitions:     m.partitions,
+				PartitionsLow:  stage.PartitionLo,
+				PartitionsHi:   stage.PartitionHi,
 			})
 			if err != nil {
 				return faults.Errorf("Could not replay all events for projection %s (second part): %w", m.projection.GetName(), err)

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/encoding"
 )
 
@@ -118,7 +117,7 @@ func Time(ms uint64) time.Time {
 }
 
 func DelayEventID(eventID string, offset time.Duration) (string, error) {
-	if eventID == common.MinEventID {
+	if eventID == "" {
 		return eventID, nil
 	}
 

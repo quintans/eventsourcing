@@ -10,6 +10,7 @@ type Filter struct {
 	Partitions    uint32
 	PartitionsLow uint32
 	PartitionsHi  uint32
+	CustomFilter  func(eventstore.Event) bool
 }
 
 type FilterOption func(*Filter)
@@ -57,6 +58,12 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption
 		f.Partitions = partitions
 		f.PartitionsLow = partitionsLow
 		f.PartitionsHi = partitionsHi
+	}
+}
+
+func WithCustomFilter(fn func(events eventstore.Event) bool) FilterOption {
+	return func(f *Filter) {
+		f.CustomFilter = fn
 	}
 }
 

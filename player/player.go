@@ -6,6 +6,7 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/store"
+	"github.com/quintans/faults"
 )
 
 const (
@@ -125,9 +126,11 @@ func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, after
 			return "", err
 		}
 		for _, evt := range events {
-			err := handler(ctx, evt)
-			if err != nil {
-				return "", err
+			if filter.CustomFilter == nil || filter.CustomFilter(evt) {
+				err := handler(ctx, evt)
+				if err != nil {
+					return "", faults.Wrap(err)
+				}
 			}
 			afterEventID = evt.ID
 			if evt.ID == untilEventID {
