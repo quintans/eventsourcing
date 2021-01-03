@@ -100,13 +100,11 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		for _, e := range eRec.Details {
 			version++
 			id = common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
-			x := common.Hash(eRec.AggregateID)
-			h := int32ring(x)
-
+			hash := common.Hash(eRec.AggregateID)
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at, aggregate_id_hash)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, eRec.IdempotencyKey, labels, eRec.CreatedAt, h)
+				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, eRec.IdempotencyKey, labels, eRec.CreatedAt, int32ring(hash))
 
 			if err != nil {
 				if isPgDup(err) {
@@ -119,6 +117,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 				evt := eventstore.Event{
 					ID:               id,
 					AggregateID:      eRec.AggregateID,
+					AggregateIDHash:  hash,
 					AggregateVersion: version,
 					AggregateType:    eRec.AggregateType,
 					Kind:             e.Kind,
@@ -343,7 +342,7 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 		query.WriteString(")")
 	}
 
-	if filter.Partitions > 0 {
+	if filter.Partitions > 1 {
 		size := len(args)
 		if filter.PartitionsLow == filter.PartitionsHi {
 			args = append(args, filter.Partitions, filter.PartitionsLow-1)
@@ -399,6 +398,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, afterEvent
 		events = append(events, eventstore.Event{
 			ID:               pg.ID,
 			AggregateID:      pg.AggregateID,
+			AggregateIDHash:  uint32(pg.AggregateIDHash),
 			AggregateVersion: pg.AggregateVersion,
 			AggregateType:    pg.AggregateType,
 			Kind:             pg.Kind,

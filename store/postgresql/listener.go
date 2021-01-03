@@ -22,6 +22,7 @@ import (
 type FeedEvent struct {
 	ID               string        `json:"id,omitempty"`
 	AggregateID      string        `json:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32        `json:"aggregate_id_hash,omitempty"`
 	AggregateVersion uint32        `json:"aggregate_version,omitempty"`
 	AggregateType    string        `json:"aggregate_type,omitempty"`
 	Kind             string        `json:"kind,omitempty"`
@@ -213,7 +214,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		}
 
 		// check if the event is to be forwarded to the sinker
-		part := common.WhichPartition(pgEvent.AggregateID, p.partitions)
+		part := common.WhichPartition(pgEvent.AggregateIDHash, p.partitions)
 		if part < p.partitionsLow || part > p.partitionsHi {
 			continue
 		}
@@ -226,6 +227,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		event := eventstore.Event{
 			ID:               pgEvent.ID,
 			AggregateID:      pgEvent.AggregateID,
+			AggregateIDHash:  pgEvent.AggregateIDHash,
 			AggregateVersion: pgEvent.AggregateVersion,
 			AggregateType:    pgEvent.AggregateType,
 			Kind:             pgEvent.Kind,

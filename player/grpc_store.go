@@ -79,6 +79,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 		events[k] = eventstore.Event{
 			ID:               v.Id,
 			AggregateID:      v.AggregateId,
+			AggregateIDHash:  v.AggregateIdHash,
 			AggregateVersion: v.AggregateVersion,
 			AggregateType:    v.AggregateType,
 			Kind:             v.Kind,

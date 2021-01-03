@@ -26,6 +26,7 @@ type Event struct {
 	ID               string                 `json:"id,omitempty"`
 	ResumeToken      encoding.Base64        `json:"resume_token,omitempty"`
 	AggregateID      string                 `json:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32                 `json:"aggregate_id_hash,omitempty"`
 	AggregateVersion uint32                 `json:"aggregate_version,omitempty"`
 	AggregateType    string                 `json:"aggregate_type,omitempty"`
 	Kind             string                 `json:"kind,omitempty"`
@@ -42,6 +43,7 @@ func (_ JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
 		AggregateID:      e.AggregateID,
+		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateType:    e.AggregateType,
 		Kind:             e.Kind,
@@ -68,6 +70,7 @@ func (_ JsonCodec) Decode(data []byte) (eventstore.Event, error) {
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
 		AggregateID:      e.AggregateID,
+		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateType:    e.AggregateType,
 		Kind:             e.Kind,

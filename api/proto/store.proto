@@ -43,10 +43,11 @@ message Event {
 	string id = 1;
 	string aggregate_id = 2;
 	uint32 aggregate_version = 3;
-	string aggregate_type = 4;
-	string kind = 5;
-	bytes body = 6;
-	string idempotency_key = 7;
-	string labels = 8;
-	google.protobuf.Timestamp created_at =9;
+	uint32 aggregate_id_hash = 4;
+	string aggregate_type = 5;
+	string kind = 6;
+	bytes body = 7;
+	string idempotency_key = 8;
+	string labels = 9;
+	google.protobuf.Timestamp created_at = 10;
 }

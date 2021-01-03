@@ -95,7 +95,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		eventDoc := data.FullDocument
 
 		// check if the event is to be forwarded to the sinker
-		p := common.WhichPartition(eventDoc.AggregateID, m.partitions)
+		p := common.WhichPartition(eventDoc.AggregateIDHash, m.partitions)
 		if p < m.partitionsLow || p > m.partitionsHi {
 			continue
 		}
@@ -105,6 +105,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 				ID:               common.NewMessageID(eventDoc.ID, uint8(k)),
 				ResumeToken:      []byte(eventsStream.ResumeToken()),
 				AggregateID:      eventDoc.AggregateID,
+				AggregateIDHash:  eventDoc.AggregateIDHash,
 				AggregateVersion: eventDoc.AggregateVersion,
 				AggregateType:    eventDoc.AggregateType,
 				Kind:             d.Kind,

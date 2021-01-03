@@ -140,6 +140,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 				evt := eventstore.Event{
 					ID:               doc.ID,
 					AggregateID:      doc.AggregateID,
+					AggregateIDHash:  doc.AggregateIDHash,
 					AggregateVersion: doc.AggregateVersion,
 					AggregateType:    doc.AggregateType,
 					Kind:             d.Kind,
@@ -469,6 +470,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 				events = append(events, eventstore.Event{
 					ID:               common.NewMessageID(v.ID, uint8(k)),
 					AggregateID:      v.AggregateID,
+					AggregateIDHash:  v.AggregateIDHash,
 					AggregateVersion: v.AggregateVersion,
 					AggregateType:    v.AggregateType,
 					Kind:             d.Kind,

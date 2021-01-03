@@ -48,7 +48,7 @@ func (s *MockSink) Sink(ctx context.Context, e eventstore.Event) error {
 	if s.partitions <= 1 {
 		partition = 1
 	} else {
-		partition = common.WhichPartition(e.AggregateID, s.partitions)
+		partition = common.WhichPartition(e.AggregateIDHash, s.partitions)
 	}
 	s.mu.Lock()
 	events := s.events[partition]

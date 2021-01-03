@@ -53,6 +53,7 @@ type Event struct {
 	ID               string
 	ResumeToken      encoding.Base64
 	AggregateID      string
+	AggregateIDHash  uint32
 	AggregateVersion uint32
 	AggregateType    string
 	Kind             string

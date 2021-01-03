@@ -96,7 +96,7 @@ func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
 		return err
 	}
 
-	topic := common.PartitionTopic(e.AggregateID, p.topic, p.partitions)
+	topic := common.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
 	err = p.client.Publish(topic, b)
 	if err != nil {
 		return faults.Errorf("Failed to send message: %w", err)

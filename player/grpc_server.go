@@ -46,6 +46,7 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 		pbEvents[k] = &pb.Event{
 			Id:               v.ID,
 			AggregateId:      v.AggregateID,
+			AggregateIdHash:  v.AggregateIDHash,
 			AggregateVersion: v.AggregateVersion,
 			AggregateType:    v.AggregateType,
 			Kind:             v.Kind,
