@@ -50,17 +50,25 @@ func (r *NotifierLockRestarter) Restart(ctx context.Context, projection string, 
 		return faults.Errorf("Unable to acquire rebuild lock for projection %s: %w", projection, err)
 	}
 
-	defer func() {
-		logger.Info("Releasing rebuild projection lock")
-		r.lock.Unlock(ctx)
+	go func() {
+		defer func() {
+			logger.Info("Releasing rebuild projection lock")
+			r.lock.Unlock(ctx)
+		}()
+
+		logger.Info("Signalling to STOP projection listener")
+		err = r.notifier.CancelProjection(ctx, projection, partitions)
+		if err != nil {
+			log.WithError(err).Errorf("Error while freezing projection %s", projection)
+			return
+		}
+
+		logger.Info("Restarting...")
+		err = restartFn(ctx)
+		if err != nil {
+			log.WithError(err).Errorf("Error while restarting projection %s", projection)
+		}
 	}()
 
-	logger.Info("Signalling to STOP projection listener")
-	err = r.notifier.CancelProjection(ctx, projection, partitions)
-	if err != nil {
-		log.WithError(err).Errorf("Error while freezing projection %s", projection)
-		return err
-	}
-
-	return restartFn(ctx)
+	return nil
 }
