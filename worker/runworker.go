@@ -45,6 +45,8 @@ func (l *RunWorker) Name() string {
 }
 
 func (l *RunWorker) Stop() {
+	log.Infof("Stopping worker %s", l.name)
+
 	l.mu.Lock()
 	if l.cancel != nil {
 		l.cancel()
@@ -60,6 +62,8 @@ func (l *RunWorker) IsRunning() bool {
 }
 
 func (l *RunWorker) Start(ctx context.Context) {
+	log.Infof("Starting worker %s", l.name)
+
 	ctx, cancel := context.WithCancel(ctx)
 
 	l.mu.Lock()
