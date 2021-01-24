@@ -39,7 +39,7 @@ func NewFeed(connString string, dbName string, opts ...FeedOption) (Feed, error)
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
-		return Feed{}, err
+		return Feed{}, faults.Errorf("Unable to connect to '%s': %w", connString, err)
 	}
 
 	m := Feed{

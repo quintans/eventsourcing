@@ -80,12 +80,21 @@ func (c *ConsulMemberList) Register(ctx context.Context, workers []string) error
 	}()
 
 	s := strings.Join(workers, ",")
-	putKv := &api.KVPair{
+	kv := &api.KVPair{
 		Session: c.sID,
 		Key:     c.name,
 		Value:   []byte(s),
 	}
-	_, err := c.client.KV().Put(putKv, options)
 
-	return faults.Wrap(err)
+	acquired, _, err := c.client.KV().Acquire(kv, options)
+	if err != nil {
+		return faults.Wrap(err)
+	}
+
+	if !acquired {
+		c.client.Session().Destroy(c.sID, options)
+		return nil
+	}
+
+	return nil
 }

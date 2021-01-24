@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var locks = &sync.Map{}
+
 func TestMembersList(t *testing.T) {
 	members := &sync.Map{}
 
@@ -24,7 +26,7 @@ func TestMembersList(t *testing.T) {
 	// node #2
 	w2, cancel2 := newBalancer(members)
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(time.Second)
 	count = countRunningWorkers(w1)
 	require.Equal(t, 2, count)
 	count = countRunningWorkers(w2)
@@ -33,7 +35,7 @@ func TestMembersList(t *testing.T) {
 	// node #3
 	w3, cancel3 := newBalancer(members)
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(2 * time.Second)
 	count1 := countRunningWorkers(w1)
 	require.True(t, count1 >= 1 && count1 <= 2)
 	count2 := countRunningWorkers(w2)
@@ -44,7 +46,7 @@ func TestMembersList(t *testing.T) {
 	require.Equal(t, 4, count+count2+count3)
 
 	// after a while we expect to still have he same values
-	time.Sleep(3 * time.Second)
+	time.Sleep(time.Second)
 	count1B := countRunningWorkers(w1)
 	require.Equal(t, count1, count1B)
 	count2B := countRunningWorkers(w2)
@@ -54,7 +56,7 @@ func TestMembersList(t *testing.T) {
 
 	// kill node #1
 	cancel1()
-	time.Sleep(3 * time.Second)
+	time.Sleep(time.Second)
 	count = countRunningWorkers(w2)
 	require.Equal(t, 2, count)
 	count = countRunningWorkers(w3)
@@ -62,67 +64,86 @@ func TestMembersList(t *testing.T) {
 
 	// kill node #2
 	cancel2()
-	time.Sleep(3 * time.Second)
+	time.Sleep(time.Second)
 	count = countRunningWorkers(w3)
 	require.Equal(t, 4, count)
+
+	// node #2
+	w2, cancel2 = newBalancerWithTimeout(members, 2*time.Second)
+
+	time.Sleep(time.Second)
+	count = countRunningWorkers(w3)
+	require.Equal(t, 2, count)
+	count = countRunningWorkers(w2)
+	require.Equal(t, 2, count)
+
+	// after node#2 timeout, it will recover and rebalance
+	time.Sleep(4 * time.Second)
+	count = countRunningWorkers(w2)
+	require.Equal(t, 2, count)
+	count = countRunningWorkers(w3)
+	require.Equal(t, 2, count)
 
 	cancel3()
 }
 
-func newBalancer(members *sync.Map) ([]worker.LockWorker, context.CancelFunc) {
+func newBalancer(members *sync.Map) ([]worker.Worker, context.CancelFunc) {
+	return newBalancerWithTimeout(members, 0)
+}
+
+func newBalancerWithTimeout(members *sync.Map, timeout time.Duration) ([]worker.Worker, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	member := NewInMemMemberList(ctx, members)
-	ws := getWorkers()
-	go worker.BalanceWorkers(ctx, member, ws, time.Second)
+	ws := getWorkers(timeout)
+	go worker.BalanceWorkers(ctx, member, ws, time.Second/2)
 	return ws, cancel
 }
 
-func countRunningWorkers(workers []worker.LockWorker) int {
+func countRunningWorkers(workers []worker.Worker) int {
 	count := 0
 	for _, w := range workers {
-		if w.Worker.IsRunning() {
+		if w.IsRunning() {
 			count++
 		}
 	}
 	return count
 }
 
-func getWorkers() []worker.LockWorker {
-	return []worker.LockWorker{
-		{
-			Lock:   NewInMemLocker(),
-			Worker: NewInMemWorker("worker-one"),
-		},
-		{
-			Lock:   NewInMemLocker(),
-			Worker: NewInMemWorker("worker-two"),
-		},
-		{
-			Lock:   NewInMemLocker(),
-			Worker: NewInMemWorker("worker-three"),
-		},
-		{
-			Lock:   NewInMemLocker(),
-			Worker: NewInMemWorker("worker-four"),
-		},
+func getWorkers(timeout time.Duration) []worker.Worker {
+	return []worker.Worker{
+		NewInMemWorker("worker-1", timeout),
+		NewInMemWorker("worker-2", timeout),
+		NewInMemWorker("worker-3", timeout),
+		NewInMemWorker("worker-4", timeout),
 	}
 }
 
 type InMemLocker struct {
-	done chan struct{}
+	locks *sync.Map
+	name  string
+	done  chan struct{}
 }
 
-func NewInMemLocker() *InMemLocker {
-	return &InMemLocker{}
+func NewInMemLocker(locks *sync.Map, name string) *InMemLocker {
+	return &InMemLocker{
+		locks: locks,
+		name:  name,
+	}
 }
 
 func (l *InMemLocker) Lock(context.Context) (chan struct{}, error) {
-	l.done = make(chan struct{})
-	return l.done, nil
+	_, loaded := l.locks.LoadOrStore(l.name, true)
+	if !loaded {
+		l.done = make(chan struct{})
+		return l.done, nil
+	}
+
+	return nil, nil
 }
 
 func (l *InMemLocker) Unlock(context.Context) error {
 	close(l.done)
+	l.locks.Delete(l.name)
 	return nil
 }
 
@@ -131,14 +152,18 @@ func (l *InMemLocker) WaitForUnlock(context.Context) error {
 }
 
 type InMemWorker struct {
-	name    string
-	running bool
-	mu      sync.RWMutex
+	name     string
+	running  bool
+	duration time.Duration
+	mu       sync.RWMutex
+	locker   worker.Locker
 }
 
-func NewInMemWorker(name string) *InMemWorker {
+func NewInMemWorker(name string, duration time.Duration) *InMemWorker {
 	return &InMemWorker{
-		name: name,
+		name:     name,
+		duration: duration,
+		locker:   NewInMemLocker(locks, name),
 	}
 }
 
@@ -156,20 +181,30 @@ func (w *InMemWorker) IsRunning() bool {
 	return w.running
 }
 
-func (w *InMemWorker) Start(ctx context.Context) {
+func (w *InMemWorker) Start(ctx context.Context) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.running = true
+	if w.duration > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		go func() {
+			time.Sleep(w.duration)
+			cancel()
+		}()
+	}
 	go func() {
 		select {
 		case <-ctx.Done():
 		}
-		w.Stop()
+		w.Stop(ctx)
 	}()
+
+	return true
 }
 
-func (w *InMemWorker) Stop() {
+func (w *InMemWorker) Stop(_ context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

@@ -21,23 +21,17 @@ type Memberlister interface {
 type Worker interface {
 	Name() string
 	IsRunning() bool
-	Start(context.Context)
-	Stop()
+	Start(context.Context) bool
+	Stop(context.Context)
 }
 
-type LockWorker struct {
-	Lock   Locker
-	Worker Worker
-}
-
-func BalanceWorkers(ctx context.Context, member Memberlister, lms []LockWorker, heartbeat time.Duration) {
+func BalanceWorkers(ctx context.Context, member Memberlister, workers []Worker, heartbeat time.Duration) {
 	ticker := time.NewTicker(heartbeat)
 	defer ticker.Stop()
 	for {
-		err := run(ctx, member, lms)
+		err := run(ctx, member, workers)
 		if err != nil {
 			log.Warnf("Error while balancing partitions: %v", err)
-			continue
 		}
 		select {
 		case <-ctx.Done():
@@ -47,7 +41,7 @@ func BalanceWorkers(ctx context.Context, member Memberlister, lms []LockWorker, 
 	}
 }
 
-func run(ctx context.Context, member Memberlister, workers []LockWorker) error {
+func run(ctx context.Context, member Memberlister, workers []Worker) error {
 	members, err := member.List(ctx)
 	if err != nil {
 		return err
@@ -75,8 +69,19 @@ func run(ctx context.Context, member Memberlister, workers []LockWorker) error {
 		if workersToAcquire > len(m.Workers) {
 			hasMinWorkers = false
 		}
-		for _, v := range m.Workers {
-			workersInUse[v] = true
+		// map only other members workers
+		if m.Name != member.Name() {
+			for _, v := range m.Workers {
+				workersInUse[v] = true
+			}
+		}
+	}
+	// mapping our current workers
+	myRunningWorkers := map[string]bool{}
+	for _, v := range workers {
+		if v.IsRunning() {
+			workersInUse[v.Name()] = true
+			myRunningWorkers[v.Name()] = true
 		}
 	}
 
@@ -84,20 +89,13 @@ func run(ctx context.Context, member Memberlister, workers []LockWorker) error {
 		workersToAcquire++
 	}
 
-	locks := balance(ctx, workers, workersToAcquire, workersInUse)
+	locks := balance(ctx, workers, workersToAcquire, workersInUse, myRunningWorkers)
 	member.Register(ctx, locks)
 
 	return nil
 }
 
-func balance(ctx context.Context, workers []LockWorker, workersToAcquire int, workersInUse map[string]bool) []string {
-	myRunningWorkers := map[string]bool{}
-	for _, v := range workers {
-		if v.Worker.IsRunning() {
-			myRunningWorkers[v.Worker.Name()] = true
-			workersInUse[v.Worker.Name()] = true
-		}
-	}
+func balance(ctx context.Context, workers []Worker, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
 
 	running := len(myRunningWorkers)
 	if running == workersToAcquire {
@@ -106,32 +104,20 @@ func balance(ctx context.Context, workers []LockWorker, workersToAcquire int, wo
 
 	for _, v := range workers {
 		if running > workersToAcquire {
-			if !v.Worker.IsRunning() {
+			if !v.IsRunning() {
 				continue
 			}
 
-			v.Worker.Stop()
-			v.Lock.Unlock(ctx)
-			delete(myRunningWorkers, v.Worker.Name())
+			v.Stop(ctx)
+			delete(myRunningWorkers, v.Name())
 			running--
 		} else {
-			if workersInUse[v.Worker.Name()] {
+			if workersInUse[v.Name()] {
 				continue
 			}
 
-			release, _ := v.Lock.Lock(ctx)
-			if release != nil {
-				go func() {
-					ctx, cancel := context.WithCancel(ctx)
-					select {
-					case <-release:
-					case <-ctx.Done():
-						v.Lock.Unlock(ctx)
-					}
-					cancel()
-				}()
-				go v.Worker.Start(ctx)
-				myRunningWorkers[v.Worker.Name()] = true
+			if v.Start(ctx) {
+				myRunningWorkers[v.Name()] = true
 				running++
 			}
 		}

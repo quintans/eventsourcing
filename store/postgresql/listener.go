@@ -92,7 +92,7 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 func NewFeed(dbUrl string, repository player.Repository, channel string, options ...FeedOption) (Feed, error) {
 	pool, err := pgxpool.Connect(context.Background(), dbUrl)
 	if err != nil {
-		return Feed{}, faults.Errorf("Unable to connect to database: %w", err)
+		return Feed{}, faults.Errorf("Unable to connect to '%s': %w", dbUrl, err)
 	}
 
 	p := Feed{

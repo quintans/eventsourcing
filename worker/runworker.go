@@ -28,64 +28,82 @@ type WaitForUnlocker interface {
 // BootMonitor is responsible for refreshing the lease
 type RunWorker struct {
 	name   string
+	locker Locker
 	runner Tasker
 	cancel context.CancelFunc
 	mu     sync.RWMutex
 }
 
-func NewRunWorker(name string, runner Tasker) *RunWorker {
+func NewRunWorker(name string, locker Locker, runner Tasker) *RunWorker {
 	return &RunWorker{
 		name:   name,
+		locker: locker,
 		runner: runner,
 	}
 }
 
-func (l *RunWorker) Name() string {
-	return l.name
+func (w *RunWorker) Name() string {
+	return w.name
 }
 
-func (l *RunWorker) Stop() {
-	log.Infof("Stopping worker %s", l.name)
+func (w *RunWorker) Stop(ctx context.Context) {
+	log.Infof("Stopping worker %s", w.name)
 
-	l.mu.Lock()
-	if l.cancel != nil {
-		l.cancel()
-		l.cancel = nil
+	w.mu.Lock()
+	if w.cancel != nil {
+		w.locker.Unlock(ctx)
+		w.cancel()
+		w.cancel = nil
 	}
-	l.mu.Unlock()
+	w.mu.Unlock()
 }
 
-func (l *RunWorker) IsRunning() bool {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.cancel != nil
+func (w *RunWorker) IsRunning() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.cancel != nil
 }
 
-func (l *RunWorker) Start(ctx context.Context) {
-	log.Infof("Starting worker %s", l.name)
+func (w *RunWorker) Start(ctx context.Context) bool {
+	release, _ := w.locker.Lock(ctx)
+	if release != nil {
+		go func() {
+			ctx, cancel := context.WithCancel(ctx)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				w.locker.Unlock(ctx)
+			}
+			cancel()
+		}()
+		go w.start(ctx)
+	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	return release != nil
+}
 
-	l.mu.Lock()
-	l.cancel = cancel
-	l.mu.Unlock()
+func (w *RunWorker) start(ctx context.Context) {
+	log.Infof("Starting worker %s", w.name)
 
-	defer func() {
-		l.Stop()
-	}()
+	ctx2, cancel2 := context.WithCancel(ctx)
+
+	w.mu.Lock()
+	w.cancel = cancel2
+	w.mu.Unlock()
 
 	// acquired lock
 	// OnBoot may take some time (minutes) to finish since it will be doing synchronisation
 	go func() {
-		err := l.runner.Run(ctx)
+		err := w.runner.Run(ctx2)
 		if err != nil {
-			log.Error("Error while running:", err)
+			log.Error("Error while running: ", err)
+			cancel2()
+			return
 		}
 	}()
-	select {
-	case <-ctx.Done():
-	}
-	l.runner.Cancel()
+	<-ctx2.Done()
+	w.runner.Cancel()
+	w.Stop(ctx)
 }
 
 type PartitionSlot struct {

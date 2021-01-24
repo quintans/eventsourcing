@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"sync"
 
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/sink"
@@ -17,38 +16,27 @@ type Feeder interface {
 type Forwarder struct {
 	feeder Feeder
 	sinker sink.Sinker
-	frozen chan struct{}
-	mu     sync.RWMutex
 }
 
 func NewForwarder(feeder Feeder, sinker sink.Sinker) *Forwarder {
 	return &Forwarder{
 		feeder: feeder,
 		sinker: sinker,
-		frozen: make(chan struct{}),
 	}
 }
 
 func (f *Forwarder) Run(ctx context.Context) error {
-	go func() {
-		defer func() {
-			f.mu.Lock()
-			close(f.frozen)
-			f.mu.Unlock()
-		}()
+	log.Println("Initialising Sink")
+	err := f.sinker.Init()
+	if err != nil {
+		return faults.Errorf("Error initialising Sink on boot: %w", err)
+	}
 
-		log.Println("Initialising Sink")
-		err := f.sinker.Init()
-		if err != nil {
-			log.Error("Error initialising Sink on boot:", err)
-		}
-
-		log.Println("Starting Seed")
-		err = f.feeder.Feed(ctx, f.sinker)
-		if err != nil {
-			log.Error("Error feeding on boot:", err)
-		}
-	}()
+	log.Println("Starting Seed")
+	err = f.feeder.Feed(ctx, f.sinker)
+	if err != nil {
+		return faults.Errorf("Error feeding on boot: %w", err)
+	}
 	return nil
 }
 
