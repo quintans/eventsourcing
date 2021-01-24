@@ -100,7 +100,7 @@ func (m *ProjectionPartition) Name() string {
 func (m *ProjectionPartition) Run(ctx context.Context) error {
 	logger := log.WithField("projection", m.projection.GetName())
 	for {
-		logger.Infof("Waiting for Unlock on", m.projection.GetName())
+		logger.Info("Waiting for Unlock")
 		m.restartLock.WaitForUnlock(ctx)
 
 		ctx2, cancel := context.WithCancel(ctx)
@@ -144,7 +144,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 	handler := m.projection.Handler
 
 	frozen := make([]chan struct{}, 0)
-	for _, stage := range m.stages {
+	for k, stage := range m.stages {
 		// To avoid the creation of a potential massive buffer size
 		// and to ensure that events are not lost, between the switch to the consumer,
 		// we execute the fetch in several steps.
@@ -176,7 +176,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			prjEventIDs[partition] = prjEventID
 		}
 
-		logger.Infof("Booting from event ID '%s'", smallestEventID)
+		logger.Infof("Beginning booting stage %d from event ID '%s'", k, smallestEventID)
 
 		// replaying events for each partition, rather than replay from the smallest event of the partition range,
 		// probably is faster because the projection does not have to handle repeated events.
@@ -223,6 +223,8 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			}
 			frozen = append(frozen, ch)
 		}
+
+		logger.Infof("Ended booting stage %d", k)
 	}
 
 	m.mu.Lock()
