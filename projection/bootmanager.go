@@ -176,7 +176,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			prjEventIDs[partition] = prjEventID
 		}
 
-		logger.Infof("Beginning booting stage %d from event ID '%s'", k, smallestEventID)
+		logger.Infof("Beginning booting stage %d (partitions [%d-%d]) from event ID '%s'", k, stage.PartitionLo, stage.PartitionHi, smallestEventID)
 
 		// replaying events for each partition, rather than replay from the smallest event of the partition range,
 		// probably is faster because the projection does not have to handle repeated events.
@@ -224,7 +224,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			frozen = append(frozen, ch)
 		}
 
-		logger.Infof("Ended booting stage %d", k)
+		logger.Infof("Ended booting stage %d (partitions [%d-%d])", k, stage.PartitionLo, stage.PartitionHi)
 	}
 
 	m.mu.Lock()
