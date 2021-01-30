@@ -4,10 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/quintans/eventstore/feed"
 	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/repo"
 	"github.com/quintans/eventstore/sink"
+	"github.com/quintans/eventstore/store"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -16,13 +15,17 @@ const (
 )
 
 type Poller struct {
-	repo         player.Repository
+	store        player.Repository
 	pollInterval time.Duration
 	limit        int
-	partitions   int
 	play         player.Player
 	// lag to account for on same millisecond concurrent inserts and clock skews
-	trailingLag time.Duration
+	trailingLag    time.Duration
+	aggregateTypes []string
+	labels         store.Labels
+	partitions     uint32
+	partitionsLow  uint32
+	partitionsHi   uint32
 }
 
 type Option func(*Poller)
@@ -47,11 +50,38 @@ func WithLimit(limit int) Option {
 	}
 }
 
-func WithPartitions(partitions int) Option {
+func WithPartitions(partitions, partitionsLow, partitionsHi uint32) Option {
 	return func(p *Poller) {
-		if partitions > 0 {
-			p.partitions = partitions
+		p.partitions = partitions
+		p.partitionsLow = partitionsLow
+		p.partitionsHi = partitionsHi
+	}
+}
+
+func WithAggregateTypes(at ...string) Option {
+	return func(f *Poller) {
+		f.aggregateTypes = at
+	}
+}
+
+func WithLabel(key, value string) Option {
+	return func(f *Poller) {
+		if f.labels == nil {
+			f.labels = store.Labels{}
 		}
+		values := f.labels[key]
+		if values == nil {
+			values = []string{value}
+		} else {
+			values = append(values, value)
+		}
+		f.labels[key] = values
+	}
+}
+
+func WithLabels(labels store.Labels) Option {
+	return func(f *Poller) {
+		f.labels = labels
 	}
 }
 
@@ -59,7 +89,7 @@ func New(repository player.Repository, options ...Option) Poller {
 	p := Poller{
 		pollInterval: player.TrailingLag,
 		limit:        20,
-		repo:         repository,
+		store:        repository,
 	}
 
 	for _, o := range options {
@@ -71,12 +101,12 @@ func New(repository player.Repository, options ...Option) Poller {
 	return p
 }
 
-func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler player.EventHandler, filters ...repo.FilterOption) error {
+func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler player.EventHandler) error {
 	var afterEventID string
 	var err error
 	switch startOption.StartFrom() {
 	case player.END:
-		afterEventID, err = p.repo.GetLastEventID(ctx, p.trailingLag, repo.Filter{})
+		afterEventID, err = p.store.GetLastEventID(ctx, p.trailingLag, store.Filter{})
 		if err != nil {
 			return err
 		}
@@ -84,11 +114,16 @@ func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handle
 	case player.SEQUENCE:
 		afterEventID = startOption.AfterEventID()
 	}
-	return p.forward(ctx, afterEventID, handler, filters...)
+	return p.forward(ctx, afterEventID, handler)
 }
 
-func (p Poller) forward(ctx context.Context, afterEventID string, handler player.EventHandler, filters ...repo.FilterOption) error {
+func (p Poller) forward(ctx context.Context, afterEventID string, handler player.EventHandler) error {
 	wait := p.pollInterval
+	filters := []store.FilterOption{
+		store.WithAggregateTypes(p.aggregateTypes...),
+		store.WithLabels(p.labels),
+		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
+	}
 	for {
 		eid, err := p.play.Replay(ctx, handler, afterEventID, filters...)
 		if err != nil {
@@ -104,22 +139,24 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 			wait = p.pollInterval
 		}
 
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return nil
-		case _ = <-time.After(p.pollInterval):
+		case <-t.C:
 		}
 	}
 }
 
 // Feed forwars the handling to a sink.
 // eg: a message queue
-func (p Poller) Feed(ctx context.Context, sinker sink.Sinker, filters ...repo.FilterOption) error {
-	afterEventID, err := feed.LastEventIDInSink(ctx, sinker, p.partitions)
+func (p Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
+	afterEventID, _, err := store.LastEventIDInSink(ctx, sinker, p.partitionsLow, p.partitionsHi)
 	if err != nil {
 		return err
 	}
 
 	log.Println("Starting to feed from event ID:", afterEventID)
-	return p.forward(ctx, afterEventID, sinker.Sink, filters...)
+	return p.forward(ctx, afterEventID, sinker.Sink)
 }

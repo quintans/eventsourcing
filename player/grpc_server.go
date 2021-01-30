@@ -2,25 +2,25 @@ package player
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"net"
 	"time"
 
 	"github.com/golang/protobuf/ptypes"
 	_ "github.com/lib/pq"
 	pb "github.com/quintans/eventstore/api/proto"
-	"github.com/quintans/eventstore/repo"
-	log "github.com/sirupsen/logrus"
+	"github.com/quintans/eventstore/store"
+	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 )
 
 type GrpcServer struct {
-	repo Repository
+	store Repository
 }
 
 func (s *GrpcServer) GetLastEventID(ctx context.Context, r *pb.GetLastEventIDRequest) (*pb.GetLastEventIDReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
-	eID, err := s.repo.GetLastEventID(ctx, time.Duration(r.TrailingLag)*time.Millisecond, filter)
+	eID, err := s.store.GetLastEventID(ctx, time.Duration(r.TrailingLag)*time.Millisecond, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func (s *GrpcServer) GetLastEventID(ctx context.Context, r *pb.GetLastEventIDReq
 
 func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb.GetEventsReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
-	events, err := s.repo.GetEvents(ctx, r.GetAfterEventId(), int(r.GetLimit()), time.Duration(r.TrailingLag)*time.Millisecond, filter)
+	events, err := s.store.GetEvents(ctx, r.GetAfterEventId(), int(r.GetLimit()), time.Duration(r.TrailingLag)*time.Millisecond, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -37,43 +37,53 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 	for k, v := range events {
 		createdAt, err := ptypes.TimestampProto(v.CreatedAt)
 		if err != nil {
-			log.Fatal("could not convert time")
+			return nil, faults.Errorf("could convert timestamp to proto: %w", err)
 		}
-
+		labels, err := json.Marshal(v.Labels)
+		if err != nil {
+			return nil, faults.Errorf("Unable marshal labels: %w", err)
+		}
 		pbEvents[k] = &pb.Event{
 			Id:               v.ID,
 			AggregateId:      v.AggregateID,
+			AggregateIdHash:  v.AggregateIDHash,
 			AggregateVersion: v.AggregateVersion,
 			AggregateType:    v.AggregateType,
 			Kind:             v.Kind,
-			Body:             string(v.Body),
+			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
-			Labels:           string(v.Labels),
+			Labels:           string(labels),
 			CreatedAt:        createdAt,
 		}
 	}
 	return &pb.GetEventsReply{Events: pbEvents}, nil
 }
 
-func pbFilterToFilter(pbFilter *pb.Filter) repo.Filter {
+func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	types := make([]string, len(pbFilter.AggregateTypes))
 	for k, v := range pbFilter.AggregateTypes {
 		types[k] = v
 	}
-	labels := make([]repo.Label, len(pbFilter.Labels))
-	for k, v := range pbFilter.Labels {
-		labels[k] = repo.NewLabel(v.Key, v.Value)
+	labels := store.Labels{}
+	for _, v := range pbFilter.Labels {
+		values := labels[v.Key]
+		if values == nil {
+			values = []string{v.Value}
+		} else {
+			values = append(values, v.Value)
+		}
+		labels[v.Key] = values
 	}
-	return repo.Filter{AggregateTypes: types, Labels: labels}
+	return store.Filter{AggregateTypes: types, Labels: labels}
 }
 
 func StartGrpcServer(ctx context.Context, address string, repo Repository) error {
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
-		return fmt.Errorf("failed to listen: %w", err)
+		return faults.Errorf("failed to listen: %w", err)
 	}
 	s := grpc.NewServer()
-	pb.RegisterStoreServer(s, &GrpcServer{repo: repo})
+	pb.RegisterStoreServer(s, &GrpcServer{store: repo})
 
 	go func() {
 		<-ctx.Done()
@@ -81,7 +91,7 @@ func StartGrpcServer(ctx context.Context, address string, repo Repository) error
 	}()
 
 	if err := s.Serve(lis); err != nil {
-		return fmt.Errorf("failed to serve: %w", err)
+		return faults.Errorf("failed to serve: %w", err)
 	}
 	return nil
 }

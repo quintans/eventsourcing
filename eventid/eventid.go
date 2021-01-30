@@ -2,29 +2,25 @@ package eventid
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/faults"
 )
 
 const (
-	EncodingSize      = 26
-	EncodedStringSize = 42
-	ByteSize          = 8
-	TimestampSize     = 6
-	UuidSize          = 16
-	VersionSize       = 4
-	// Encoding follows Croford's Base 32 https://www.crockford.com/base32.html
-	Encoding = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-	bitShift = 5
+	EncodingSize      = 25
+	EncodedStringSize = 40
+
+	TimestampSize = 6
+	UuidSize      = 16
+	VersionSize   = 3
 )
 
 var (
-	ErrInvalidString     = errors.New("String contains invalid characters")
-	ErrInvalidStringSize = errors.New("String size should be 42")
+	ErrInvalidStringSize = errors.New("String size should be 40")
 )
 
 type EventID [EncodingSize]byte
@@ -40,14 +36,14 @@ func New(instant time.Time, aggregateID uuid.UUID, version uint32) EventID {
 }
 
 func (e EventID) String() string {
-	return Marshal(e[:])
+	return encoding.Marshal(e[:])
 }
 
 func Parse(encoded string) (EventID, error) {
 	if len(encoded) != EncodedStringSize {
-		return EventID{}, ErrInvalidStringSize
+		return EventID{}, faults.Errorf("%w: %s", ErrInvalidStringSize, encoded)
 	}
-	a, err := Unmarshal(encoded)
+	a, err := encoding.Unmarshal(encoded)
 	if err != nil {
 		return EventID{}, err
 	}
@@ -67,13 +63,13 @@ func Parse(encoded string) (EventID, error) {
 func (e EventID) Time() time.Time {
 	b := make([]byte, 8)
 	copy(b[2:], e[:TimestampSize])
-	ts := btoi64(b)
+	ts := encoding.Btoi64(b)
 	return Time(ts)
 }
 
 func (e *EventID) SetTime(instant time.Time) {
 	ts := Timestamp(instant)
-	bts := i64tob(ts) // 8 bytes
+	bts := encoding.I64tob(ts) // 8 bytes
 	// using only 6 bytes will give us 12293 years
 	copy(e[:], bts[2:])
 }
@@ -91,12 +87,14 @@ func (e *EventID) SetAggregateID(aggregateID uuid.UUID) {
 }
 
 func (e EventID) Version() uint32 {
-	return btoi32(e[TimestampSize+UuidSize:])
+	b := make([]byte, 4)
+	copy(b[1:], e[TimestampSize+UuidSize:])
+	return encoding.Btoi32(b)
 }
 
 func (e *EventID) SetVersion(version uint32) {
-	bver := i32tob(version) // 4 bytes
-	copy(e[TimestampSize+UuidSize:], bver)
+	bver := encoding.I32tob(version)           // 4 bytes
+	copy(e[TimestampSize+UuidSize:], bver[1:]) // 3bytes
 }
 
 // Compare returns an integer comparing id and other lexicographically.
@@ -119,99 +117,19 @@ func Time(ms uint64) time.Time {
 	return time.Unix(s, ns)
 }
 
-func i64tob(val uint64) []byte {
-	r := make([]byte, 8)
-	binary.BigEndian.PutUint64(r, val)
-	return r
-}
-
-func btoi64(val []byte) uint64 {
-	return binary.BigEndian.Uint64(val)
-}
-
-func i32tob(val uint32) []byte {
-	r := make([]byte, 4)
-	binary.BigEndian.PutUint32(r, val)
-	return r
-}
-
-func btoi32(val []byte) uint32 {
-	return binary.BigEndian.Uint32(val)
-}
-
-func Marshal(a []byte) string {
-	encSize := (len(a)*ByteSize)/5 + 1
-	result := make([]byte, encSize)
-	shift2 := (ByteSize - bitShift)
-	var mask2 byte = 0xff << shift2
-	d := a
-	for i := 0; i < encSize; i++ {
-		c := d[0] & mask2
-		c = c >> shift2
-		result[i] = Encoding[c]
-		d = shiftBytesLeft(d, bitShift)
-	}
-	return string(result)
-}
-
-func Unmarshal(encoded string) ([]byte, error) {
-	decSize := (len(encoded) * 5) / ByteSize
-	// added one byte more to be the feeder
-	result := make([]byte, decSize+1)
-	encodeSize := len(encoded)
-	shift2 := (ByteSize - bitShift)
-	for i := 0; i < encodeSize; i++ {
-		idx := strings.Index(Encoding, string(encoded[i]))
-		if idx < 0 {
-			return nil, ErrInvalidString
-		}
-		b := byte(idx) << shift2
-		result[decSize] |= b
-		// ignore the last iteration
-		if i < encodeSize-1 {
-			result = shiftBytesLeft(result, bitShift)
-		}
-	}
-	// shifting the remaining bits
-	remainder := (decSize * ByteSize) % (bitShift * (encodeSize - 1))
-	if remainder > 0 {
-		result = shiftBytesLeft(result, remainder)
-	}
-	// discard last byte - feeder
-	return result[:decSize], nil
-}
-
-// shiftBytesLeft shift bytes left by shift amount.
-//
-// It returns the resulting shifted array
-func shiftBytesLeft(a []byte, shift int) (dst []byte) {
-	n := len(a)
-	dst = make([]byte, n)
-	var mask byte = 0xff << shift
-	shift2 := (8 - shift)
-	// shifting left
-	for i := 0; i < n-1; i++ {
-		dst[i] = a[i] << shift
-		dst[i] = (dst[i] & mask) | (a[i+1] >> shift2)
-	}
-	dst[n-1] = a[n-1] << shift
-
-	return dst
-}
-
 func DelayEventID(eventID string, offset time.Duration) (string, error) {
-	// if event ID is not empty, offset
-	if eventID != "" {
-		id, err := Parse(eventID)
-		if err != nil {
-			return "", err
-		}
-		t := id.Time()
-		// add a safety margin.
-		// afterEventID might have pointing to an ID that might have skipped other events
-		t = t.Add(-offset)
-		id.SetTime(t)
-		eventID = id.String()
+	if eventID == "" {
+		return eventID, nil
 	}
-	return eventID, nil
+
+	id, err := Parse(eventID)
+	if err != nil {
+		return "", err
+	}
+	t := id.Time()
+	// add a safety margin (offset).
+	t = t.Add(-offset)
+	id.SetTime(t)
+
+	return id.String(), nil
 }

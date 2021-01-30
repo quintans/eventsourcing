@@ -20,24 +20,39 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	ctx := context.Background()
-
-	dbContainer, err := bootstrapDbContainer(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	defer dbContainer.Terminate(ctx)
-	err = dbSchema()
+	tearDown, err := setup()
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// test run
-	os.Exit(m.Run())
+	var code int
+	func() {
+		defer tearDown()
+		code = m.Run()
+	}()
+
+	os.Exit(code)
 }
 
-func bootstrapDbContainer(ctx context.Context) (testcontainers.Container, error) {
+func setup() (func(), error) {
+	ctx := context.Background()
+
+	tearDown, err := bootstrapDbContainer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	err = dbSchema()
+	if err != nil {
+		tearDown()
+		return nil, err
+	}
+
+	return tearDown, nil
+}
+
+func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	tcpPort := "5432"
 	natPort := nat.Port(tcpPort)
 
@@ -59,19 +74,23 @@ func bootstrapDbContainer(ctx context.Context) (testcontainers.Container, error)
 		return nil, err
 	}
 
+	tearDown := func() {
+		container.Terminate(ctx)
+	}
+
 	ip, err := container.Host(ctx)
 	if err != nil {
-		container.Terminate(ctx)
+		tearDown()
 		return nil, err
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
-		container.Terminate(ctx)
+		tearDown()
 		return nil, err
 	}
 
 	dbURL = fmt.Sprintf("postgres://postgres:postgres@%s:%s/eventstore?sslmode=disable", ip, port.Port())
-	return container, nil
+	return tearDown, nil
 }
 
 func dbSchema() error {
@@ -84,10 +103,11 @@ func dbSchema() error {
 	CREATE TABLE IF NOT EXISTS events(
 		id VARCHAR (50) PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
+		aggregate_id_hash INTEGER NOT NULL,
 		aggregate_version INTEGER NOT NULL,
 		aggregate_type VARCHAR (50) NOT NULL,
 		kind VARCHAR (50) NOT NULL,
-		body JSONB NOT NULL,
+		body bytea NOT NULL,
 		idempotency_key VARCHAR (50),
 		labels JSONB NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
@@ -101,11 +121,12 @@ func dbSchema() error {
 		id VARCHAR (50) PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_version INTEGER NOT NULL,
-		body JSONB NOT NULL,
+		aggregate_type VARCHAR (50) NOT NULL,
+		body bytea NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		FOREIGN KEY (id) REFERENCES events (id)
-	 );
-	 CREATE INDEX aggregate_id_idx ON snapshots (aggregate_id);
+	);
+	CREATE INDEX aggregate_id_idx ON snapshots (aggregate_id);
 	
 	CREATE OR REPLACE FUNCTION notify_event() RETURNS TRIGGER AS $FN$
 		DECLARE 

@@ -2,267 +2,251 @@ package projection
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/repo"
+	"github.com/quintans/eventstore/store"
+	"github.com/quintans/eventstore/worker"
+	"github.com/quintans/faults"
 	log "github.com/sirupsen/logrus"
 )
 
-type Freezer interface {
+// Canceller is the interface for cancelling a running projection
+type Canceller interface {
 	Name() string
-	Freeze() bool
-	Unfreeze()
+	Cancel()
 }
 
+// Projection is the interface that a projection needs to implement
 type Projection interface {
 	GetName() string
-	GetResumeEventIDs(ctx context.Context) (map[string]string, error)
+	// GetResumeEventIDs gets the smallest of the latest event ID for a partition topic from the DB, for the aggregate group
+	GetResumeEventIDs(ctx context.Context, aggregateTypes []string, partition uint32) (string, error)
 	Handler(ctx context.Context, e eventstore.Event) error
 }
 
+// Notifier represents the interface that a message queue needs to implement to able to cancel distributed projections execution
 type Notifier interface {
-	ListenForNotifications(ctx context.Context, freezer Freezer) error
-	FreezeProjection(ctx context.Context, projectionName string) error
-	UnfreezeProjection(ctx context.Context, projectionName string) error
+	ListenCancelProjection(ctx context.Context, restarter Canceller) error
+	CancelProjection(ctx context.Context, projectionName string, partitions int) error
 }
 
 type Subscriber interface {
-	StartConsumer(ctx context.Context, partition int, resumeToken string, projection Projection, aggregateTypes []string) (chan struct{}, error)
-	GetResumeToken(ctx context.Context, partition int) (string, error)
+	StartConsumer(ctx context.Context, partition uint32, resumeToken string, projection Projection, aggregateTypes []string) (chan struct{}, error)
+	GetResumeToken(ctx context.Context, partition uint32) (string, error)
 }
 
 type EventHandler func(ctx context.Context, e eventstore.Event) error
 
-type BootableManager struct {
-	projection Projection
-	notifier   Notifier
-	stages     []BootStages
+type ProjectionPartition struct {
+	restartLock worker.WaitForUnlocker
+	projection  Projection
+	notifier    Notifier
+	partitions  uint32
+	stages      []BootStage
 
-	cancel  context.CancelFunc
-	wait    chan struct{}
-	release chan struct{}
-	closed  bool
-	frozen  []chan struct{}
-	hasLock bool // acquired the lock
-	mu      sync.RWMutex
+	cancel        context.CancelFunc
+	doneConsumers []chan struct{}
+	mu            sync.RWMutex
 }
 
-type BootStages struct {
+// BootStage represents the different aggregates used to build a projection.
+// This aggregates can come from different event stores
+type BootStage struct {
+	// AggregateTypes is the list of aggregates on the same topic
 	AggregateTypes []string
 	Subscriber     Subscriber
 	// Repository: Repository to the events
 	Repository player.Repository
-	// PartitionLo: first partition number. if zero, partitioning will ignored
-	PartitionLo int
-	// PartitionHi: last partition number. if zero, partitioning will ignored
-	PartitionHi int
+	// PartitionLo: low partition number. if zero, partitioning will ignored
+	PartitionLo uint32
+	// PartitionHi: high partition number. if zero, partitioning will ignored
+	PartitionHi uint32
 }
 
-// NewBootableManager creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
+// NewProjectionPartition creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
 // Arguments:
 // @param projection: the projection
 // @param notifier: handles all interaction with freezing/unfreezing notifications
 // @param stages: booting can be done in stages, since different event stores can be involved
-func NewBootableManager(
+func NewProjectionPartition(
+	restartLock worker.WaitForUnlocker,
 	projection Projection,
 	notifier Notifier,
-	stages ...BootStages,
-) *BootableManager {
-	c := make(chan struct{})
-	close(c)
-	mc := &BootableManager{
-		projection: projection,
-		notifier:   notifier,
-		stages:     stages,
-		wait:       c,
-		release:    make(chan struct{}),
+	partitions uint32,
+	stages ...BootStage,
+) *ProjectionPartition {
+	mc := &ProjectionPartition{
+		restartLock: restartLock,
+		projection:  projection,
+		notifier:    notifier,
+		partitions:  partitions,
+		stages:      stages,
 	}
+
 	return mc
 }
 
-func (m *BootableManager) Name() string {
+// Name returns the name of this projection
+func (m *ProjectionPartition) Name() string {
 	return m.projection.GetName()
 }
 
-// Wait block the call if the MonitorableConsumer was put on hold
-func (m *BootableManager) Wait() <-chan struct{} {
-	m.mu.Lock()
-	wait := m.wait
-	m.mu.Unlock()
+// Run action to be executed on boot
+func (m *ProjectionPartition) Run(ctx context.Context) error {
+	logger := log.WithField("projection", m.projection.GetName())
+	for {
+		logger.Info("Waiting for Unlock")
+		m.restartLock.WaitForUnlock(ctx)
 
-	<-wait
+		ctx2, cancel := context.WithCancel(ctx)
+		m.mu.Lock()
+		m.cancel = cancel
+		m.mu.Unlock()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.release = make(chan struct{})
-	return m.release
+		err := m.bootAndListen(ctx2)
+		if err != nil {
+			cancel()
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+	}
 }
 
-// OnBoot action to be executed on boot
-func (m *BootableManager) OnBoot(ctx context.Context) error {
-	var ctx2 context.Context
-	ctx2, m.cancel = context.WithCancel(ctx)
-	err := m.boot(ctx2)
+func (m *ProjectionPartition) bootAndListen(ctx context.Context) error {
+	err := m.boot(ctx)
 	if err != nil {
-		m.cancel()
 		return err
 	}
 
-	err = m.notifier.ListenForNotifications(ctx, m)
+	err = m.notifier.ListenCancelProjection(ctx, m)
 	if err != nil {
-		m.cancel()
 		return err
 	}
 
-	m.hasLock = true
+	<-ctx.Done()
+
 	return nil
 }
 
-func (m *BootableManager) boot(ctx context.Context) error {
-	// get the smallest of the latest event ID for each partitioned topic from the DB, per aggregate
-	prjEventIDs, err := m.projection.GetResumeEventIDs(ctx)
-	if err != nil {
-		return fmt.Errorf("Could not get last event ID from the projection: %w", err)
-	}
+func (m *ProjectionPartition) boot(ctx context.Context) error {
+	logger := log.WithField("projection", m.projection.GetName())
 
-	// To avoid the creation of  potential massive buffer size
-	// and to ensure that events are not lost, between the switch to the consumer,
-	// we execute the fetch in several steps.
-	// 1) Process all events from the ES from the begginning - it may be a long operation
-	// 2) start the consumer to track new events from now on
-	// 3) process any event that may have arrived between the switch
-	// 4) start consuming events from the last position
 	handler := m.projection.Handler
-
-	lastEventIDs := []string{}
-	for _, stage := range m.stages {
-		aggregateTypes := stage.AggregateTypes
-		// for the aggregates of this stage find the smallest
-		prjEventID := common.MaxEventID
-		for _, at := range aggregateTypes {
-			tmp := prjEventIDs[at]
-			if tmp < prjEventID {
-				prjEventID = tmp
-			}
-		}
-
-		// replay oldest events
-		prjEventID, err = eventid.DelayEventID(prjEventID, player.TrailingLag)
-		if err != nil {
-			return fmt.Errorf("Error delaying the eventID: %w", err)
-		}
-		log.Printf("Booting %s from '%s'", m.projection.GetName(), prjEventID)
-
-		replayer := player.New(stage.Repository)
-		filter := repo.WithAggregateTypes(aggregateTypes...)
-		lastEventID, err := replayer.Replay(ctx, handler, prjEventID, filter)
-		if err != nil {
-			return fmt.Errorf("Could not replay all events (first part): %w", err)
-		}
-		lastEventIDs = append(lastEventIDs, lastEventID)
-	}
 
 	frozen := make([]chan struct{}, 0)
 	for k, stage := range m.stages {
-		// grab the last events sequences in the topic (partitioned)
-		partitionSize := stage.PartitionHi - stage.PartitionLo + 1
-		tokens := make([]string, partitionSize)
-		for i := 0; i < partitionSize; i++ {
-			tokens[i], err = stage.Subscriber.GetResumeToken(ctx, stage.PartitionLo+i)
+		logger = logger.WithField("partitions", strconv.Itoa(int(stage.PartitionLo))+"-"+strconv.Itoa(int(stage.PartitionHi)))
+
+		// To avoid the creation of a potential massive buffer size
+		// and to ensure that events are not lost, between the switch to the consumer,
+		// we execute the fetch in several steps.
+		// EACH PARTITION CAN BE INDEPENDENT OF EACH OTHER AND CAN BE TREATED AS IF IT IS THE ONLY PARTITION
+		// 1) Process all events from the ES from the begginning - it may be a long operation
+		// 2) start the consumer to track new events from now on
+		// 3) process any event that may have arrived during the switch
+		// 4) start consuming events from the last position
+
+		// tracks the threshold of each partition
+		prjEventIDs := map[uint32]string{}
+
+		smallestEventID := string([]byte{255})
+		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
+			// for the aggregate group in the same partition (=same source), gets the latest event ID.
+			prjEventID, err := m.projection.GetResumeEventIDs(ctx, stage.AggregateTypes, partition)
 			if err != nil {
-				return fmt.Errorf("Could not retrieve resume token: %w", err)
+				return faults.Errorf("Could not get last event ID from the projection: %w", err)
 			}
+
+			// to make sure we don't miss any event due to clock skews, we start replaying a bit earlier
+			prjEventID, err = common.DelayEventID(prjEventID, player.TrailingLag)
+			if err != nil {
+				return faults.Errorf("Error delaying the eventID: %w", err)
+			}
+
+			if smallestEventID > prjEventID {
+				smallestEventID = prjEventID
+			}
+
+			prjEventIDs[partition] = prjEventID
 		}
 
-		// consume potential missed events events between the switch to the consumer
-		events, err := stage.Repository.GetEvents(ctx, lastEventIDs[k], 0, time.Duration(0), repo.Filter{
-			AggregateTypes: stage.AggregateTypes,
-		})
+		logger.Infof("Beginning booting stage %d from event ID '%s'", k, smallestEventID)
+
+		// replaying events for each partition, rather than replay from the smallest event of the partition range,
+		// probably is faster because the projection does not have to handle repeated events.
+
+		// will only handle events that have not been handled for a given partition
+		handlerFilter := func(event eventstore.Event) bool {
+			p := common.WhichPartition(event.AggregateIDHash, m.partitions)
+			eID := prjEventIDs[p]
+
+			return event.AggregateID > eID && p >= stage.PartitionLo && p <= stage.PartitionHi
+		}
+		replayer := player.New(stage.Repository, player.WithCustomFilter(handlerFilter))
+		lastEventID, err := replayer.Replay(ctx, handler, smallestEventID,
+			store.WithAggregateTypes(stage.AggregateTypes...),
+			store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi),
+		)
 		if err != nil {
-			return fmt.Errorf("Could not replay all events (second part): %w", err)
-		}
-		for _, event := range events {
-			err = handler(ctx, event)
-			if err != nil {
-				return fmt.Errorf("Error handling event %+v: %w", event, err)
-			}
+			return faults.Errorf("Could not replay all events (first part): %w", err)
 		}
 
-		// start consuming events from the last available position
-		for i := 0; i < partitionSize; i++ {
-			ch, err := stage.Subscriber.StartConsumer(ctx, stage.PartitionLo+i, tokens[i], m.projection, stage.AggregateTypes)
+		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
+			// grab the last events sequences in the partition
+			token, err := stage.Subscriber.GetResumeToken(ctx, partition)
 			if err != nil {
-				return fmt.Errorf("Unable to start consumer: %w", err)
+				return faults.Errorf("Could not retrieve resume token for projection %s and partition %d: %w", m.projection.GetName(), partition, err)
+			}
+
+			p := player.New(stage.Repository,
+				player.WithBatchSize(0),
+				player.WithTrailingLag(time.Duration(0)),
+			)
+			_, err = p.Replay(ctx, handler, lastEventID,
+				store.WithAggregateTypes(stage.AggregateTypes...),
+				store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi),
+			)
+			if err != nil {
+				return faults.Errorf("Could not replay all events for projection %s (second part): %w", m.projection.GetName(), err)
+			}
+
+			// start consuming events from the last available position
+			ch, err := stage.Subscriber.StartConsumer(ctx, partition, token, m.projection, stage.AggregateTypes)
+			if err != nil {
+				return faults.Errorf("Unable to start consumer projection %s: %w", m.projection.GetName(), err)
 			}
 			frozen = append(frozen, ch)
 		}
+
+		logger.Infof("Ended booting stage %d", k)
 	}
 
 	m.mu.Lock()
-	m.frozen = frozen
+	m.doneConsumers = frozen
 	m.mu.Unlock()
 
 	return nil
 }
 
-func (m *BootableManager) Cancel() {
+func (m *ProjectionPartition) Cancel() {
 	m.mu.Lock()
 	if m.cancel != nil {
 		m.cancel()
 	}
-	m.mu.Unlock()
-}
-
-// Freeze blocks calls to Wait() return true if this instance was locked
-func (m *BootableManager) Freeze() bool {
-	m.mu.Lock()
-	if m.cancel != nil {
-		m.cancel()
+	// wait for the closing subscriber
+	for _, ch := range m.doneConsumers {
+		<-ch
 	}
-	m.wait = make(chan struct{})
-	m.closed = false
-	close(m.release)
-	m.release = make(chan struct{})
-
-	if m.hasLock {
-		// wait for the closing subscriber
-		for _, ch := range m.frozen {
-			<-ch
-		}
-	}
-	locked := m.hasLock
-	m.hasLock = false
 
 	m.mu.Unlock()
-
-	return locked
-}
-
-// Unfreeze releases any blocking call to Wait()
-// points the cursor to the first available record
-func (m *BootableManager) Unfreeze() {
-	m.mu.Lock()
-	if !m.closed {
-		close(m.wait)
-		m.closed = true
-	}
-	m.mu.Unlock()
-}
-
-type Action int
-
-const (
-	Freeze Action = iota + 1
-	Unfreeze
-)
-
-type Notification struct {
-	Projection string `json:"projection"`
-	Action
 }

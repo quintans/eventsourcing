@@ -1,80 +1,92 @@
-package pg
+package mongodb
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/encoding"
 	"github.com/quintans/eventstore/player"
+	"github.com/quintans/eventstore/store/mongodb"
 	"github.com/quintans/eventstore/store/poller"
-	"github.com/quintans/eventstore/store/postgresql"
 	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func connect(dburl string) (*sqlx.DB, error) {
-	db, err := sqlx.Open("postgres", dburl)
+var codec = eventstore.JSONCodec{}
+
+// creates a independent connection
+func connect() (*mongo.Database, error) {
+	ctx := context.Background()
+	opts := options.Client().ApplyURI(DBURL)
+	client, err := mongo.Connect(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Ping(); err != nil {
-		return nil, err
-	}
+	db := client.Database(DBName)
 	return db, nil
 }
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
-	require.NoError(t, err)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	err := es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
-	time.Sleep(time.Second)
 
 	// giving time for the snapshots to write
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(time.Second)
 
-	db, err := connect(dbURL)
+	db, err := connect()
 	require.NoError(t, err)
-	count := 0
-	err = db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
-	require.NoError(t, err)
-	require.Equal(t, 1, count)
 
-	evts := []postgresql.Event{}
-	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1", id)
+	count, err := db.Collection(CollSnapshots).CountDocuments(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id},
+		},
+	})
 	require.NoError(t, err)
-	require.Equal(t, 4, len(evts))
-	assert.Equal(t, "AccountCreated", evts[0].Kind)
-	assert.Equal(t, "MoneyDeposited", evts[1].Kind)
-	assert.Equal(t, "MoneyDeposited", evts[2].Kind)
-	assert.Equal(t, "MoneyDeposited", evts[3].Kind)
+	require.Equal(t, int64(1), count)
+
+	opts := options.Find().SetSort(bson.D{{"_id", 1}})
+	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id},
+		},
+	}, opts)
+	require.NoError(t, err)
+	evts := []mongodb.Event{}
+	err = cursor.All(ctx, &evts)
+	require.NoError(t, err)
+
+	require.Equal(t, 2, len(evts))
+	evt := evts[0]
+	assert.Equal(t, "AccountCreated", evt.Details[0].Kind)
+	assert.Equal(t, "MoneyDeposited", evt.Details[1].Kind)
+	assert.Equal(t, "MoneyDeposited", evt.Details[2].Kind)
 	assert.Equal(t, "Account", evts[0].AggregateType)
-	assert.Equal(t, id, evts[0].AggregateID)
-	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
+	assert.Equal(t, id, evt.AggregateID)
+	assert.Equal(t, uint32(1), evt.AggregateVersion)
 
 	a, err := es.GetByID(ctx, id)
 	require.NoError(t, err)
 	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(4), acc2.Version)
+	assert.Equal(t, uint32(2), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 	assert.Equal(t, uint32(4), acc2.GetEventsCounter())
@@ -82,15 +94,14 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
-	require.NoError(t, err)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
-	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	acc.Withdraw(5)
+	err := es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc)
@@ -99,9 +110,8 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbURL)
-	require.NoError(t, err)
-	lm := poller.New(repository)
+	r = mongodb.NewStoreDB(client, DBName)
+	lm := poller.New(r)
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -131,22 +141,21 @@ func TestPollListener(t *testing.T) {
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(4), acc2.Version)
-	assert.Equal(t, int64(135), acc2.Balance)
+	assert.Equal(t, uint32(2), acc2.Version)
+	assert.Equal(t, int64(110), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
-	require.NoError(t, err)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	err := es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc)
@@ -155,8 +164,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbURL)
-	require.NoError(t, err)
+	repository := mongodb.NewStoreDB(client, DBName)
 	p := poller.New(repository, poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
@@ -182,22 +190,21 @@ func TestListenerWithAggregateType(t *testing.T) {
 	}
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(4), acc2.Version)
+	assert.Equal(t, uint32(2), acc2.Version)
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
-	require.NoError(t, err)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "EU"}))
+	err := es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "EU"}))
 	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "US"}))
@@ -207,8 +214,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := postgresql.NewStore(dbURL)
-	require.NoError(t, err)
+	repository := mongodb.NewStoreDB(client, DBName)
 	p := poller.New(repository, poller.WithLabel("geo", "EU"))
 
 	done := make(chan struct{})
@@ -234,15 +240,14 @@ func TestListenerWithLabels(t *testing.T) {
 	}
 	assert.Equal(t, 3, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(3), acc2.Version)
+	assert.Equal(t, uint32(1), acc2.Version)
 	assert.Equal(t, int64(130), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
-	require.NoError(t, err)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
@@ -250,7 +255,7 @@ func TestForget(t *testing.T) {
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	err := es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
 	acc.Withdraw(15)
@@ -261,28 +266,46 @@ func TestForget(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := connect(dbURL)
+	db, err := connect()
+	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id},
+		},
+		"details.kind": bson.D{
+			{"$eq", "OwnerUpdated"},
+		},
+	})
 	require.NoError(t, err)
-	evts := []encoding.Json{}
-	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
+	evts := []mongodb.Event{}
+	err = cursor.All(ctx, &evts)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
-	for _, v := range evts {
-		ou := &test.OwnerUpdated{}
-		err = json.Unmarshal(v, ou)
-		require.NoError(t, err)
-		assert.NotEmpty(t, ou.Owner)
+	foundEvent := false
+	for _, e := range evts {
+		for _, v := range e.Details {
+			if v.Kind == "OwnerUpdated" {
+				foundEvent = true
+				evt := test.OwnerUpdated{}
+				codec.Decode(v.Body, &evt)
+				assert.NotEmpty(t, evt.Owner)
+			}
+		}
 	}
+	assert.True(t, foundEvent)
 
-	bodies := []encoding.Json{}
-	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
+	cursor, err = db.Collection(CollSnapshots).Find(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id},
+		},
+	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, len(bodies))
-	for _, v := range bodies {
-		a := test.NewAccount()
-		err = json.Unmarshal(v, a)
-		require.NoError(t, err)
-		assert.NotEmpty(t, a.Owner)
+	snaps := []mongodb.Snapshot{}
+	cursor.All(ctx, &snaps)
+	assert.Equal(t, 2, len(snaps))
+	for _, v := range snaps {
+		snap := test.NewAccount()
+		codec.Decode(v.Body, &snap)
+		assert.NotEmpty(t, snap.Owner)
 	}
 
 	err = es.Forget(ctx,
@@ -304,41 +327,47 @@ func TestForget(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	evts = []encoding.Json{}
-	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
+	time.Sleep(100 * time.Millisecond)
+
+	cursor, err = db.Collection(CollEvents).Find(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id},
+		},
+		"details.kind": bson.D{
+			{"$eq", "OwnerUpdated"},
+		},
+	})
+	require.NoError(t, err)
+	evts = []mongodb.Event{}
+	err = cursor.All(ctx, &evts)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
-	for _, v := range evts {
-		ou := &test.OwnerUpdated{}
-		err = json.Unmarshal(v, ou)
-		require.NoError(t, err)
-		assert.Empty(t, ou.Owner)
-	}
-
-	bodies = []encoding.Json{}
-	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id)
-	require.NoError(t, err)
-	assert.Equal(t, 2, len(bodies))
-	for _, v := range bodies {
-		a := test.NewAccount()
-		err = json.Unmarshal(v, a)
-		require.NoError(t, err)
-		assert.Empty(t, a.Owner)
-		assert.NotEmpty(t, a.ID)
-	}
-}
-
-func BenchmarkDepositAndSave2(b *testing.B) {
-	r, _ := postgresql.NewStore(dbURL)
-	es := eventstore.NewEventStore(r, 50, test.StructFactory{})
-	b.RunParallel(func(pb *testing.PB) {
-		ctx := context.Background()
-		id := uuid.New().String()
-		acc := test.CreateAccount("Paulo", id, 0)
-
-		for pb.Next() {
-			acc.Deposit(10)
-			_ = es.Save(ctx, acc)
+	foundEvent = false
+	for _, e := range evts {
+		for _, v := range e.Details {
+			if v.Kind == "OwnerUpdated" {
+				foundEvent = true
+				evt := test.OwnerUpdated{}
+				codec.Decode(v.Body, &evt)
+				assert.NotEmpty(t, evt.Owner)
+			}
 		}
+	}
+	assert.True(t, foundEvent)
+
+	cursor, err = db.Collection(CollSnapshots).Find(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id},
+		},
 	})
+	require.NoError(t, err)
+	snaps = []mongodb.Snapshot{}
+	cursor.All(ctx, &snaps)
+	assert.Equal(t, 2, len(snaps))
+	for _, v := range snaps {
+		snap := test.NewAccount()
+		codec.Decode(v.Body, &snap)
+		assert.Empty(t, snap.Owner)
+		assert.NotEmpty(t, snap.ID)
+	}
 }

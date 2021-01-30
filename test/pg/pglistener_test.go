@@ -12,9 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/feed/pglistener"
-	"github.com/quintans/eventstore/repo"
-	"github.com/quintans/eventstore/sink"
+	"github.com/quintans/eventstore/store/postgresql"
+	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,8 +34,8 @@ func (s *MockSink) Sink(ctx context.Context, e eventstore.Event) error {
 	return nil
 }
 
-func (s *MockSink) LastMessage(ctx context.Context, partition int) (*sink.Message, error) {
-	return &sink.Message{}, nil
+func (s *MockSink) LastMessage(ctx context.Context, partition uint32) (*eventstore.Event, error) {
+	return &eventstore.Event{}, nil
 }
 
 func (s *MockSink) Close() {}
@@ -51,7 +50,7 @@ func (s *MockSink) Events() []eventstore.Event {
 }
 
 func TestPgListenere(t *testing.T) {
-	repo, err := repo.NewPgEsRepository(dbURL)
+	repository, err := postgresql.NewStore(dbURL)
 	if err != nil {
 		log.Fatalf("Error instantiating event store: %v", err)
 	}
@@ -59,23 +58,28 @@ func TestPgListenere(t *testing.T) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	listener, err := pglistener.New(dbURL, repo, "events_channel")
+	listener, err := postgresql.NewFeed(dbURL, repository, "events_channel")
 
 	s := &MockSink{
 		events: []eventstore.Event{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go listener.Feed(ctx, s)
+	go func() {
+		err := listener.Feed(ctx, s)
+		if err != nil {
+			log.Fatalf("Error feeding #1: %v", err)
+		}
+	}()
 
 	time.Sleep(100 * time.Millisecond)
 
-	es := eventstore.NewEventStore(repo, 3)
+	es := eventstore.NewEventStore(repository, 3, test.StructFactory{})
 
 	id := uuid.New().String()
-	acc := CreateAccount("Paulo", id, 100)
+	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.Options{})
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
@@ -83,5 +87,9 @@ func TestPgListenere(t *testing.T) {
 
 	events := s.Events()
 	assert.Equal(t, 3, len(events), "event size")
+	assert.Equal(t, "AccountCreated", events[0].Kind)
+	assert.Equal(t, "MoneyDeposited", events[1].Kind)
+	assert.Equal(t, "MoneyDeposited", events[2].Kind)
+
 	cancel()
 }

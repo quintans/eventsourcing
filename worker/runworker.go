@@ -1,0 +1,148 @@
+package worker
+
+import (
+	"context"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/quintans/faults"
+	log "github.com/sirupsen/logrus"
+)
+
+// Tasker is the interface for tasks that need to be balanced among a set of workers
+type Tasker interface {
+	Run(context.Context) error
+	Cancel()
+}
+
+type Locker interface {
+	Lock(context.Context) (chan struct{}, error)
+	Unlock(context.Context) error
+}
+
+type WaitForUnlocker interface {
+	WaitForUnlock(context.Context) error
+}
+
+// BootMonitor is responsible for refreshing the lease
+type RunWorker struct {
+	name   string
+	locker Locker
+	runner Tasker
+	cancel context.CancelFunc
+	mu     sync.RWMutex
+}
+
+func NewRunWorker(name string, locker Locker, runner Tasker) *RunWorker {
+	return &RunWorker{
+		name:   name,
+		locker: locker,
+		runner: runner,
+	}
+}
+
+func (w *RunWorker) Name() string {
+	return w.name
+}
+
+func (w *RunWorker) Stop(ctx context.Context) {
+	log.Infof("Stopping worker %s", w.name)
+
+	w.mu.Lock()
+	if w.cancel != nil {
+		w.locker.Unlock(ctx)
+		w.cancel()
+		w.cancel = nil
+	}
+	w.mu.Unlock()
+}
+
+func (w *RunWorker) IsRunning() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.cancel != nil
+}
+
+func (w *RunWorker) Start(ctx context.Context) bool {
+	release, _ := w.locker.Lock(ctx)
+	if release != nil {
+		go func() {
+			ctx, cancel := context.WithCancel(ctx)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				w.locker.Unlock(ctx)
+			}
+			cancel()
+		}()
+		go w.start(ctx)
+	}
+
+	return release != nil
+}
+
+func (w *RunWorker) start(ctx context.Context) {
+	log.Infof("Starting worker %s", w.name)
+
+	ctx2, cancel2 := context.WithCancel(ctx)
+
+	w.mu.Lock()
+	w.cancel = cancel2
+	w.mu.Unlock()
+
+	// acquired lock
+	// OnBoot may take some time to finish since it will be doing synchronisation
+	go func() {
+		err := w.runner.Run(ctx2)
+		if err != nil {
+			log.Error("Error while running: ", err)
+			cancel2()
+			return
+		}
+	}()
+	<-ctx2.Done()
+	w.runner.Cancel()
+	w.Stop(ctx)
+}
+
+type PartitionSlot struct {
+	From uint32
+	To   uint32
+}
+
+func (ps PartitionSlot) Size() uint32 {
+	return ps.To - ps.From + 1
+}
+
+func ParseSlots(slots []string) ([]PartitionSlot, error) {
+	pslots := make([]PartitionSlot, len(slots))
+	for k, v := range slots {
+		s, err := ParseSlot(v)
+		if err != nil {
+			return nil, err
+		}
+		pslots[k] = s
+	}
+	return pslots, nil
+}
+
+func ParseSlot(slot string) (PartitionSlot, error) {
+	ps := strings.Split(slot, "-")
+	s := PartitionSlot{}
+	from, err := strconv.Atoi(ps[0])
+	if err != nil {
+		return PartitionSlot{}, faults.Wrap(err)
+	}
+	s.From = uint32(from)
+	if len(ps) == 2 {
+		to, err := strconv.Atoi(ps[1])
+		if err != nil {
+			return PartitionSlot{}, faults.Wrap(err)
+		}
+		s.To = uint32(to)
+	} else {
+		s.To = s.From
+	}
+	return s, nil
+}
