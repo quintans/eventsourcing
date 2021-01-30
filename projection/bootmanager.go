@@ -2,12 +2,12 @@ package projection
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/eventstore/worker"
@@ -145,6 +145,8 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 
 	frozen := make([]chan struct{}, 0)
 	for k, stage := range m.stages {
+		logger = logger.WithField("partitions", strconv.Itoa(int(stage.PartitionLo))+"-"+strconv.Itoa(int(stage.PartitionHi)))
+
 		// To avoid the creation of a potential massive buffer size
 		// and to ensure that events are not lost, between the switch to the consumer,
 		// we execute the fetch in several steps.
@@ -154,7 +156,9 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		// 3) process any event that may have arrived during the switch
 		// 4) start consuming events from the last position
 
+		// tracks the threshold of each partition
 		prjEventIDs := map[uint32]string{}
+
 		smallestEventID := string([]byte{255})
 		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
 			// for the aggregate group in the same partition (=same source), gets the latest event ID.
@@ -164,7 +168,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			}
 
 			// to make sure we don't miss any event due to clock skews, we start replaying a bit earlier
-			prjEventID, err = eventid.DelayEventID(prjEventID, player.TrailingLag)
+			prjEventID, err = common.DelayEventID(prjEventID, player.TrailingLag)
 			if err != nil {
 				return faults.Errorf("Error delaying the eventID: %w", err)
 			}
@@ -176,7 +180,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			prjEventIDs[partition] = prjEventID
 		}
 
-		logger.Infof("Beginning booting stage %d (partitions [%d-%d]) from event ID '%s'", k, stage.PartitionLo, stage.PartitionHi, smallestEventID)
+		logger.Infof("Beginning booting stage %d from event ID '%s'", k, smallestEventID)
 
 		// replaying events for each partition, rather than replay from the smallest event of the partition range,
 		// probably is faster because the projection does not have to handle repeated events.
@@ -186,7 +190,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			p := common.WhichPartition(event.AggregateIDHash, m.partitions)
 			eID := prjEventIDs[p]
 
-			return event.AggregateID > eID
+			return event.AggregateID > eID && p >= stage.PartitionLo && p <= stage.PartitionHi
 		}
 		replayer := player.New(stage.Repository, player.WithCustomFilter(handlerFilter))
 		lastEventID, err := replayer.Replay(ctx, handler, smallestEventID,
@@ -224,7 +228,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 			frozen = append(frozen, ch)
 		}
 
-		logger.Infof("Ended booting stage %d (partitions [%d-%d])", k, stage.PartitionLo, stage.PartitionHi)
+		logger.Infof("Ended booting stage %d", k)
 	}
 
 	m.mu.Lock()

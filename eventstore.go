@@ -11,7 +11,8 @@ import (
 )
 
 var (
-	ErrConcurrentModification = errors.New("Concurrent Modification")
+	ErrConcurrentModification = errors.New("concurrent modification")
+	ErrUnknownAggregateID     = errors.New("unknown aggregate ID")
 )
 
 type Factory interface {
@@ -150,17 +151,36 @@ func NewEventStore(repo EsRepository, snapshotThreshold uint32, factory Factory,
 		store:             repo,
 		snapshotThreshold: snapshotThreshold,
 		factory:           factory,
-		codec:             JsonCodec{},
+		codec:             JSONCodec{},
 	}
 }
 
-// EventSore -
+// EventStore represents the event store
 type EventStore struct {
 	store             EsRepository
 	snapshotThreshold uint32
 	upcaster          Upcaster
 	factory           Factory
 	codec             Codec
+}
+
+// Exec loads the aggregate from the event store and handles it to the handler function, saving the returning Aggregater in the event store.
+// If no aggregate is found for the provided ID the error ErrUnknownAggregateID is returned.
+// If the handler function returns nil for the Aggregater or an error, the save action is ignored.
+func (es EventStore) Exec(ctx context.Context, id string, do func(Aggregater) (Aggregater, error)) error {
+	a, err := es.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	a, err = do(a)
+	if err != nil {
+		return err
+	}
+	if a == nil {
+		return nil
+	}
+
+	return es.Save(ctx, a)
 }
 
 func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregater, error) {
@@ -206,6 +226,10 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 		aggregate.ApplyChangeFromHistory(m, e)
 	}
 
+	if aggregate == nil {
+		return nil, ErrUnknownAggregateID
+	}
+
 	return aggregate, nil
 }
 
@@ -217,16 +241,17 @@ func (es EventStore) RehydrateEvent(kind string, body []byte) (Typer, error) {
 	return RehydrateEvent(es.factory, es.codec, es.upcaster, kind, body)
 }
 
+// Save saves the events of the aggregater into the event store
 func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) (err error) {
-	opts := Options{}
-	for _, fn := range options {
-		fn(&opts)
-	}
-
 	events := aggregate.GetEvents()
 	eventsLen := len(events)
 	if eventsLen == 0 {
 		return nil
+	}
+
+	opts := Options{}
+	for _, fn := range options {
+		fn(&opts)
 	}
 
 	now := time.Now().UTC()

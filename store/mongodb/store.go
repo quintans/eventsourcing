@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	mongoUniqueViolation = 11000
-	eventsCollection     = "events"
-	snapshotCollection   = "snapshots"
+	mongoUniqueViolation       = 11000
+	defaultEventsCollection    = "events"
+	defaultSnapshotsCollection = "snapshots"
 )
 
 // Event is the event data stored in the database
@@ -60,10 +60,24 @@ func WithProjectorFactory(fn ProjectorFactory) StoreOption {
 	}
 }
 
+func WithEventsCollection(eventsCollection string) StoreOption {
+	return func(r *EsRepository) {
+		r.eventsCollectionName = eventsCollection
+	}
+}
+
+func WithSnapshotsCollection(snapshotsCollection string) StoreOption {
+	return func(r *EsRepository) {
+		r.snapshotsCollectionName = snapshotsCollection
+	}
+}
+
 type EsRepository struct {
-	dbName           string
-	client           *mongo.Client
-	projectorFactory ProjectorFactory
+	dbName                  string
+	client                  *mongo.Client
+	projectorFactory        ProjectorFactory
+	eventsCollectionName    string
+	snapshotsCollectionName string
 }
 
 func NewStore(connString string, dbName string, opts ...StoreOption) (*EsRepository, error) {
@@ -79,8 +93,10 @@ func NewStore(connString string, dbName string, opts ...StoreOption) (*EsReposit
 // NewMongoEsRepositoryDB creates a new instance of MongoEsRepository
 func NewStoreDB(client *mongo.Client, dbName string, options ...StoreOption) *EsRepository {
 	r := &EsRepository{
-		dbName: dbName,
-		client: client,
+		dbName:                  dbName,
+		client:                  client,
+		eventsCollectionName:    defaultEventsCollection,
+		snapshotsCollectionName: defaultSnapshotsCollection,
 	}
 	for _, o := range options {
 		o(r)
@@ -94,11 +110,11 @@ func (r *EsRepository) collection(coll string) *mongo.Collection {
 }
 
 func (r *EsRepository) eventsCollection() *mongo.Collection {
-	return r.collection(eventsCollection)
+	return r.collection(r.eventsCollectionName)
 }
 
 func (r *EsRepository) snapshotCollection() *mongo.Collection {
-	return r.collection(snapshotCollection)
+	return r.collection(r.snapshotsCollectionName)
 }
 
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
@@ -242,9 +258,6 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	events, err := r.queryEvents(ctx, filter, opts, "", 0)
 	if err != nil {
 		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
-	}
-	if len(events) == 0 {
-		return nil, faults.Errorf("Aggregate '%s' events were not found: %w", aggregateID, err)
 	}
 
 	return events, nil

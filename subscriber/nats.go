@@ -104,17 +104,19 @@ func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition uint32) (s
 }
 
 func (s NatsSubscriber) StartConsumer(ctx context.Context, partition uint32, resumeToken string, projection projection.Projection, aggregateTypes []string) (chan struct{}, error) {
+	logger := log.WithField("partition", partition)
 	start := stan.DeliverAllAvailable()
 	var seq uint64
 	if resumeToken != "" {
 		var err error
 		seq, err = strconv.ParseUint(resumeToken, 10, 64)
 		if err != nil {
-			return nil, faults.Errorf("Unable to parse resume token %s: %w", resumeToken, err)
+			return nil, faults.Errorf("unable to parse resume token %s: %w", resumeToken, err)
 		}
 		start = stan.StartAtSequence(seq)
 	}
 	topic := common.TopicWithPartition(s.topic, partition)
+	logger = logger.WithField("topic", topic)
 	sub, err := s.stream.Subscribe(topic, func(m *stan.Msg) {
 		if seq >= m.Sequence {
 			// ignore seq
@@ -122,15 +124,16 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition uint32, res
 		}
 		e, err := s.messageCodec.Decode(m.Data)
 		if err != nil {
-			log.WithError(err).Errorf("Unable to unmarshal event '%s'", string(m.Data))
+			logger.WithError(err).Errorf("unable to unmarshal event '%s'", string(m.Data))
 		}
 		if !in(e.AggregateType, aggregateTypes...) {
 			// ignore
 			return
 		}
+		logger.Debugf("Handling received event '%+v'", e)
 		err = projection.Handler(ctx, e)
 		if err != nil {
-			log.WithError(err).Errorf("Error when handling event with ID '%s'", e.ID)
+			logger.WithError(err).Errorf("Error when handling event with ID '%s'", e.ID)
 		}
 	}, start, stan.MaxInflight(1))
 	if err != nil {
@@ -142,7 +145,7 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition uint32, res
 		<-ctx.Done()
 		sub.Close()
 		close(stopped)
-		log.Infof("Stoping handling events for %s", projection.GetName())
+		logger.Infof("Stoping handling events for %s", projection.GetName())
 	}()
 
 	return stopped, nil
@@ -158,11 +161,12 @@ func in(test string, values ...string) bool {
 }
 
 func (s NatsSubscriber) ListenCancelProjection(ctx context.Context, canceller projection.Canceller) error {
+	logger := log.WithField("topic", s.managerTopic)
 	sub, err := s.queue.Subscribe(s.managerTopic, func(msg *nats.Msg) {
 		n := projection.Notification{}
 		err := json.Unmarshal(msg.Data, &n)
 		if err != nil {
-			log.Errorf("Unable to unmarshal %v", faults.Wrap(err))
+			logger.Errorf("Unable to unmarshal %v", faults.Wrap(err))
 			return
 		}
 		if n.Projection != canceller.Name() {
@@ -173,7 +177,7 @@ func (s NatsSubscriber) ListenCancelProjection(ctx context.Context, canceller pr
 		case projection.Release:
 			canceller.Cancel()
 		default:
-			log.WithField("notification", n).Error("Unknown notification")
+			logger.WithField("notification", n).Error("Unknown notification")
 		}
 	})
 	if err != nil {

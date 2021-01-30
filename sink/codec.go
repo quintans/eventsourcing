@@ -38,7 +38,7 @@ type Event struct {
 
 type JsonCodec struct{}
 
-func (_ JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
+func (JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
 	event := Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
@@ -47,7 +47,7 @@ func (_ JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
 		AggregateVersion: e.AggregateVersion,
 		AggregateType:    e.AggregateType,
 		Kind:             e.Kind,
-		Body:             []byte(e.Body),
+		Body:             e.Body,
 		IdempotencyKey:   e.IdempotencyKey,
 		Labels:           e.Labels,
 		CreatedAt:        e.CreatedAt,
@@ -59,7 +59,7 @@ func (_ JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
 	return b, nil
 }
 
-func (_ JsonCodec) Decode(data []byte) (eventstore.Event, error) {
+func (JsonCodec) Decode(data []byte) (eventstore.Event, error) {
 	e := Event{}
 	err := json.Unmarshal(data, &e)
 	if err != nil {

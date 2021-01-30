@@ -47,7 +47,7 @@ func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Dur
 func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 	defer conn.Close()
 

@@ -14,33 +14,40 @@ type Feeder interface {
 }
 
 type Forwarder struct {
+	name   string
 	feeder Feeder
 	sinker sink.Sinker
 }
 
-func NewForwarder(feeder Feeder, sinker sink.Sinker) *Forwarder {
+func NewForwarder(name string, feeder Feeder, sinker sink.Sinker) *Forwarder {
 	return &Forwarder{
+		name:   name,
 		feeder: feeder,
 		sinker: sinker,
 	}
 }
 
 func (f *Forwarder) Run(ctx context.Context) error {
-	log.Println("Initialising Sink")
+	log.Printf("Initialising Sink '%s'", f.name)
+	defer func() {
+		f.sinker.Close()
+	}()
 	err := f.sinker.Init()
 	if err != nil {
-		return faults.Errorf("Error initialising Sink on boot: %w", err)
+		return faults.Errorf("Error initialising Sink '%s' on boot: %w", f.name, err)
 	}
 
-	log.Println("Starting Seed")
+	log.Printf("Starting Seed '%s'", f.name)
 	err = f.feeder.Feed(ctx, f.sinker)
 	if err != nil {
-		return faults.Errorf("Error feeding on boot: %w", err)
+		return faults.Errorf("Error feeding '%s' on boot: %w", f.name, err)
 	}
 	return nil
 }
 
-func (f *Forwarder) Cancel() {}
+func (f *Forwarder) Cancel() {
+	f.sinker.Close()
+}
 
 // LastEventIDInSink retrieves the highest event ID and resume token found in the partition range
 func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32) (afterEventID string, resumeToken []byte, err error) {

@@ -8,6 +8,7 @@ import (
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/faults"
+	"github.com/sirupsen/logrus"
 )
 
 type NatsSink struct {
@@ -97,6 +98,7 @@ func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
 	}
 
 	topic := common.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
+	logrus.Debugf("publishing '%+v' to topic '%s'", e, topic)
 	err = p.client.Publish(topic, b)
 	if err != nil {
 		return faults.Errorf("Failed to send message: %w", err)

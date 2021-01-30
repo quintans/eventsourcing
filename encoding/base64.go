@@ -16,7 +16,7 @@ func (m Base64) MarshalJSON() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	encoded := base64.StdEncoding.EncodeToString(m)
+	encoded := `"` + base64.StdEncoding.EncodeToString(m) + `"`
 	return []byte(encoded), nil
 }
 
@@ -25,6 +25,9 @@ func (m *Base64) UnmarshalJSON(data []byte) error {
 	if m == nil {
 		return faults.New("common.Base64: UnmarshalJSON on nil pointer")
 	}
+	// strip quotes
+	data = data[1 : len(data)-1]
+
 	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil {
 		return faults.Errorf("common.Base64: decode error: %w", err)

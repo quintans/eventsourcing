@@ -7,14 +7,14 @@ import (
 	"github.com/quintans/faults"
 )
 
-type JsonCodec struct{}
+type JSONCodec struct{}
 
-func (_ JsonCodec) Encode(v interface{}) ([]byte, error) {
+func (JSONCodec) Encode(v interface{}) ([]byte, error) {
 	b, err := json.Marshal(v)
 	return b, faults.Wrap(err)
 }
 
-func (_ JsonCodec) Decode(data []byte, v interface{}) error {
+func (JSONCodec) Decode(data []byte, v interface{}) error {
 	err := json.Unmarshal(data, v)
 	return faults.Wrap(err)
 }

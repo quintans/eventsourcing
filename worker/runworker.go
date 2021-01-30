@@ -92,7 +92,7 @@ func (w *RunWorker) start(ctx context.Context) {
 	w.mu.Unlock()
 
 	// acquired lock
-	// OnBoot may take some time (minutes) to finish since it will be doing synchronisation
+	// OnBoot may take some time to finish since it will be doing synchronisation
 	go func() {
 		err := w.runner.Run(ctx2)
 		if err != nil {

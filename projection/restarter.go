@@ -45,15 +45,22 @@ func (r *NotifierLockRestarter) Restart(ctx context.Context, projection string, 
 	})
 
 	logger.Info("Acquiring rebuild projection lock")
-	_, err := r.lock.Lock(ctx)
+	released, err := r.lock.Lock(ctx)
 	if err != nil {
-		return faults.Errorf("Unable to acquire rebuild lock for projection %s: %w", projection, err)
+		return faults.Errorf("Failed to acquire rebuild lock for projection %s: %w", projection, err)
+	}
+	if released == nil {
+		return faults.Errorf("Unable to acquire rebuild lock for projection %s", projection)
 	}
 
 	go func() {
+		ctx := context.Background()
 		defer func() {
 			logger.Info("Releasing rebuild projection lock")
-			r.lock.Unlock(ctx)
+			err := r.lock.Unlock(ctx)
+			if err != nil {
+				logger.WithError(err).Info("Failed to release rebuild projection lock")
+			}
 		}()
 
 		logger.Info("Signalling to STOP projection listener")

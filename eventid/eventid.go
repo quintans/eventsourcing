@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/faults"
 )
 
 const (
@@ -40,7 +41,7 @@ func (e EventID) String() string {
 
 func Parse(encoded string) (EventID, error) {
 	if len(encoded) != EncodedStringSize {
-		return EventID{}, ErrInvalidStringSize
+		return EventID{}, faults.Errorf("%w: %s", ErrInvalidStringSize, encoded)
 	}
 	a, err := encoding.Unmarshal(encoded)
 	if err != nil {

@@ -206,9 +206,6 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	if err != nil {
 		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
-	if len(events) == 0 {
-		return nil, faults.Errorf("Aggregate '%s' was not found: %w", aggregateID, err)
-	}
 
 	return events, nil
 }

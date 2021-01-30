@@ -20,26 +20,39 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	ctx := context.Background()
-
-	dbContainer, err := bootstrapDbContainer(ctx)
+	tearDown, err := setup()
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = dbSchema()
-	if err != nil {
-		dbContainer.Terminate(ctx)
 		log.Fatal(err)
 	}
 
 	// test run
-	code := m.Run()
-	dbContainer.Terminate(ctx)
+	var code int
+	func() {
+		defer tearDown()
+		code = m.Run()
+	}()
+
 	os.Exit(code)
 }
 
-func bootstrapDbContainer(ctx context.Context) (testcontainers.Container, error) {
+func setup() (func(), error) {
+	ctx := context.Background()
+
+	tearDown, err := bootstrapDbContainer(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	err = dbSchema()
+	if err != nil {
+		tearDown()
+		return nil, err
+	}
+
+	return tearDown, nil
+}
+
+func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	tcpPort := "5432"
 	natPort := nat.Port(tcpPort)
 
@@ -61,19 +74,23 @@ func bootstrapDbContainer(ctx context.Context) (testcontainers.Container, error)
 		return nil, err
 	}
 
+	tearDown := func() {
+		container.Terminate(ctx)
+	}
+
 	ip, err := container.Host(ctx)
 	if err != nil {
-		container.Terminate(ctx)
+		tearDown()
 		return nil, err
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
-		container.Terminate(ctx)
+		tearDown()
 		return nil, err
 	}
 
 	dbURL = fmt.Sprintf("postgres://postgres:postgres@%s:%s/eventstore?sslmode=disable", ip, port.Port())
-	return container, nil
+	return tearDown, nil
 }
 
 func dbSchema() error {

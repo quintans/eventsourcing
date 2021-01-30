@@ -9,17 +9,20 @@ import (
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
+	log "github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Feed struct {
-	dbName        string
-	client        *mongo.Client
-	partitions    uint32
-	partitionsLow uint32
-	partitionsHi  uint32
+	dbName           string
+	eventsCollection string
+	client           *mongo.Client
+	partitions       uint32
+	partitionsLow    uint32
+	partitionsHi     uint32
 }
 
 type FeedOption func(*Feed)
@@ -35,16 +38,26 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 	}
 }
 
+func WithFeedEventsCollection(eventsCollection string) FeedOption {
+	return func(p *Feed) {
+		p.eventsCollection = eventsCollection
+	}
+}
+
 func NewFeed(connString string, dbName string, opts ...FeedOption) (Feed, error) {
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
 		return Feed{}, faults.Errorf("Unable to connect to '%s': %w", connString, err)
 	}
+	return NewFeedDB(client, dbName, opts...)
+}
 
+func NewFeedDB(client *mongo.Client, dbName string, opts ...FeedOption) (Feed, error) {
 	m := Feed{
-		dbName: dbName,
-		client: client,
+		dbName:           dbName,
+		client:           client,
+		eventsCollection: "events",
 	}
 
 	for _, o := range opts {
@@ -73,17 +86,20 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	matchPipeline := bson.D{{Key: "$match", Value: match}}
 	pipeline := mongo.Pipeline{matchPipeline}
 
-	eventsCollection := m.client.Database(m.dbName).Collection("events")
+	eventsCollection := m.client.Database(m.dbName).Collection(m.eventsCollection)
 	var eventsStream *mongo.ChangeStream
 	if len(resumeToken) != 0 {
+		log.Infof("Starting feeding (partitions: [%d-%d]) from '%X'", m.partitionsLow, m.partitionsHi, resumeToken)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(resumeToken)))
-		err = faults.Wrap(err)
+		if err != nil {
+			return faults.Wrap(err)
+		}
 	} else {
-		eventsStream, err = eventsCollection.Watch(ctx, pipeline)
-		err = faults.Wrap(err)
-	}
-	if err != nil {
-		return err
+		log.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", m.partitionsLow, m.partitionsHi)
+		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
+		if err != nil {
+			return faults.Wrap(err)
+		}
 	}
 	defer eventsStream.Close(ctx)
 

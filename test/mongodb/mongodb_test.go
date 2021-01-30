@@ -19,23 +19,23 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var codec = eventstore.JsonCodec{}
+var codec = eventstore.JSONCodec{}
 
 // creates a independent connection
 func connect() (*mongo.Database, error) {
 	ctx := context.Background()
-	opts := options.Client().ApplyURI(dbURL)
+	opts := options.Client().ApplyURI(DBURL)
 	client, err := mongo.Connect(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	db := client.Database(dbName)
+	db := client.Database(DBName)
 	return db, nil
 }
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
@@ -54,7 +54,7 @@ func TestSaveAndGet(t *testing.T) {
 	db, err := connect()
 	require.NoError(t, err)
 
-	count, err := db.Collection(collSnapshots).CountDocuments(ctx, bson.M{
+	count, err := db.Collection(CollSnapshots).CountDocuments(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id},
 		},
@@ -63,7 +63,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.Equal(t, int64(1), count)
 
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	cursor, err := db.Collection(collEvents).Find(ctx, bson.M{
+	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id},
 		},
@@ -94,7 +94,7 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
@@ -110,7 +110,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r = mongodb.NewStoreDB(client, dbName)
+	r = mongodb.NewStoreDB(client, DBName)
 	lm := poller.New(r)
 
 	done := make(chan struct{})
@@ -148,7 +148,7 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
@@ -164,7 +164,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository := mongodb.NewStoreDB(client, dbName)
+	repository := mongodb.NewStoreDB(client, DBName)
 	p := poller.New(repository, poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
@@ -197,7 +197,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
@@ -214,7 +214,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository := mongodb.NewStoreDB(client, dbName)
+	repository := mongodb.NewStoreDB(client, DBName)
 	p := poller.New(repository, poller.WithLabel("geo", "EU"))
 
 	done := make(chan struct{})
@@ -247,7 +247,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, dbName)
+	r := mongodb.NewStoreDB(client, DBName)
 	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
 
 	id := uuid.New().String()
@@ -267,7 +267,7 @@ func TestForget(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	db, err := connect()
-	cursor, err := db.Collection(collEvents).Find(ctx, bson.M{
+	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id},
 		},
@@ -293,7 +293,7 @@ func TestForget(t *testing.T) {
 	}
 	assert.True(t, foundEvent)
 
-	cursor, err = db.Collection(collSnapshots).Find(ctx, bson.M{
+	cursor, err = db.Collection(CollSnapshots).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id},
 		},
@@ -329,7 +329,7 @@ func TestForget(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	cursor, err = db.Collection(collEvents).Find(ctx, bson.M{
+	cursor, err = db.Collection(CollEvents).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id},
 		},
@@ -355,7 +355,7 @@ func TestForget(t *testing.T) {
 	}
 	assert.True(t, foundEvent)
 
-	cursor, err = db.Collection(collSnapshots).Find(ctx, bson.M{
+	cursor, err = db.Collection(CollSnapshots).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id},
 		},

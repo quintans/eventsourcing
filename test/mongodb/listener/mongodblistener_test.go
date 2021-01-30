@@ -1,4 +1,4 @@
-package mongodb
+package listener
 
 import (
 	"context"
@@ -16,25 +16,32 @@ import (
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store/mongodb"
 	"github.com/quintans/eventstore/test"
+	tmg "github.com/quintans/eventstore/test/mongodb"
 	"github.com/quintans/faults"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type MockSink struct {
 	mu         sync.Mutex
 	partitions uint32
 	events     map[uint32][]eventstore.Event
+	lastEvents map[uint32]eventstore.Event
 }
 
 func NewMockSink(partitions uint32) *MockSink {
 	events := map[uint32][]eventstore.Event{}
+	lastEvents := map[uint32]eventstore.Event{}
 	for i := uint32(0); i < partitions; i++ {
 		events[i+1] = []eventstore.Event{}
+		lastEvents[i+1] = eventstore.Event{}
 	}
 
 	return &MockSink{
 		events:     events,
+		lastEvents: lastEvents,
 		partitions: partitions,
 	}
 }
@@ -53,6 +60,7 @@ func (s *MockSink) Sink(ctx context.Context, e eventstore.Event) error {
 	s.mu.Lock()
 	events := s.events[partition]
 	s.events[partition] = append(events, e)
+	s.lastEvents[partition] = e
 	s.mu.Unlock()
 
 	return nil
@@ -63,14 +71,11 @@ func (s *MockSink) LastMessage(ctx context.Context, partition uint32) (*eventsto
 		partition = 1
 	}
 	s.mu.Lock()
-	events := s.events[partition]
-	s.mu.Unlock()
-
-	if len(events) == 0 {
-		return &eventstore.Event{}, nil
+	defer s.mu.Unlock()
+	e, ok := s.lastEvents[partition]
+	if !ok {
+		return nil, nil
 	}
-	e := events[len(events)-1]
-
 	return &e, nil
 }
 
@@ -86,6 +91,25 @@ func (s *MockSink) Events() []eventstore.Event {
 	return events
 }
 
+func (s *MockSink) LastMessages() map[uint32]eventstore.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	msgs := map[uint32]eventstore.Event{}
+	for k, v := range s.lastEvents {
+		msgs[k] = v
+	}
+
+	return msgs
+}
+
+func (s *MockSink) SetLastMessages(lastEvents map[uint32]eventstore.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.lastEvents = lastEvents
+}
+
 type slot struct {
 	low  uint32
 	high uint32
@@ -97,7 +121,7 @@ func TestMongoListenere(t *testing.T) {
 		partitionSlots []slot
 	}{
 		{
-			name: "no partition",
+			name: "no_partition",
 			partitionSlots: []slot{
 				{
 					low:  1,
@@ -106,7 +130,7 @@ func TestMongoListenere(t *testing.T) {
 			},
 		},
 		{
-			name: "two single partitions",
+			name: "two_single_partitions",
 			partitionSlots: []slot{
 				{
 					low:  1,
@@ -119,7 +143,7 @@ func TestMongoListenere(t *testing.T) {
 			},
 		},
 		{
-			name: "two double partitions",
+			name: "two_double_partitions",
 			partitionSlots: []slot{
 				{
 					low:  1,
@@ -135,11 +159,21 @@ func TestMongoListenere(t *testing.T) {
 
 	for _, tt := range testcases {
 		t.Run(tt.name, func(t *testing.T) {
-
-			repository, err := mongodb.NewStore(dbURL, dbName)
+			tearDown, err := tmg.Setup("../docker-compose.yaml")
 			if err != nil {
-				log.Fatalf("Error instantiating event store: %v", err)
+				log.Fatal(err)
 			}
+			defer tearDown()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			client, err := mongo.Connect(ctx, options.Client().ApplyURI(tmg.DBURL))
+			require.NoError(t, err)
+			defer func() {
+				client.Disconnect(ctx)
+				cancel()
+			}()
+
+			repository := mongodb.NewStoreDB(client, tmg.DBName)
+			require.NoError(t, err)
 
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -147,7 +181,7 @@ func TestMongoListenere(t *testing.T) {
 			partitions := partitionSize(tt.partitionSlots)
 			mockSink := NewMockSink(partitions)
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel = context.WithCancel(context.Background())
 			feeding(ctx, t, partitions, tt.partitionSlots, mockSink)
 			time.Sleep(100 * time.Millisecond)
 
@@ -179,6 +213,8 @@ func TestMongoListenere(t *testing.T) {
 			events = mockSink.Events()
 			assert.Equal(t, 3, len(events), "event size")
 
+			lastMessages := mockSink.LastMessages()
+
 			acc.Withdraw(5)
 			err = es.Save(ctx, acc)
 			require.NoError(t, err)
@@ -188,6 +224,33 @@ func TestMongoListenere(t *testing.T) {
 			events = mockSink.Events()
 			require.Equal(t, 4, len(events), "event size")
 			require.Equal(t, "MoneyWithdrawn", events[3].Kind)
+
+			cancel()
+
+			// listening ALL from the beginning
+			mockSink = NewMockSink(partitions)
+
+			// connecting
+			ctx, cancel = context.WithCancel(context.Background())
+			feeding(ctx, t, partitions, tt.partitionSlots, mockSink)
+			time.Sleep(200 * time.Millisecond)
+
+			events = mockSink.Events()
+			require.Equal(t, 4, len(events), "event size")
+
+			cancel()
+
+			// listening messages from a specific message
+			mockSink = NewMockSink(partitions)
+			mockSink.SetLastMessages(lastMessages)
+
+			// reconnecting
+			ctx, cancel = context.WithCancel(context.Background())
+			feeding(ctx, t, partitions, tt.partitionSlots, mockSink)
+			time.Sleep(200 * time.Millisecond)
+
+			events = mockSink.Events()
+			require.Equal(t, 1, len(events), "event size")
 
 			cancel()
 		})
@@ -206,7 +269,7 @@ func partitionSize(slots []slot) uint32 {
 
 func feeding(ctx context.Context, t *testing.T, partitions uint32, slots []slot, sinker sink.Sinker) {
 	for _, v := range slots {
-		listener, err := mongodb.NewFeed(dbURL, dbName, mongodb.WithPartitions(partitions, v.low, v.high))
+		listener, err := mongodb.NewFeed(tmg.DBURL, tmg.DBName, mongodb.WithPartitions(partitions, v.low, v.high))
 		require.NoError(t, err)
 		go func() {
 			err := listener.Feed(ctx, sinker)

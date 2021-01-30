@@ -38,7 +38,7 @@ func SplitMessageID(messageID string) (eventID string, count uint8, err error) {
 
 	splits := strings.Split(messageID, countSplitter)
 	if len(splits) != 2 {
-		return "", 0, faults.Errorf("Bad formated message ID. Message ID '%s' does not '%s' separator", messageID, countSplitter)
+		return "", 0, faults.Errorf("Bad formated message ID. Message ID '%s' does not have '%s' separator", messageID, countSplitter)
 	}
 	id := splits[0]
 	b, err := encoding.Unmarshal(splits[1])
@@ -47,4 +47,23 @@ func SplitMessageID(messageID string) (eventID string, count uint8, err error) {
 	}
 
 	return id, uint8(b[0]), nil
+}
+
+func DelayEventID(eventID string, offset time.Duration) (string, error) {
+	if eventID == "" {
+		return eventID, nil
+	}
+
+	splits := strings.Split(eventID, countSplitter)
+
+	e, err := eventid.DelayEventID(splits[0], offset)
+	if err != nil {
+		return "", err
+	}
+
+	if len(splits) > 1 {
+		return e + countSplitter + splits[1], nil
+	}
+
+	return e, nil
 }
