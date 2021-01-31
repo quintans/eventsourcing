@@ -463,6 +463,12 @@ Next I present a possible architecture.
 
 The write service writes to the database, the changes are captured by the Forwarder service and published to the event bus. The read service listen to the event bus and updates the views according to the received events.
 
+> The Forwarder service process could instead be inside the write service since it has direct access to the database.
+> 
+> **Pros**: it decreasing the complexity of the architecture
+> 
+> **Cons**: if we want to cut off the stream of events (for example, to increase partitions) it would be more work. This could be easily overcome by using some flag to enable/disable the forwarding of events.
+
 If the Forwarder service fails to write into the event bus, it will try again. If it restarts, it queries the event bus for the last message and start polling the database from there.
 > If it is not possible to get the last published message to the event bus, we can store it in a database.
 > Writing repeated messages to the event bus is not a concern, since the used event bus must guarantee `at least once` delivery. It is the job of the projector to be idempotent, discarding repeated messages.
