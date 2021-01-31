@@ -48,4 +48,7 @@ func TestSerialise(t *testing.T) {
 	assert.Equal(t, ts, eid.Time())
 	assert.Equal(t, id.String(), eid.AggregateID().String())
 	assert.Equal(t, uint32(1), eid.Version())
+
+	s := eventid.New(ts, uuid.UUID{}, 0).String()
+	assert.Equal(t, "ZW00000000000000000000000000000000000000", s)
 }

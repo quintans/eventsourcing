@@ -24,8 +24,8 @@ type Canceller interface {
 // Projection is the interface that a projection needs to implement
 type Projection interface {
 	GetName() string
-	// GetResumeEventIDs gets the smallest of the latest event ID for a partition topic from the DB, for the aggregate group
-	GetResumeEventIDs(ctx context.Context, aggregateTypes []string, partition uint32) (string, error)
+	// GetResumeEventIDs gets the latest event ID from the DB, for the aggregate group
+	GetResumeEventIDs(ctx context.Context, aggregateTypes []string) (string, error)
 	Handler(ctx context.Context, e eventstore.Event) error
 }
 
@@ -150,37 +150,29 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		// To avoid the creation of a potential massive buffer size
 		// and to ensure that events are not lost, between the switch to the consumer,
 		// we execute the fetch in several steps.
-		// EACH PARTITION CAN BE INDEPENDENT OF EACH OTHER AND CAN BE TREATED AS IF IT IS THE ONLY PARTITION
+		// ONE PARTITION IS INDEPENDENT OF THE OTHERS AND IS TREATED AS IF IT IS THE ONLY PARTITION.
+		// Partitions in normal circumstances should have yhe last consumed event, very close to each other, so it is fair to assume that
+		// on a restart, if we start from a earlier point in time (1min), any lagging message will also be consumed.
+		// If there is a partition that is spinning, and message consumption lagging behind, or completely halted, and may not be caught by the safety margin above,
+		// then the problem should be fixed and the projection should rebuild from that point in time.
+		//
 		// 1) Process all events from the ES from the begginning - it may be a long operation
 		// 2) start the consumer to track new events from now on
 		// 3) process any event that may have arrived during the switch
 		// 4) start consuming events from the last position
 
-		// tracks the threshold of each partition
-		prjEventIDs := map[uint32]string{}
-
-		smallestEventID := string([]byte{255})
-		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
-			// for the aggregate group in the same partition (=same source), gets the latest event ID.
-			prjEventID, err := m.projection.GetResumeEventIDs(ctx, stage.AggregateTypes, partition)
-			if err != nil {
-				return faults.Errorf("Could not get last event ID from the projection: %w", err)
-			}
-
-			// to make sure we don't miss any event due to clock skews, we start replaying a bit earlier
-			prjEventID, err = common.DelayEventID(prjEventID, player.TrailingLag)
-			if err != nil {
-				return faults.Errorf("Error delaying the eventID: %w", err)
-			}
-
-			if smallestEventID > prjEventID {
-				smallestEventID = prjEventID
-			}
-
-			prjEventIDs[partition] = prjEventID
+		prjEventID, err := m.projection.GetResumeEventIDs(ctx, stage.AggregateTypes)
+		if err != nil {
+			return faults.Errorf("Could not get last event ID from the projection: %w", err)
 		}
 
-		logger.Infof("Beginning booting stage %d from event ID '%s'", k, smallestEventID)
+		// to make sure we don't miss any event due to clock skews, we start replaying a bit earlier
+		prjEventID, err = common.DelayEventID(prjEventID, time.Minute)
+		if err != nil {
+			return faults.Errorf("Error delaying the eventID: %w", err)
+		}
+
+		logger.Infof("Beginning booting stage %d from event ID '%s'", k, prjEventID)
 
 		// replaying events for each partition, rather than replay from the smallest event of the partition range,
 		// probably is faster because the projection does not have to handle repeated events.
@@ -188,12 +180,15 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 		// will only handle events that have not been handled for a given partition
 		handlerFilter := func(event eventstore.Event) bool {
 			p := common.WhichPartition(event.AggregateIDHash, m.partitions)
-			eID := prjEventIDs[p]
 
-			return event.AggregateID > eID && p >= stage.PartitionLo && p <= stage.PartitionHi
+			ok := p >= stage.PartitionLo && p <= stage.PartitionHi
+			if !ok {
+				logger.Warnf("Rejecting event with ID %v (AggregateID: %s, HASH: %d). IT SHOULD HAVE REJECTED ON THE ORIGIN.", event.ID, event.AggregateID, event.AggregateIDHash)
+			}
+			return ok
 		}
 		replayer := player.New(stage.Repository, player.WithCustomFilter(handlerFilter))
-		lastEventID, err := replayer.Replay(ctx, handler, smallestEventID,
+		lastEventID, err := replayer.Replay(ctx, handler, prjEventID,
 			store.WithAggregateTypes(stage.AggregateTypes...),
 			store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi),
 		)

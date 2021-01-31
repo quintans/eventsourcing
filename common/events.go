@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore/encoding"
 	"github.com/quintans/eventstore/eventid"
-	"github.com/quintans/faults"
 )
 
 const (
@@ -19,7 +18,12 @@ const (
 )
 
 func NewEventID(createdAt time.Time, aggregateID string, version uint32) string {
-	id, _ := uuid.Parse(aggregateID)
+	var id uuid.UUID
+	if aggregateID != "" {
+		id, _ = uuid.Parse(aggregateID)
+	} else {
+		id = uuid.UUID{}
+	}
 	eid := eventid.New(createdAt, id, version)
 	return eid.String()
 }
@@ -37,16 +41,16 @@ func SplitMessageID(messageID string) (eventID string, count uint8, err error) {
 	}
 
 	splits := strings.Split(messageID, countSplitter)
-	if len(splits) != 2 {
-		return "", 0, faults.Errorf("Bad formated message ID. Message ID '%s' does not have '%s' separator", messageID, countSplitter)
-	}
 	id := splits[0]
-	b, err := encoding.Unmarshal(splits[1])
-	if err != nil {
-		return "", 0, err
+	if len(splits) > 1 {
+		b, err := encoding.Unmarshal(splits[1])
+		if err != nil {
+			return "", 0, err
+		}
+		count = uint8(b[0])
 	}
 
-	return id, uint8(b[0]), nil
+	return id, count, nil
 }
 
 func DelayEventID(eventID string, offset time.Duration) (string, error) {
