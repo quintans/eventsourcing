@@ -28,6 +28,9 @@ message GetEventsRequest {
 message Filter {
   repeated string aggregate_types = 1;
   repeated Label labels = 2;
+  uint32 partitions = 3;
+  uint32 partitionLow = 4;
+  uint32 partitionHi = 5;
 }
 
 message Label {

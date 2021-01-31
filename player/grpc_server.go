@@ -74,7 +74,13 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 		}
 		labels[v.Key] = values
 	}
-	return store.Filter{AggregateTypes: types, Labels: labels}
+	return store.Filter{
+		AggregateTypes: types,
+		Labels:         labels,
+		Partitions:     pbFilter.Partitions,
+		PartitionLow:   pbFilter.PartitionLow,
+		PartitionHi:    pbFilter.PartitionHi,
+	}
 }
 
 func StartGrpcServer(ctx context.Context, address string, repo Repository) error {

@@ -6,10 +6,10 @@ type Filter struct {
 	AggregateTypes []string
 	// Labels filters on top of labels. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Labels        Labels
-	Partitions    uint32
-	PartitionsLow uint32
-	PartitionsHi  uint32
+	Labels       Labels
+	Partitions   uint32
+	PartitionLow uint32
+	PartitionHi  uint32
 }
 
 type FilterOption func(*Filter)
@@ -55,8 +55,8 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption
 			return
 		}
 		f.Partitions = partitions
-		f.PartitionsLow = partitionsLow
-		f.PartitionsHi = partitionsHi
+		f.PartitionLow = partitionsLow
+		f.PartitionHi = partitionsHi
 	}
 }
 

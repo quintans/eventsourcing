@@ -202,7 +202,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	}
 	query.WriteString(" ORDER BY aggregate_version ASC")
 
-	events, err := r.queryEvents(ctx, query.String(), "", args...)
+	events, err := r.queryEvents(ctx, query.String(), args...)
 	if err != nil {
 		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
@@ -304,26 +304,36 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 }
 
 func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error) {
-	args := []interface{}{afterEventID}
-	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events WHERE id > $1 ")
-	if trailingLag != time.Duration(0) {
-		safetyMargin := time.Now().UTC().Add(-trailingLag)
-		args = append(args, safetyMargin)
-		query.WriteString("AND created_at <= $2 ")
-	}
-	args = buildFilter(filter, &query, args)
-	query.WriteString(" ORDER BY id ASC")
-	if batchSize > 0 {
-		query.WriteString(" LIMIT ")
-		query.WriteString(strconv.Itoa(batchSize))
-	}
+	var records []eventstore.Event
+	for len(records) < batchSize {
+		args := []interface{}{afterEventID}
+		var query bytes.Buffer
+		query.WriteString("SELECT * FROM events WHERE id > $1 ")
+		args = append(args, afterEventID)
+		if trailingLag != time.Duration(0) {
+			safetyMargin := time.Now().UTC().Add(-trailingLag)
+			args = append(args, safetyMargin)
+			query.WriteString("AND created_at <= $2 ")
+		}
+		args = buildFilter(filter, &query, args)
+		query.WriteString(" ORDER BY id ASC")
+		if batchSize > 0 {
+			query.WriteString(" LIMIT ")
+			query.WriteString(strconv.Itoa(batchSize))
+		}
 
-	rows, err := r.queryEvents(ctx, query.String(), afterEventID, args...)
-	if err != nil {
-		return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
+		rows, err := r.queryEvents(ctx, query.String(), args...)
+		if err != nil {
+			return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
+		}
+		if len(rows) == 0 {
+			return records, nil
+		}
+
+		afterEventID = rows[len(rows)-1].ID
+		records = append(rows)
 	}
-	return rows, nil
+	return records, nil
 }
 
 func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
@@ -341,11 +351,11 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 
 	if filter.Partitions > 1 {
 		size := len(args)
-		if filter.PartitionsLow == filter.PartitionsHi {
-			args = append(args, filter.Partitions, filter.PartitionsLow-1)
+		if filter.PartitionLow == filter.PartitionHi {
+			args = append(args, filter.Partitions, filter.PartitionLow-1)
 			query.WriteString(fmt.Sprintf(" AND MOD(aggregate_id_hash, $%d) = $%d", size+1, size+2))
 		} else {
-			args = append(args, filter.Partitions, filter.PartitionsLow-1, filter.PartitionsHi-1)
+			args = append(args, filter.Partitions, filter.PartitionLow-1, filter.PartitionHi-1)
 			query.WriteString(fmt.Sprintf(" AND MOD(aggregate_id_hash, $%d) BETWEEN $%d AND $%d", size+1, size+2, size+4))
 		}
 	}
@@ -371,7 +381,7 @@ func escape(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
-func (r *EsRepository) queryEvents(ctx context.Context, query string, afterEventID string, args ...interface{}) ([]eventstore.Event, error) {
+func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...interface{}) ([]eventstore.Event, error) {
 	rows, err := r.db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {

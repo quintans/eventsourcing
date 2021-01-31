@@ -140,8 +140,8 @@ func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, after
 				}
 			}
 			afterEventID = evt.ID
-			if evt.ID == untilEventID {
-				return untilEventID, nil
+			if evt.ID >= untilEventID {
+				return evt.ID, nil
 			}
 		}
 		loop = len(events) != 0

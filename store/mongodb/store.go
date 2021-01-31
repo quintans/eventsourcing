@@ -255,7 +255,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	opts := options.Find()
 	opts.SetSort(bson.D{{"aggregate_version", 1}})
 
-	events, err := r.queryEvents(ctx, filter, opts, "", 0)
+	events, _, _, err := r.queryEvents(ctx, filter, opts, "", 0)
 	if err != nil {
 		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
@@ -376,29 +376,40 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, bat
 		return nil, err
 	}
 
-	// since we have to consider the count, the query starts with the eventID
-	flt := bson.D{
-		{"_id", bson.D{{"$gte", eventID}}},
+	var records []eventstore.Event
+	for len(records) < batchSize {
+		// since we have to consider the count, the query starts with the eventID
+		flt := bson.D{
+			{"_id", bson.D{{"$gte", eventID}}},
+		}
+
+		if trailingLag != time.Duration(0) {
+			safetyMargin := time.Now().UTC().Add(-trailingLag)
+			flt = append(flt, bson.E{"created_at", bson.D{{"$lte", safetyMargin}}})
+		}
+		flt = buildFilter(filter, flt)
+
+		opts := options.Find().SetSort(bson.D{{"_id", 1}})
+		if batchSize > 0 {
+			opts.SetBatchSize(int32(batchSize))
+		} else {
+			opts.SetBatchSize(-1)
+		}
+
+		rows, lastEventID, lastCount, err := r.queryEvents(ctx, flt, opts, eventID, count)
+		if err != nil {
+			return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", eventID, filter, err)
+		}
+		if len(rows) == 0 {
+			return records, nil
+		}
+
+		eventID = lastEventID
+		count = lastCount
+		records = append(rows)
 	}
 
-	if trailingLag != time.Duration(0) {
-		safetyMargin := time.Now().UTC().Add(-trailingLag)
-		flt = append(flt, bson.E{"created_at", bson.D{{"$lte", safetyMargin}}})
-	}
-	flt = buildFilter(filter, flt)
-
-	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	if batchSize > 0 {
-		opts.SetBatchSize(int32(batchSize))
-	} else {
-		opts.SetBatchSize(-1)
-	}
-
-	rows, err := r.queryEvents(ctx, flt, opts, eventID, count)
-	if err != nil {
-		return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", eventID, filter, err)
-	}
-	return rows, nil
+	return records, nil
 }
 
 func buildFilter(filter store.Filter, flt bson.D) bson.D {
@@ -407,7 +418,7 @@ func buildFilter(filter store.Filter, flt bson.D) bson.D {
 	}
 
 	if filter.Partitions > 1 {
-		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Partitions, filter.PartitionsLow, filter.PartitionsHi))
+		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Partitions, filter.PartitionLow, filter.PartitionHi))
 	}
 
 	if len(filter.Labels) > 0 {
@@ -460,28 +471,32 @@ func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint3
 
 }
 
-func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, error) {
+func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, string, uint8, error) {
 	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return []eventstore.Event{}, nil
+			return []eventstore.Event{}, "", 0, nil
 		}
-		return nil, faults.Wrap(err)
+		return nil, "", 0, faults.Wrap(err)
 	}
 
 	evts := []Event{}
 	if err = cursor.All(ctx, &evts); err != nil {
-		return nil, faults.Wrap(err)
+		return nil, "", 0, faults.Wrap(err)
 	}
 
 	events := []eventstore.Event{}
 	after := int(afterCount)
+	var lastEventID string
+	var lastCount uint8
 	for _, v := range evts {
 		for k, d := range v.Details {
 			// only collect events that are greater than afterEventID-afterCount
 			if v.ID > afterEventID || k > after {
+				lastEventID = v.ID
+				lastCount = uint8(k)
 				events = append(events, eventstore.Event{
-					ID:               common.NewMessageID(v.ID, uint8(k)),
+					ID:               common.NewMessageID(lastEventID, lastCount),
 					AggregateID:      v.AggregateID,
 					AggregateIDHash:  v.AggregateIDHash,
 					AggregateVersion: v.AggregateVersion,
@@ -496,5 +511,5 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 		}
 	}
 
-	return events, nil
+	return events, lastEventID, lastCount, nil
 }
