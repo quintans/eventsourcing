@@ -28,6 +28,8 @@ A service **writes** to a **database** (the event store), a **forwarder** servic
 
 I assume that the reader is familiar with the concepts of event sourcing and CQRS.
 
+> **Warning**: Code examples below may be outdated
+
 ### Aggregate
 
 The aggregate must "extend" `eventstore.RootAggregate`, that implements `eventstore.Aggregater` interface, and implement `eventstore.Typer` and `eventstore.EventHandler` interface.
@@ -164,7 +166,7 @@ Request Rebuild projections
 - Acquire Freeze Lock
 - Emit Cancel projection notification
 - Wait for all partitions listeners to acknowledge stopping (timeout 1s)
-- Clean table(s)
+- handle the control to the projection for the rebuild
 - Release Freeze Lock
 
 Boot Partitioned Projection
