@@ -38,7 +38,7 @@ func NewNotifierLockRestarter(lock worker.Locker, notifier Notifier) *NotifierLo
 	}
 }
 
-func (r *NotifierLockRestarter) Restart(ctx context.Context, projection string, partitions int, restartFn func(ctx context.Context) error) error {
+func (r *NotifierLockRestarter) Restart(ctx context.Context, projection string, listenerCount int, restartFn func(ctx context.Context) error) error {
 	logger := log.WithFields(log.Fields{
 		"method":     "Restarter.Restart",
 		"projection": projection,
@@ -64,7 +64,7 @@ func (r *NotifierLockRestarter) Restart(ctx context.Context, projection string, 
 		}()
 
 		logger.Info("Signalling to STOP projection listener")
-		err = r.notifier.CancelProjection(ctx, projection, partitions)
+		err = r.notifier.CancelProjection(ctx, projection, listenerCount)
 		if err != nil {
 			log.WithError(err).Errorf("Error while freezing projection %s", projection)
 			return

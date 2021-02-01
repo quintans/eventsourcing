@@ -192,7 +192,7 @@ func (s NatsSubscriber) ListenCancelProjection(ctx context.Context, canceller pr
 	return nil
 }
 
-func (s NatsSubscriber) CancelProjection(ctx context.Context, projectionName string, partitions int) error {
+func (s NatsSubscriber) CancelProjection(ctx context.Context, projectionName string, listenerCount int) error {
 	log.WithField("projection", projectionName).Info("Cancelling projection")
 
 	payload, err := json.Marshal(projection.Notification{
@@ -220,7 +220,7 @@ func (s NatsSubscriber) CancelProjection(ctx context.Context, projectionName str
 	}
 
 	// Wait for a single response
-	max := 500 * time.Millisecond
+	max := time.Second
 	start := time.Now()
 	count := 0
 	for time.Now().Sub(start) < max {
@@ -230,7 +230,7 @@ func (s NatsSubscriber) CancelProjection(ctx context.Context, projectionName str
 		}
 
 		count++
-		if count >= partitions {
+		if count >= listenerCount {
 			break
 		}
 	}

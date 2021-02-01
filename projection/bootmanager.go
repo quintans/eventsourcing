@@ -174,20 +174,7 @@ func (m *ProjectionPartition) boot(ctx context.Context) error {
 
 		logger.Infof("Beginning booting stage %d from event ID '%s'", k, prjEventID)
 
-		// replaying events for each partition, rather than replay from the smallest event of the partition range,
-		// probably is faster because the projection does not have to handle repeated events.
-
-		// will only handle events that have not been handled for a given partition
-		handlerFilter := func(event eventstore.Event) bool {
-			p := common.WhichPartition(event.AggregateIDHash, m.partitions)
-
-			ok := p >= stage.PartitionLo && p <= stage.PartitionHi
-			if !ok {
-				logger.Warnf("Rejecting event with ID %v (AggregateID: %s, HASH: %d). IT SHOULD HAVE REJECTED ON THE ORIGIN.", event.ID, event.AggregateID, event.AggregateIDHash)
-			}
-			return ok
-		}
-		replayer := player.New(stage.Repository, player.WithCustomFilter(handlerFilter))
+		replayer := player.New(stage.Repository)
 		lastEventID, err := replayer.Replay(ctx, handler, prjEventID,
 			store.WithAggregateTypes(stage.AggregateTypes...),
 			store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi),
