@@ -160,9 +160,9 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, resume projection.Str
 	stopped := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		close(resumers)
 		sub.Close()
 		close(stopped)
+		close(resumers)
 	}()
 
 	if resumers != nil {
