@@ -14,7 +14,7 @@ const (
 )
 
 type Replayer interface {
-	Replay(ctx context.Context, handler EventHandler, afterEventID string, filters ...store.FilterOption) (string, error)
+	Replay(ctx context.Context, handler EventHandlerFunc, afterEventID string, filters ...store.FilterOption) (string, error)
 }
 
 type Repository interface {
@@ -30,7 +30,7 @@ const (
 	SEQUENCE
 )
 
-type EventHandler func(ctx context.Context, e eventstore.Event) error
+type EventHandlerFunc func(ctx context.Context, e eventstore.Event) error
 
 type Cancel func()
 
@@ -113,15 +113,15 @@ func StartAt(afterEventID string) StartOption {
 	}
 }
 
-func (p Player) ReplayUntil(ctx context.Context, handler EventHandler, untilEventID string, filters ...store.FilterOption) (string, error) {
+func (p Player) ReplayUntil(ctx context.Context, handler EventHandlerFunc, untilEventID string, filters ...store.FilterOption) (string, error) {
 	return p.ReplayFromUntil(ctx, handler, "", untilEventID, filters...)
 }
 
-func (p Player) Replay(ctx context.Context, handler EventHandler, afterEventID string, filters ...store.FilterOption) (string, error) {
+func (p Player) Replay(ctx context.Context, handler EventHandlerFunc, afterEventID string, filters ...store.FilterOption) (string, error) {
 	return p.ReplayFromUntil(ctx, handler, afterEventID, "", filters...)
 }
 
-func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandler, afterEventID, untilEventID string, filters ...store.FilterOption) (string, error) {
+func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandlerFunc, afterEventID, untilEventID string, filters ...store.FilterOption) (string, error) {
 	filter := store.Filter{}
 	for _, f := range filters {
 		f(&filter)

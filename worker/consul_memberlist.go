@@ -61,11 +61,13 @@ func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		s := strings.Split(string(kvPair.Value), ",")
-		members = append(members, MemberWorkers{
-			Name:    v,
-			Workers: s,
-		})
+		if kvPair != nil {
+			s := strings.Split(string(kvPair.Value), ",")
+			members = append(members, MemberWorkers{
+				Name:    v,
+				Workers: s,
+			})
+		}
 	}
 
 	return members, nil

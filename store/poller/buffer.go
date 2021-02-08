@@ -131,7 +131,7 @@ func (b *Buffer) pushEvent(evt eventstore.Event) *list.Element {
 	return e
 }
 
-func (b *Buffer) NewConsumer(name string, handler player.EventHandler, aggregateFilter ...string) *Consumer {
+func (b *Buffer) NewConsumer(name string, handler player.EventHandlerFunc, aggregateFilter ...string) *Consumer {
 	consu := &Consumer{
 		name:            name,
 		handler:         handler,
@@ -204,7 +204,7 @@ type Consumer struct {
 	buffer          *Buffer
 	name            string
 	fifo            *list.Element
-	handler         player.EventHandler
+	handler         player.EventHandlerFunc
 	quit            chan struct{}
 	consumer        *list.Element
 	aggregateFilter []string

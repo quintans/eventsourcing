@@ -19,28 +19,34 @@ type Notification struct {
 	Action
 }
 
-// Restarter is responsible for the projection restart.
+// Rebuilder is responsible for the projection restart.
 // Any running projection needs to stop until restartFn returns.
 // restartFn() is responsible for cleaning the projection
-type Restarter interface {
-	Restart(ctx context.Context, projection string, partitions int, restartFn func(ctx context.Context) error) error
+type Rebuilder interface {
+	Rebuild(ctx context.Context, projection string, listenerCount int, beforeRecordingTokens func(ctx context.Context) (string, error), afterRecordingTokens func(ctx context.Context, afterEventID string) (string, error)) error
 }
 
-type NotifierLockRestarter struct {
-	lock     worker.Locker
-	notifier Notifier
+type ResumeTokenUpdater interface {
+	UpdateResumeTokens(context.Context) error
 }
 
-func NewNotifierLockRestarter(lock worker.Locker, notifier Notifier) *NotifierLockRestarter {
-	return &NotifierLockRestarter{
-		lock:     lock,
-		notifier: notifier,
+type NotifierLockRebuilder struct {
+	lock               worker.Locker
+	notifier           Notifier
+	recordResumeTokens func(ctx context.Context) error
+}
+
+func NewNotifierLockRestarter(lock worker.Locker, notifier Notifier, updateResumeTokens func(ctx context.Context) error) *NotifierLockRebuilder {
+	return &NotifierLockRebuilder{
+		lock:               lock,
+		notifier:           notifier,
+		recordResumeTokens: updateResumeTokens,
 	}
 }
 
-func (r *NotifierLockRestarter) Restart(ctx context.Context, projection string, listenerCount int, restartFn func(ctx context.Context) error) error {
+func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, listenerCount int, beforeRecordingTokens func(ctx context.Context) (string, error), afterRecordingTokens func(ctx context.Context, afterEventID string) (string, error)) error {
 	logger := log.WithFields(log.Fields{
-		"method":     "Restarter.Restart",
+		"method":     "NotifierLockRebuilder.Rebuild",
 		"projection": projection,
 	})
 
@@ -66,14 +72,24 @@ func (r *NotifierLockRestarter) Restart(ctx context.Context, projection string, 
 		logger.Info("Signalling to STOP projection listener")
 		err = r.notifier.CancelProjection(ctx, projection, listenerCount)
 		if err != nil {
-			log.WithError(err).Errorf("Error while freezing projection %s", projection)
+			log.WithError(err).Error("Error while freezing projection")
 			return
 		}
 
-		logger.Info("Restarting...")
-		err = restartFn(ctx)
+		logger.Info("Before recording BUS tokens")
+		afterEventID, err := beforeRecordingTokens(ctx)
 		if err != nil {
-			log.WithError(err).Errorf("Error while restarting projection %s", projection)
+			log.WithError(err).Error("Error while restarting projection")
+		}
+		logger.Info("Recording BUS tokens")
+		err = r.recordResumeTokens(ctx)
+		if err != nil {
+			log.WithError(err).Error("Error while restarting projection")
+		}
+		logger.Infof("After recording BUS tokens. Last mile after %s", afterEventID)
+		_, err = afterRecordingTokens(ctx, afterEventID)
+		if err != nil {
+			log.WithError(err).Error("Error while restarting projection")
 		}
 	}()
 

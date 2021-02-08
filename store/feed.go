@@ -32,13 +32,9 @@ func (f *Forwarder) Run(ctx context.Context) error {
 	defer func() {
 		f.sinker.Close()
 	}()
-	err := f.sinker.Init()
-	if err != nil {
-		return faults.Errorf("Error initialising Sink '%s' on boot: %w", f.name, err)
-	}
 
 	log.Printf("Starting Seed '%s'", f.name)
-	err = f.feeder.Feed(ctx, f.sinker)
+	err := f.feeder.Feed(ctx, f.sinker)
 	if err != nil {
 		return faults.Errorf("Error feeding '%s' on boot: %w", f.name, err)
 	}

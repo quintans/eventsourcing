@@ -2,14 +2,9 @@ package projection
 
 import (
 	"context"
-	"strconv"
 	"sync"
-	"time"
 
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/store"
 	"github.com/quintans/eventstore/worker"
 	"github.com/quintans/faults"
 	log "github.com/sirupsen/logrus"
@@ -21,71 +16,73 @@ type Canceller interface {
 	Cancel()
 }
 
-// Projection is the interface that a projection needs to implement
-type Projection interface {
-	GetName() string
-	// GetResumeEventIDs gets the latest event ID from the DB, for the aggregate group
-	GetResumeEventIDs(ctx context.Context, aggregateTypes []string) (string, error)
-	Handler(ctx context.Context, e eventstore.Event) error
-}
-
 // Notifier represents the interface that a message queue needs to implement to able to cancel distributed projections execution
 type Notifier interface {
 	ListenCancelProjection(ctx context.Context, restarter Canceller) error
 	CancelProjection(ctx context.Context, projectionName string, partitions int) error
 }
 
-type Subscriber interface {
-	StartConsumer(ctx context.Context, partition uint32, resumeToken string, projection Projection, aggregateTypes []string) (chan struct{}, error)
-	GetResumeToken(ctx context.Context, partition uint32) (string, error)
+type StreamResume struct {
+	Topic  string
+	Stream string
 }
 
-type EventHandler func(ctx context.Context, e eventstore.Event) error
+func (ts StreamResume) String() string {
+	return ts.Topic + "." + ts.Stream
+}
+
+type ConsumerOptions struct {
+	Filter func(e eventstore.Event) bool
+}
+
+type ConsumerOption func(*ConsumerOptions)
+
+func WithFilter(filter func(e eventstore.Event) bool) ConsumerOption {
+	return func(o *ConsumerOptions) {
+		o.Filter = filter
+	}
+}
+
+type Subscriber interface {
+	StartConsumer(ctx context.Context, resume StreamResume, handler EventHandlerFunc, options ...ConsumerOption) (chan struct{}, error)
+}
+
+type StreamResumer interface {
+	GetStreamResumeToken(ctx context.Context, key string) (string, error)
+	SetStreamResumeToken(ctx context.Context, key string, token string) error
+}
+
+type EventHandlerFunc func(ctx context.Context, e eventstore.Event) error
 
 type ProjectionPartition struct {
+	handler     EventHandlerFunc
 	restartLock worker.WaitForUnlocker
-	projection  Projection
 	notifier    Notifier
-	partitions  uint32
-	stages      []BootStage
+	resume      StreamResume
+	filter      func(e eventstore.Event) bool
+	subscriber  Subscriber
 
-	cancel        context.CancelFunc
-	doneConsumers []chan struct{}
-	mu            sync.RWMutex
-}
-
-// BootStage represents the different aggregates used to build a projection.
-// This aggregates can come from different event stores
-type BootStage struct {
-	// AggregateTypes is the list of aggregates on the same topic
-	AggregateTypes []string
-	Subscriber     Subscriber
-	// Repository: Repository to the events
-	Repository player.Repository
-	// PartitionLo: low partition number. if zero, partitioning will ignored
-	PartitionLo uint32
-	// PartitionHi: high partition number. if zero, partitioning will ignored
-	PartitionHi uint32
+	cancel context.CancelFunc
+	done   chan struct{}
+	mu     sync.RWMutex
 }
 
 // NewProjectionPartition creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
-// Arguments:
-// @param projection: the projection
-// @param notifier: handles all interaction with freezing/unfreezing notifications
-// @param stages: booting can be done in stages, since different event stores can be involved
 func NewProjectionPartition(
 	restartLock worker.WaitForUnlocker,
-	projection Projection,
 	notifier Notifier,
-	partitions uint32,
-	stages ...BootStage,
+	subscriber Subscriber,
+	resume StreamResume,
+	filter func(e eventstore.Event) bool,
+	handler EventHandlerFunc,
 ) *ProjectionPartition {
 	mc := &ProjectionPartition{
 		restartLock: restartLock,
-		projection:  projection,
+		handler:     handler,
 		notifier:    notifier,
-		partitions:  partitions,
-		stages:      stages,
+		resume:      resume,
+		filter:      filter,
+		subscriber:  subscriber,
 	}
 
 	return mc
@@ -93,26 +90,26 @@ func NewProjectionPartition(
 
 // Name returns the name of this projection
 func (m *ProjectionPartition) Name() string {
-	return m.projection.GetName()
+	return m.resume.Stream
 }
 
 // Run action to be executed on boot
 func (m *ProjectionPartition) Run(ctx context.Context) error {
-	logger := log.WithField("projection", m.projection.GetName())
+	logger := log.WithField("projection", m.resume.Stream)
 	for {
 		logger.Info("Waiting for Unlock")
 		m.restartLock.WaitForUnlock(ctx)
-
 		ctx2, cancel := context.WithCancel(ctx)
-		m.mu.Lock()
-		m.cancel = cancel
-		m.mu.Unlock()
 
 		err := m.bootAndListen(ctx2)
 		if err != nil {
 			cancel()
 			return err
 		}
+
+		m.mu.Lock()
+		m.cancel = cancel
+		m.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
@@ -139,82 +136,23 @@ func (m *ProjectionPartition) bootAndListen(ctx context.Context) error {
 }
 
 func (m *ProjectionPartition) boot(ctx context.Context) error {
-	logger := log.WithField("projection", m.projection.GetName())
-
-	handler := m.projection.Handler
-
-	frozen := make([]chan struct{}, 0)
-	for k, stage := range m.stages {
-		logger = logger.WithField("partitions", strconv.Itoa(int(stage.PartitionLo))+"-"+strconv.Itoa(int(stage.PartitionHi)))
-
-		// To avoid the creation of a potential massive buffer size
-		// and to ensure that events are not lost, between the switch to the consumer,
-		// we execute the fetch in several steps.
-		// ONE PARTITION IS INDEPENDENT OF THE OTHERS AND IS TREATED AS IF IT IS THE ONLY PARTITION.
-		// Partitions in normal circumstances should have yhe last consumed event, very close to each other, so it is fair to assume that
-		// on a restart, if we start from a earlier point in time (1min), any lagging message will also be consumed.
-		// If there is a partition that is spinning, and message consumption lagging behind, or completely halted, and may not be caught by the safety margin above,
-		// then the problem should be fixed and the projection should rebuild from that point in time.
-		//
-		// 1) Process all events from the ES from the begginning - it may be a long operation
-		// 2) start the consumer to track new events from now on
-		// 3) process any event that may have arrived during the switch
-		// 4) start consuming events from the last position
-
-		prjEventID, err := m.projection.GetResumeEventIDs(ctx, stage.AggregateTypes)
-		if err != nil {
-			return faults.Errorf("Could not get last event ID from the projection: %w", err)
-		}
-
-		// to make sure we don't miss any event due to clock skews, we start replaying a bit earlier
-		prjEventID, err = common.DelayEventID(prjEventID, time.Minute)
-		if err != nil {
-			return faults.Errorf("Error delaying the eventID: %w", err)
-		}
-
-		logger.Infof("Beginning booting stage %d from event ID '%s'", k, prjEventID)
-
-		replayer := player.New(stage.Repository)
-		lastEventID, err := replayer.Replay(ctx, handler, prjEventID,
-			store.WithAggregateTypes(stage.AggregateTypes...),
-			store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi),
-		)
-		if err != nil {
-			return faults.Errorf("Could not replay all events (first part): %w", err)
-		}
-
-		for partition := stage.PartitionLo; partition <= stage.PartitionHi; partition++ {
-			// grab the last events sequences in the partition
-			token, err := stage.Subscriber.GetResumeToken(ctx, partition)
-			if err != nil {
-				return faults.Errorf("Could not retrieve resume token for projection %s and partition %d: %w", m.projection.GetName(), partition, err)
-			}
-
-			p := player.New(stage.Repository,
-				player.WithBatchSize(0),
-				player.WithTrailingLag(time.Duration(0)),
-			)
-			_, err = p.Replay(ctx, handler, lastEventID,
-				store.WithAggregateTypes(stage.AggregateTypes...),
-				store.WithPartitions(m.partitions, stage.PartitionLo, stage.PartitionHi),
-			)
-			if err != nil {
-				return faults.Errorf("Could not replay all events for projection %s (second part): %w", m.projection.GetName(), err)
-			}
-
-			// start consuming events from the last available position
-			ch, err := stage.Subscriber.StartConsumer(ctx, partition, token, m.projection, stage.AggregateTypes)
-			if err != nil {
-				return faults.Errorf("Unable to start consumer projection %s: %w", m.projection.GetName(), err)
-			}
-			frozen = append(frozen, ch)
-		}
-
-		logger.Infof("Ended booting stage %d", k)
+	// start consuming events from the last available position
+	options := []ConsumerOption{}
+	if m.filter != nil {
+		options = append(options, WithFilter(m.filter))
+	}
+	done, err := m.subscriber.StartConsumer(
+		ctx,
+		m.resume,
+		m.handler,
+		options...,
+	)
+	if err != nil {
+		return faults.Errorf("Unable to start consumer projection %s: %w", m.resume.Stream, err)
 	}
 
 	m.mu.Lock()
-	m.doneConsumers = frozen
+	m.done = done
 	m.mu.Unlock()
 
 	return nil
@@ -226,9 +164,7 @@ func (m *ProjectionPartition) Cancel() {
 		m.cancel()
 	}
 	// wait for the closing subscriber
-	for _, ch := range m.doneConsumers {
-		<-ch
-	}
+	<-m.done
 
 	m.mu.Unlock()
 }

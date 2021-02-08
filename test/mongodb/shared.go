@@ -13,8 +13,7 @@ import (
 )
 
 var (
-	DBURL  string
-	client *mongo.Client
+	DBURL string
 )
 
 const (
@@ -34,24 +33,20 @@ func Setup(dockerComposePath string) (func(), error) {
 	DBURL = fmt.Sprintf("mongodb://localhost:27017/%s?replicaSet=rs0", DBName)
 
 	opts := options.Client().ApplyURI(DBURL)
-	client, err = mongo.Connect(ctx, opts)
+	client, err := mongo.Connect(ctx, opts)
 	if err != nil {
 		destroy()
 		return nil, err
 	}
-
-	tearDown := func() {
-		client.Disconnect(ctx)
-		destroy()
-	}
+	defer client.Disconnect(context.Background())
 
 	err = dbSchema(client)
 	if err != nil {
-		tearDown()
+		destroy()
 		return nil, err
 	}
 
-	return tearDown, nil
+	return destroy, nil
 }
 
 func dockerCompose(ctx context.Context, path string) (func(), error) {
@@ -113,10 +108,17 @@ func dbSchema(cli *mongo.Client) error {
 				},
 				{
 					{"key", bson.D{
-						{"idempotency_key", 1},
 						{"aggregate_id", 1},
+						{"idempotency_key", 1},
 					}},
 					{"name", "idx_idempotency_aggregate"},
+					{"unique", true},
+					{"partialFilterExpression", bson.D{
+						{"idempotency_key", bson.D{
+							{"$gt", ""},
+						},
+						},
+					}},
 					{"background", true},
 				},
 			}},

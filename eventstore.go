@@ -131,27 +131,17 @@ type EventStorer interface {
 
 var _ EventStorer = (*EventStore)(nil)
 
-type Option func(*EventStore)
+type EsOptions func(*EventStore)
 
-func WithCodec(codec Codec) Option {
+func WithCodec(codec Codec) EsOptions {
 	return func(r *EventStore) {
 		r.codec = codec
 	}
 }
 
-func WithUpcaster(upcaster Upcaster) Option {
+func WithUpcaster(upcaster Upcaster) EsOptions {
 	return func(r *EventStore) {
 		r.upcaster = upcaster
-	}
-}
-
-// NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, snapshotThreshold uint32, factory Factory, options ...Options) EventStore {
-	return EventStore{
-		store:             repo,
-		snapshotThreshold: snapshotThreshold,
-		factory:           factory,
-		codec:             JSONCodec{},
 	}
 }
 
@@ -160,17 +150,36 @@ type EventStore struct {
 	store             EsRepository
 	snapshotThreshold uint32
 	upcaster          Upcaster
-	factory           Factory
+	aggregateFactory  Factory
+	eventFactory      Factory
 	codec             Codec
+}
+
+// NewEventStore creates a new instance of ESPostgreSQL
+func NewEventStore(repo EsRepository, snapshotThreshold uint32, aggregateFactory Factory, eventFactory Factory, options ...EsOptions) EventStore {
+	es := EventStore{
+		store:             repo,
+		snapshotThreshold: snapshotThreshold,
+		aggregateFactory:  aggregateFactory,
+		eventFactory:      eventFactory,
+		codec:             JSONCodec{},
+	}
+	for _, v := range options {
+		v(&es)
+	}
+	return es
 }
 
 // Exec loads the aggregate from the event store and handles it to the handler function, saving the returning Aggregater in the event store.
 // If no aggregate is found for the provided ID the error ErrUnknownAggregateID is returned.
 // If the handler function returns nil for the Aggregater or an error, the save action is ignored.
-func (es EventStore) Exec(ctx context.Context, id string, do func(Aggregater) (Aggregater, error)) error {
+func (es EventStore) Exec(ctx context.Context, id string, do func(Aggregater) (Aggregater, error), options ...SaveOption) error {
 	a, err := es.GetByID(ctx, id)
 	if err != nil {
 		return err
+	}
+	if a == nil {
+		return ErrUnknownAggregateID
 	}
 	a, err = do(a)
 	if err != nil {
@@ -180,7 +189,7 @@ func (es EventStore) Exec(ctx context.Context, id string, do func(Aggregater) (A
 		return nil
 	}
 
-	return es.Save(ctx, a)
+	return es.Save(ctx, a, options...)
 }
 
 func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregater, error) {
@@ -226,19 +235,15 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 		aggregate.ApplyChangeFromHistory(m, e)
 	}
 
-	if aggregate == nil {
-		return nil, ErrUnknownAggregateID
-	}
-
 	return aggregate, nil
 }
 
 func (es EventStore) RehydrateAggregate(kind string, body []byte) (Typer, error) {
-	return RehydrateAggregate(es.factory, es.codec, es.upcaster, kind, body)
+	return RehydrateAggregate(es.aggregateFactory, es.codec, es.upcaster, kind, body)
 }
 
 func (es EventStore) RehydrateEvent(kind string, body []byte) (Typer, error) {
-	return RehydrateEvent(es.factory, es.codec, es.upcaster, kind, body)
+	return RehydrateEvent(es.eventFactory, es.codec, es.upcaster, kind, body)
 }
 
 // Save saves the events of the aggregater into the event store
@@ -337,7 +342,7 @@ type ForgetRequest struct {
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
 	fun := func(kind string, body []byte) ([]byte, error) {
-		e, err := es.factory.New(kind)
+		e, err := es.eventFactory.New(kind)
 		if err != nil {
 			return nil, err
 		}

@@ -80,8 +80,11 @@ type EsRepository struct {
 	snapshotsCollectionName string
 }
 
+// NewStore creates a new instance of MongoEsRepository
 func NewStore(connString string, dbName string, opts ...StoreOption) (*EsRepository, error) {
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -90,19 +93,23 @@ func NewStore(connString string, dbName string, opts ...StoreOption) (*EsReposit
 	return NewStoreDB(client, dbName, opts...), nil
 }
 
-// NewMongoEsRepositoryDB creates a new instance of MongoEsRepository
-func NewStoreDB(client *mongo.Client, dbName string, options ...StoreOption) *EsRepository {
+// NewStoreDB creates a new instance of MongoEsRepository
+func NewStoreDB(client *mongo.Client, dbName string, opts ...StoreOption) *EsRepository {
 	r := &EsRepository{
 		dbName:                  dbName,
 		client:                  client,
 		eventsCollectionName:    defaultEventsCollection,
 		snapshotsCollectionName: defaultSnapshotsCollection,
 	}
-	for _, o := range options {
+	for _, o := range opts {
 		o(r)
 	}
 
 	return r
+}
+
+func (r *EsRepository) Close(ctx context.Context) {
+	r.client.Disconnect(ctx)
 }
 
 func (r *EsRepository) collection(coll string) *mongo.Collection {
@@ -159,6 +166,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 					AggregateIDHash:  doc.AggregateIDHash,
 					AggregateVersion: doc.AggregateVersion,
 					AggregateType:    doc.AggregateType,
+					IdempotencyKey:   doc.IdempotencyKey,
 					Kind:             d.Kind,
 					Body:             d.Body,
 					Labels:           doc.Labels,
@@ -264,7 +272,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 }
 
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
-	filter := bson.D{{"idempotency_key", idempotencyKey}, {"aggregate_type", aggregateID}}
+	filter := bson.D{{"aggregate_id", aggregateID}, {"idempotency_key", idempotencyKey}}
 	opts := options.FindOne().SetProjection(bson.D{{"_id", 1}})
 	evt := Event{}
 	if err := r.eventsCollection().FindOne(ctx, filter, opts).Decode(&evt); err != nil {

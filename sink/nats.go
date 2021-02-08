@@ -12,39 +12,30 @@ import (
 )
 
 type NatsSink struct {
-	topic         string
-	client        stan.Conn
-	partitions    uint32
-	stanClusterID string
-	clientID      string
-	codec         Codec
-	options       []stan.Option
+	topic      string
+	client     stan.Conn
+	partitions uint32
+	codec      Codec
 }
 
 // NewNatsSink instantiate PulsarSink
-func NewNatsSink(topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) *NatsSink {
-	return &NatsSink{
-		topic:         topic,
-		partitions:    partitions,
-		stanClusterID: stanClusterID,
-		clientID:      clientID,
-		options:       options,
-		codec:         JsonCodec{},
+func NewNatsSink(topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) (*NatsSink, error) {
+	p := &NatsSink{
+		topic:      topic,
+		partitions: partitions,
+		codec:      JsonCodec{},
 	}
+
+	c, err := stan.Connect(stanClusterID, clientID, options...)
+	if err != nil {
+		return nil, faults.Errorf("Could not instantiate Nats connection: %w", err)
+	}
+	p.client = c
+	return p, nil
 }
 
 func (p *NatsSink) SetCodec(codec Codec) {
 	p.codec = codec
-}
-
-// Init starts the feed
-func (p *NatsSink) Init() error {
-	c, err := stan.Connect(p.stanClusterID, p.clientID, p.options...)
-	if err != nil {
-		return faults.Errorf("Could not instantiate Nats connection: %w", err)
-	}
-	p.client = c
-	return nil
 }
 
 // Close releases resources blocking until

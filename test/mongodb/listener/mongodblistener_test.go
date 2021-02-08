@@ -20,8 +20,6 @@ import (
 	"github.com/quintans/faults"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type MockSink struct {
@@ -164,16 +162,9 @@ func TestMongoListenere(t *testing.T) {
 				log.Fatal(err)
 			}
 			defer tearDown()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			client, err := mongo.Connect(ctx, options.Client().ApplyURI(tmg.DBURL))
+			repository, err := mongodb.NewStore(tmg.DBURL, tmg.DBName)
 			require.NoError(t, err)
-			defer func() {
-				client.Disconnect(ctx)
-				cancel()
-			}()
-
-			repository := mongodb.NewStoreDB(client, tmg.DBName)
-			require.NoError(t, err)
+			defer repository.Close(context.Background())
 
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -181,11 +172,11 @@ func TestMongoListenere(t *testing.T) {
 			partitions := partitionSize(tt.partitionSlots)
 			mockSink := NewMockSink(partitions)
 
-			ctx, cancel = context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(context.Background())
 			feeding(ctx, t, partitions, tt.partitionSlots, mockSink)
 			time.Sleep(100 * time.Millisecond)
 
-			es := eventstore.NewEventStore(repository, 3, test.StructFactory{})
+			es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{}, test.EventFactory{})
 
 			id := uuid.New().String()
 			acc := test.CreateAccount("Paulo", id, 100)

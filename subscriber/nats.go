@@ -6,10 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/stan.go"
-	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/projection"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/faults"
@@ -25,10 +23,8 @@ func WithMessageCodec(codec sink.Codec) Option {
 }
 
 type NatsSubscriber struct {
-	queue        *nats.Conn
 	stream       stan.Conn
-	topic        string
-	managerTopic string
+	topicResumer projection.StreamResumer
 	messageCodec sink.Codec
 }
 
@@ -36,19 +32,10 @@ func NewNatsSubscriber(
 	ctx context.Context,
 	addresses string,
 	stanClusterID,
-	clientIDPrefix string,
-	topic,
-	managerTopic string,
+	clientID string,
+	topicResumer projection.StreamResumer,
 	options ...Option,
 ) (*NatsSubscriber, error) {
-	nc, err := nats.Connect(addresses)
-	if err != nil {
-		return nil, faults.Errorf("Could not instantiate NATS client: %w", err)
-	}
-
-	// since we are not using durable subscriptions we randomize the client
-	clientID := clientIDPrefix + "-" + uuid.New().String()
-
 	stream, err := stan.Connect(stanClusterID, clientID, stan.NatsURL(addresses))
 	if err != nil {
 		return nil, faults.Errorf("Could not instantiate NATS stream connection: %w", err)
@@ -56,15 +43,12 @@ func NewNatsSubscriber(
 
 	go func() {
 		<-ctx.Done()
-		nc.Close()
 		stream.Close()
 	}()
 
 	s := &NatsSubscriber{
-		queue:        nc,
 		stream:       stream,
-		topic:        topic,
-		managerTopic: managerTopic,
+		topicResumer: topicResumer,
 		messageCodec: sink.JsonCodec{},
 	}
 
@@ -75,17 +59,12 @@ func NewNatsSubscriber(
 	return s, nil
 }
 
-func (s NatsSubscriber) GetQueue() *nats.Conn {
-	return s.queue
-}
-
 func (s NatsSubscriber) GetStream() stan.Conn {
 	return s.stream
 }
 
-func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition uint32) (string, error) {
+func (s NatsSubscriber) GetResumeToken(ctx context.Context, topic string) (string, error) {
 	ch := make(chan uint64)
-	topic := common.TopicWithPartition(s.topic, partition)
 	sub, err := s.stream.Subscribe(topic, func(m *stan.Msg) {
 		ch <- m.Sequence
 	}, stan.StartWithLastReceived())
@@ -103,39 +82,77 @@ func (s NatsSubscriber) GetResumeToken(ctx context.Context, partition uint32) (s
 	return strconv.FormatUint(sequence, 10), nil
 }
 
-func (s NatsSubscriber) StartConsumer(ctx context.Context, partition uint32, resumeToken string, projection projection.Projection, aggregateTypes []string) (chan struct{}, error) {
-	logger := log.WithField("partition", partition)
-	start := stan.DeliverAllAvailable()
-	var seq uint64
-	if resumeToken != "" {
-		var err error
-		seq, err = strconv.ParseUint(resumeToken, 10, 64)
-		if err != nil {
-			return nil, faults.Errorf("unable to parse resume token %s: %w", resumeToken, err)
-		}
-		start = stan.StartAtSequence(seq)
+func (s NatsSubscriber) StartConsumer(ctx context.Context, resume projection.StreamResume, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) (chan struct{}, error) {
+	logger := log.WithField("topic", resume.Topic)
+	opts := projection.ConsumerOptions{}
+	for _, v := range options {
+		v(&opts)
 	}
-	topic := common.TopicWithPartition(s.topic, partition)
-	logger = logger.WithField("topic", topic)
-	sub, err := s.stream.Subscribe(topic, func(m *stan.Msg) {
-		if seq >= m.Sequence {
-			// ignore seq
-			return
+	var token string
+	// if no token is found start form the last one
+	start := stan.StartWithLastReceived()
+	var key string
+	var resumers chan uint64
+	if resume.Stream != "" {
+		key = resume.String()
+		resumers = make(chan uint64, 100)
+		var err error
+		token, err = s.topicResumer.GetStreamResumeToken(ctx, key)
+		if err != nil {
+			return nil, faults.Errorf("Could not retrieve resume token for %s: %w", key, err)
 		}
-		e, err := s.messageCodec.Decode(m.Data)
+		if token == "" {
+			logger.Infof("Starting consuming all available [token key: %s]", key)
+			start = stan.DeliverAllAvailable()
+		} else {
+			logger.Infof("Starting consuming from %s [token key: %s]", token, key)
+			seq, err := strconv.ParseUint(token, 10, 64)
+			if err != nil {
+				return nil, faults.Errorf("unable to parse resume token %s: %w", token, err)
+			}
+			start = stan.StartAtSequence(seq)
+		}
+	} else {
+		logger.Info("Starting consuming from the last received")
+	}
+
+	sub, err := s.stream.Subscribe(resume.Topic, func(m *stan.Msg) {
+		evt, err := s.messageCodec.Decode(m.Data)
 		if err != nil {
 			logger.WithError(err).Errorf("unable to unmarshal event '%s'", string(m.Data))
-		}
-		if !in(e.AggregateType, aggregateTypes...) {
-			// ignore
 			return
 		}
-		logger.Debugf("Handling received event '%+v'", e)
-		err = projection.Handler(ctx, e)
-		if err != nil {
-			logger.WithError(err).Errorf("Error when handling event with ID '%s'", e.ID)
+		if !opts.Filter(evt) {
+			// ignore
+			if err = m.Ack(); err != nil {
+				logger.WithError(err).Errorf("failed to ACK ignored msg: %d", m.Sequence)
+				return
+			}
+			if resumers != nil {
+				resumers <- m.Sequence
+			}
+			return
 		}
-	}, start, stan.MaxInflight(1))
+		logger.Debugf("Handling received event '%+v'", evt)
+		err = handler(ctx, evt)
+		if err != nil {
+			logger.WithError(err).Errorf("Error when handling event with ID '%s'", evt.ID)
+			return
+		}
+		if err := m.Ack(); err != nil {
+			logger.WithError(err).Errorf("failed to ACK msg: %d", m.Sequence)
+			return
+		}
+
+		if resumers != nil {
+			resumers <- m.Sequence
+		}
+	},
+		start,
+		stan.MaxInflight(1),
+		stan.SetManualAckMode(),
+		stan.AckWait(30*time.Second), // TODO: make it configurable
+	)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
@@ -143,24 +160,73 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, partition uint32, res
 	stopped := make(chan struct{})
 	go func() {
 		<-ctx.Done()
+		close(resumers)
 		sub.Close()
 		close(stopped)
-		logger.Infof("Stoping handling events for %s", projection.GetName())
 	}()
+
+	if resumers != nil {
+		go func() {
+			for seq := range resumers {
+				err := s.topicResumer.SetStreamResumeToken(ctx, key, strconv.FormatUint(seq, 10))
+				if err != nil {
+					logger.WithError(err).Errorf("Failed to set the resume token for %s", key)
+				}
+			}
+		}()
+	}
 
 	return stopped, nil
 }
 
-func in(test string, values ...string) bool {
-	for _, v := range values {
-		if v == test {
-			return true
-		}
+type ProjectionOption func(*NatsProjectionSubscriber)
+
+func WithProjectionMessageCodec(codec sink.Codec) ProjectionOption {
+	return func(r *NatsProjectionSubscriber) {
+		r.messageCodec = codec
 	}
-	return false
 }
 
-func (s NatsSubscriber) ListenCancelProjection(ctx context.Context, canceller projection.Canceller) error {
+type NatsProjectionSubscriber struct {
+	queue        *nats.Conn
+	managerTopic string
+	messageCodec sink.Codec
+}
+
+func NewNatsProjectionSubscriber(
+	ctx context.Context,
+	addresses string,
+	managerTopic string,
+	options ...ProjectionOption,
+) (*NatsProjectionSubscriber, error) {
+	nc, err := nats.Connect(addresses)
+	if err != nil {
+		return nil, faults.Errorf("Could not instantiate NATS client: %w", err)
+	}
+
+	go func() {
+		<-ctx.Done()
+		nc.Close()
+	}()
+
+	s := &NatsProjectionSubscriber{
+		queue:        nc,
+		managerTopic: managerTopic,
+		messageCodec: sink.JsonCodec{},
+	}
+
+	for _, o := range options {
+		o(s)
+	}
+
+	return s, nil
+}
+
+func (s NatsProjectionSubscriber) GetQueue() *nats.Conn {
+	return s.queue
+}
+
+func (s NatsProjectionSubscriber) ListenCancelProjection(ctx context.Context, canceller projection.Canceller) error {
 	logger := log.WithField("topic", s.managerTopic)
 	sub, err := s.queue.Subscribe(s.managerTopic, func(msg *nats.Msg) {
 		n := projection.Notification{}
@@ -192,7 +258,7 @@ func (s NatsSubscriber) ListenCancelProjection(ctx context.Context, canceller pr
 	return nil
 }
 
-func (s NatsSubscriber) CancelProjection(ctx context.Context, projectionName string, listenerCount int) error {
+func (s NatsProjectionSubscriber) CancelProjection(ctx context.Context, projectionName string, listenerCount int) error {
 	log.WithField("projection", projectionName).Info("Cancelling projection")
 
 	payload, err := json.Marshal(projection.Notification{

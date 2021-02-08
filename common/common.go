@@ -21,3 +21,12 @@ func Hash(s string) uint32 {
 	h.Write([]byte(s))
 	return h.Sum32()
 }
+
+func In(test string, values ...string) bool {
+	for _, v := range values {
+		if v == test {
+			return true
+		}
+	}
+	return false
+}

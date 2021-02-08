@@ -31,9 +31,28 @@ type Event struct {
 	AggregateType    string    `db:"aggregate_type"`
 	Kind             string    `db:"kind"`
 	Body             []byte    `db:"body"`
-	IdempotencyKey   string    `db:"idempotency_key"`
+	IdempotencyKey   NilString `db:"idempotency_key"`
 	Labels           []byte    `db:"labels"`
 	CreatedAt        time.Time `db:"created_at"`
+}
+
+// NilString converts nil to empty string
+type NilString string
+
+// Scan implements the Scanner interface.
+func (ns *NilString) Scan(value interface{}) error {
+	if value == nil {
+		*ns = ""
+		return nil
+	}
+
+	switch s := value.(type) {
+	case string:
+		*ns = NilString(s)
+	case []byte:
+		*ns = NilString(s)
+	}
+	return nil
 }
 
 type Snapshot struct {
@@ -90,6 +109,11 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		return "", 0, faults.Wrap(err)
 	}
 
+	var idempotencyKey *string
+	if eRec.IdempotencyKey != "" {
+		idempotencyKey = &eRec.IdempotencyKey
+	}
+
 	version := eRec.Version
 	var id string
 	err = r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
@@ -104,7 +128,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at, aggregate_id_hash)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, eRec.IdempotencyKey, labels, eRec.CreatedAt, int32ring(hash))
+				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, labels, eRec.CreatedAt, int32ring(hash))
 
 			if err != nil {
 				if isPgDup(err) {
@@ -232,19 +256,19 @@ func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql
 }
 
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
-	var exists int
-	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=$1 AND aggregate_type=$2) AS "EXISTS"`, idempotencyKey, aggregateID)
+	var exists bool
+	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE aggregate_id=$1 AND idempotency_key=$2) AS "EXISTS"`, aggregateID, idempotencyKey)
 	if err != nil {
 		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
 	}
-	return exists != 0, nil
+	return exists, nil
 }
 
 func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
-	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", "", request.AggregateID, request.EventKind)
+	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", request.AggregateID, request.EventKind)
 	if err != nil {
 		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
@@ -306,10 +330,9 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error) {
 	var records []eventstore.Event
 	for len(records) < batchSize {
-		args := []interface{}{afterEventID}
 		var query bytes.Buffer
 		query.WriteString("SELECT * FROM events WHERE id > $1 ")
-		args = append(args, afterEventID)
+		args := []interface{}{afterEventID}
 		if trailingLag != time.Duration(0) {
 			safetyMargin := time.Now().UTC().Add(-trailingLag)
 			args = append(args, safetyMargin)

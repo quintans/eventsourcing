@@ -101,7 +101,7 @@ func New(repository player.Repository, options ...Option) Poller {
 	return p
 }
 
-func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler player.EventHandler) error {
+func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler player.EventHandlerFunc) error {
 	var afterEventID string
 	var err error
 	switch startOption.StartFrom() {
@@ -117,7 +117,7 @@ func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handle
 	return p.forward(ctx, afterEventID, handler)
 }
 
-func (p Poller) forward(ctx context.Context, afterEventID string, handler player.EventHandler) error {
+func (p Poller) forward(ctx context.Context, afterEventID string, handler player.EventHandlerFunc) error {
 	wait := p.pollInterval
 	filters := []store.FilterOption{
 		store.WithAggregateTypes(p.aggregateTypes...),

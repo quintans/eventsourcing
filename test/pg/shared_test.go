@@ -111,10 +111,11 @@ func dbSchema() error {
 		idempotency_key VARCHAR (50),
 		labels JSONB NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
-		UNIQUE (aggregate_id, aggregate_version)
+		UNIQUE (aggregate_id, aggregate_version),
+		UNIQUE (aggregate_id, idempotency_key)
 	);
 	CREATE INDEX aggregate_idx ON events (aggregate_id, aggregate_version);
-	CREATE INDEX idempotency_key_idx ON events (idempotency_key, aggregate_id);
+	CREATE INDEX idempotency_key_idx ON events (aggregate_id, idempotency_key);
 	CREATE INDEX labels_idx ON events USING GIN (labels jsonb_path_ops);
 
 	CREATE TABLE IF NOT EXISTS snapshots(

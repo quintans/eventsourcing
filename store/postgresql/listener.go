@@ -124,7 +124,7 @@ func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	return p.forward(ctx, afterEventID, sinker.Sink)
 }
 
-func (p Feed) forward(ctx context.Context, afterEventID string, handler player.EventHandler) error {
+func (p Feed) forward(ctx context.Context, afterEventID string, handler player.EventHandlerFunc) error {
 	lastID := afterEventID
 	for {
 		conn, err := p.pool.Acquire(ctx)
@@ -185,7 +185,7 @@ func (p Feed) forward(ctx context.Context, afterEventID string, handler player.E
 	}
 }
 
-func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string, handler player.EventHandler) (lastID string, retry bool, err error) {
+func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string, handler player.EventHandlerFunc) (lastID string, retry bool, err error) {
 	defer conn.Release()
 
 	log.Infof("Listening for PostgreSQL notifications on channel %s starting at %s", p.channel, thresholdID)

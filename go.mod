@@ -4,6 +4,7 @@ go 1.15
 
 require (
 	github.com/docker/go-connections v0.4.0
+	github.com/elastic/go-elasticsearch/v7 v7.10.0
 	github.com/go-redis/redis/v8 v8.4.0
 	github.com/golang-migrate/migrate/v4 v4.11.0
 	github.com/golang/protobuf v1.4.2
@@ -27,5 +28,3 @@ require (
 	google.golang.org/protobuf v1.25.0
 	gotest.tools v0.0.0-20181223230014-1083505acf35
 )
-
-replace github.com/quintans/toolkit => ../toolkit

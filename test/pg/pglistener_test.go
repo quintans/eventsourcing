@@ -73,7 +73,7 @@ func TestPgListenere(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	es := eventstore.NewEventStore(repository, 3, test.StructFactory{})
+	es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{}, test.EventFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)

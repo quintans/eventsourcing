@@ -146,3 +146,44 @@ func ParseSlot(slot string) (PartitionSlot, error) {
 	}
 	return s, nil
 }
+
+type Task struct {
+	run    func(ctx context.Context) (<-chan struct{}, error)
+	cancel context.CancelFunc
+	done   <-chan struct{}
+	mu     sync.RWMutex
+}
+
+func NewTask(run func(ctx context.Context) (<-chan struct{}, error)) *Task {
+	return &Task{
+		run: run,
+	}
+}
+
+func (t *Task) Run(ctx context.Context) error {
+	ctx2, cancel := context.WithCancel(ctx)
+
+	ch, err := t.run(ctx2)
+	if err != nil {
+		cancel()
+		return err
+	}
+
+	t.mu.Lock()
+	t.cancel = cancel
+	t.done = ch
+	t.mu.Unlock()
+
+	return nil
+}
+
+func (t *Task) Cancel() {
+	t.mu.Lock()
+	if t.cancel != nil {
+		t.cancel()
+	}
+	// wait for the closing subscriber
+	<-t.done
+
+	t.mu.Unlock()
+}

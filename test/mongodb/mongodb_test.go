@@ -35,17 +35,20 @@ func connect() (*mongo.Database, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, DBName)
-	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
+	r, err := mongodb.NewStore(DBURL, DBName)
+	require.NoError(t, err)
+	defer r.Close(context.Background())
+
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err := es.Save(ctx, acc)
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc)
+	err = es.Save(ctx, acc, eventstore.WithIdempotencyKey("idempotency-key"))
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
@@ -81,6 +84,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "Account", evts[0].AggregateType)
 	assert.Equal(t, id, evt.AggregateID)
 	assert.Equal(t, uint32(1), evt.AggregateVersion)
+	assert.Equal(t, "idempotency-key", evts[1].IdempotencyKey)
 
 	a, err := es.GetByID(ctx, id)
 	require.NoError(t, err)
@@ -90,18 +94,28 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 	assert.Equal(t, uint32(4), acc2.GetEventsCounter())
+
+	found, err := es.HasIdempotencyKey(ctx, acc.ID, "idempotency-key")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	acc.Deposit(5)
+	err = es.Save(ctx, acc, eventstore.WithIdempotencyKey("idempotency-key"))
+	require.Error(t, err)
 }
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, DBName)
-	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
+	r, err := mongodb.NewStore(DBURL, DBName)
+	require.NoError(t, err)
+	defer r.Close(context.Background())
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Withdraw(5)
-	err := es.Save(ctx, acc)
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc)
@@ -110,7 +124,9 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r = mongodb.NewStoreDB(client, DBName)
+	r, err = mongodb.NewStore(DBURL, DBName)
+	require.NoError(t, err)
+	defer r.Close(context.Background())
 	lm := poller.New(r)
 
 	done := make(chan struct{})
@@ -148,14 +164,16 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, DBName)
-	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
+	r, err := mongodb.NewStore(DBURL, DBName)
+	require.NoError(t, err)
+	defer r.Close(context.Background())
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err := es.Save(ctx, acc)
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc)
@@ -164,7 +182,9 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository := mongodb.NewStoreDB(client, DBName)
+	repository, err := mongodb.NewStore(DBURL, DBName)
+	require.NoError(t, err)
+	defer r.Close(context.Background())
 	p := poller.New(repository, poller.WithAggregateTypes("Account"))
 
 	done := make(chan struct{})
@@ -197,14 +217,16 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, DBName)
-	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
+	r, err := mongodb.NewStore(DBURL, DBName)
+	require.NoError(t, err)
+	defer r.Close(context.Background())
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err := es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "EU"}))
+	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "EU"}))
 	require.NoError(t, err)
 	acc.Deposit(5)
 	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "US"}))
@@ -214,7 +236,9 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository := mongodb.NewStoreDB(client, DBName)
+	repository, err := mongodb.NewStore(DBURL, DBName)
+	require.NoError(t, err)
+	defer r.Close(context.Background())
 	p := poller.New(repository, poller.WithLabel("geo", "EU"))
 
 	done := make(chan struct{})
@@ -247,15 +271,17 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r := mongodb.NewStoreDB(client, DBName)
-	es := eventstore.NewEventStore(r, 3, test.StructFactory{})
+	r, err := mongodb.NewStore(DBURL, DBName)
+	require.NoError(t, err)
+	defer r.Close(context.Background())
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err := es.Save(ctx, acc)
+	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
 	acc.Withdraw(15)
