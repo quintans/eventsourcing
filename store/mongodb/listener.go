@@ -110,12 +110,6 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		}
 		eventDoc := data.FullDocument
 
-		// check if the event is to be forwarded to the sinker
-		p := common.WhichPartition(eventDoc.AggregateIDHash, m.partitions)
-		if p < m.partitionsLow || p > m.partitionsHi {
-			continue
-		}
-
 		for k, d := range eventDoc.Details {
 			event := eventstore.Event{
 				ID:               common.NewMessageID(eventDoc.ID, uint8(k)),

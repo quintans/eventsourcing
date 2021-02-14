@@ -108,7 +108,7 @@ func dbSchema(cli *mongo.Client) error {
 				},
 				{
 					{"key", bson.D{
-						{"aggregate_id", 1},
+						{"aggregate_type", 1},
 						{"idempotency_key", 1},
 					}},
 					{"name", "idx_idempotency_aggregate"},

@@ -87,7 +87,8 @@ func WithLabels(labels store.Labels) Option {
 
 func New(repository player.Repository, options ...Option) Poller {
 	p := Poller{
-		pollInterval: player.TrailingLag,
+		pollInterval: 200 * time.Millisecond,
+		trailingLag:  player.TrailingLag,
 		limit:        20,
 		store:        repository,
 	}

@@ -110,13 +110,12 @@ func dbSchema() error {
 		body bytea NOT NULL,
 		idempotency_key VARCHAR (50),
 		labels JSONB NOT NULL,
-		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
-		UNIQUE (aggregate_id, aggregate_version),
-		UNIQUE (aggregate_id, idempotency_key)
+		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP
 	);
-	CREATE INDEX aggregate_idx ON events (aggregate_id, aggregate_version);
-	CREATE INDEX idempotency_key_idx ON events (aggregate_id, idempotency_key);
-	CREATE INDEX labels_idx ON events USING GIN (labels jsonb_path_ops);
+	CREATE INDEX aggregate_id_idx ON events (aggregate_id);
+	CREATE UNIQUE INDEX aggregate_id_ver_idx ON events (aggregate_id, aggregate_version);
+	CREATE UNIQUE INDEX aggregate_idempot_idx ON events (aggregate_type, idempotency_key);
+	CREATE UNIQUE INDEX labels_idx ON events USING GIN (labels jsonb_path_ops);
 
 	CREATE TABLE IF NOT EXISTS snapshots(
 		id VARCHAR (50) PRIMARY KEY,

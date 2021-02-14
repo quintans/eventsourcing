@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	TrailingLag = 200 * time.Millisecond
+	TrailingLag = 250 * time.Millisecond
 )
 
 type Replayer interface {

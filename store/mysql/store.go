@@ -1,4 +1,4 @@
-package postgresql
+package mysql
 
 import (
 	"bytes"
@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
-	"github.com/lib/pq"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/store"
@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	driverName        = "postgres"
-	pgUniqueViolation = "23505"
+	driverName      = "mysql"
+	uniqueViolation = 1062
 )
 
 // Event is the event data stored in the database
@@ -128,7 +128,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 			hash := common.Hash(eRec.AggregateID)
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at, aggregate_id_hash)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, labels, eRec.CreatedAt, int32ring(hash))
 
 			if err != nil {
@@ -175,13 +175,13 @@ func int32ring(x uint32) int32 {
 }
 
 func isDup(err error) bool {
-	pgerr, ok := err.(*pq.Error)
-	return ok && pgerr.Code == pgUniqueViolation
+	me, ok := err.(*mysql.MySQLError)
+	return ok && me.Number == uniqueViolation
 }
 
 func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventstore.Snapshot, error) {
 	snap := Snapshot{}
-	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
+	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = ? ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err == sql.ErrNoRows {
 			return eventstore.Snapshot{}, nil
 		}
@@ -215,10 +215,10 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Sna
 
 func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
 	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = $1")
+	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = ?")
 	args := []interface{}{aggregateID}
 	if snapVersion > -1 {
-		query.WriteString(" AND e.aggregate_version > $2")
+		query.WriteString(" AND e.aggregate_version > ?")
 		args = append(args, snapVersion)
 	}
 	query.WriteString(" ORDER BY aggregate_version ASC")
@@ -254,7 +254,7 @@ func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql
 
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType, idempotencyKey string) (bool, error) {
 	var exists bool
-	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=$1 AND idempotency_key=$2) AS "EXISTS"`, aggregateType, idempotencyKey)
+	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=? AND idempotency_key=?) AS "EXISTS"`, aggregateType, idempotencyKey)
 	if err != nil {
 		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
 	}
@@ -265,7 +265,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
-	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", request.AggregateID, request.EventKind)
+	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = ? AND kind = ?", request.AggregateID, request.EventKind)
 	if err != nil {
 		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
@@ -275,7 +275,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, "UPDATE events SET body = $1 WHERE ID = $2", body, evt.ID)
+		_, err = r.db.ExecContext(ctx, "UPDATE events SET body = ? WHERE ID = ?", body, evt.ID)
 		if err != nil {
 			return faults.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
 		}
@@ -283,7 +283,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 
 	// forget snapshots
 	snaps := []Snapshot{}
-	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1", request.AggregateID); err != nil {
+	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = ?", request.AggregateID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
 		}
@@ -295,7 +295,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequ
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, "UPDATE snapshots SET body = $1 WHERE ID = $2", body, snap.ID)
+		_, err = r.db.ExecContext(ctx, "UPDATE snapshots SET body = ? WHERE ID = ?", body, snap.ID)
 		if err != nil {
 			return faults.Errorf("Unable to forget snapshot ID %s: %w", snap.ID, err)
 		}
@@ -311,7 +311,7 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 	if trailingLag != time.Duration(0) {
 		safetyMargin := time.Now().UTC().Add(-trailingLag)
 		args = append(args, safetyMargin)
-		query.WriteString("created_at <= $1 ")
+		query.WriteString("created_at <= ? ")
 	}
 	args = buildFilter(filter, &query, args)
 	query.WriteString(" ORDER BY id DESC LIMIT 1")
@@ -328,12 +328,12 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batch
 	var records []eventstore.Event
 	for len(records) < batchSize {
 		var query bytes.Buffer
-		query.WriteString("SELECT * FROM events WHERE id > $1 ")
+		query.WriteString("SELECT * FROM events WHERE id > ? ")
 		args := []interface{}{afterEventID}
 		if trailingLag != time.Duration(0) {
 			safetyMargin := time.Now().UTC().Add(-trailingLag)
 			args = append(args, safetyMargin)
-			query.WriteString("AND created_at <= $2 ")
+			query.WriteString("AND created_at <= ? ")
 		}
 		args = buildFilter(filter, &query, args)
 		query.WriteString(" ORDER BY id ASC")
@@ -364,19 +364,18 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 				query.WriteString(" OR ")
 			}
 			args = append(args, v)
-			query.WriteString(fmt.Sprintf("aggregate_type = $%d", len(args)))
+			query.WriteString("aggregate_type = ?")
 		}
 		query.WriteString(")")
 	}
 
 	if filter.Partitions > 1 {
-		size := len(args)
 		if filter.PartitionLow == filter.PartitionHi {
 			args = append(args, filter.Partitions, filter.PartitionLow-1)
-			query.WriteString(fmt.Sprintf(" AND MOD(aggregate_id_hash, $%d) = $%d", size+1, size+2))
+			query.WriteString(" AND MOD(aggregate_id_hash, ?) = ?")
 		} else {
 			args = append(args, filter.Partitions, filter.PartitionLow-1, filter.PartitionHi-1)
-			query.WriteString(fmt.Sprintf(" AND MOD(aggregate_id_hash, $%d) BETWEEN $%d AND $%d", size+1, size+2, size+4))
+			query.WriteString(" AND MOD(aggregate_id_hash, ?) BETWEEN ? AND ?")
 		}
 	}
 
@@ -389,7 +388,7 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 					query.WriteString(" OR ")
 				}
 				v = escape(v)
-				query.WriteString(fmt.Sprintf(`labels  @> '{"%s": "%s"}'`, k, v))
+				query.WriteString(fmt.Sprintf(`JSON_EXTRACT(labels, "$.%s") = "%s"'`, k, v))
 				query.WriteString(")")
 			}
 		}
