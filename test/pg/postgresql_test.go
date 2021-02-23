@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -20,7 +21,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func connect(dburl string) (*sqlx.DB, error) {
+const (
+	aggregateType = "Account"
+)
+
+func connect() (*sqlx.DB, error) {
+	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
+
 	db, err := sqlx.Open("postgres", dburl)
 	if err != nil {
 		return nil, err
@@ -33,7 +40,7 @@ func connect(dburl string) (*sqlx.DB, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
+	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
@@ -51,7 +58,7 @@ func TestSaveAndGet(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := connect(dbURL)
+	db, err := connect()
 	require.NoError(t, err)
 	count := 0
 	err = db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
@@ -67,7 +74,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "MoneyDeposited", evts[2].Kind)
 	assert.Equal(t, "MoneyDeposited", evts[3].Kind)
 	assert.Equal(t, "idempotency-key", string(evts[3].IdempotencyKey))
-	assert.Equal(t, "Account", evts[0].AggregateType)
+	assert.Equal(t, aggregateType, evts[0].AggregateType)
 	assert.Equal(t, id, evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
 
@@ -80,7 +87,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status)
 	assert.Equal(t, uint32(4), acc2.GetEventsCounter())
 
-	found, err := es.HasIdempotencyKey(ctx, acc.ID, "idempotency-key")
+	found, err := es.HasIdempotencyKey(ctx, aggregateType, "idempotency-key")
 	require.NoError(t, err)
 	require.True(t, found)
 
@@ -91,7 +98,7 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
+	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
@@ -108,7 +115,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbURL)
+	repository, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 	lm := poller.New(repository)
 
@@ -147,7 +154,7 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
+	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
@@ -164,9 +171,9 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbURL)
+	repository, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
-	p := poller.New(repository, poller.WithAggregateTypes("Account"))
+	p := poller.New(repository, poller.WithAggregateTypes(aggregateType))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
@@ -198,7 +205,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
+	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
@@ -216,7 +223,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := postgresql.NewStore(dbURL)
+	repository, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 	p := poller.New(repository, poller.WithLabel("geo", "EU"))
 
@@ -250,7 +257,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbURL)
+	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
 
@@ -270,7 +277,7 @@ func TestForget(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := connect(dbURL)
+	db, err := connect()
 	require.NoError(t, err)
 	evts := []encoding.Json{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
@@ -338,7 +345,7 @@ func TestForget(t *testing.T) {
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
-	r, _ := postgresql.NewStore(dbURL)
+	r, _ := postgresql.NewStore(dbConfig)
 	es := eventstore.NewEventStore(r, 50, test.AggregateFactory{}, test.EventFactory{})
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()

@@ -12,10 +12,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var (
-	DBURL string
-)
-
 const (
 	DBName        = "eventstore"
 	CollSnapshots = "snapshots"
@@ -30,7 +26,7 @@ func Setup(dockerComposePath string) (func(), error) {
 		return nil, err
 	}
 
-	DBURL = fmt.Sprintf("mongodb://localhost:27017/%s?replicaSet=rs0", DBName)
+	DBURL := fmt.Sprintf("mongodb://localhost:27017/%s?replicaSet=rs0", DBName)
 
 	opts := options.Client().ApplyURI(DBURL)
 	client, err := mongo.Connect(ctx, opts)

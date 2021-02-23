@@ -1,4 +1,4 @@
-package mysql
+package wal
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/sink"
-	"github.com/quintans/eventstore/store/mysql"
+	"github.com/quintans/eventstore/store/postgresql"
 	"github.com/quintans/eventstore/test"
 	"github.com/quintans/faults"
 	"github.com/stretchr/testify/require"
@@ -20,7 +20,7 @@ import (
 )
 
 func TestListener(t *testing.T) {
-	repository, err := mysql.NewStore(dbConfig)
+	repository, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 
 	quit := make(chan os.Signal, 1)
@@ -28,7 +28,7 @@ func TestListener(t *testing.T) {
 
 	es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{}, test.EventFactory{})
 
-	s := test.NewMockSink(0)
+	s := test.NewMockSink(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	feeding(ctx, s)
 	time.Sleep(200 * time.Millisecond)
@@ -40,15 +40,16 @@ func TestListener(t *testing.T) {
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(time.Second)
 	events := s.GetEvents()
 	assert.Equal(t, 3, len(events), "event size")
 	assert.Equal(t, "AccountCreated", events[0].Kind)
 	assert.Equal(t, "MoneyDeposited", events[1].Kind)
 	assert.Equal(t, "MoneyDeposited", events[2].Kind)
 
-	cancel()
 	time.Sleep(time.Second)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
 
 	ctx, cancel = context.WithCancel(context.Background())
 	feeding(ctx, s)
@@ -57,20 +58,20 @@ func TestListener(t *testing.T) {
 	id = uuid.New().String()
 	acc = test.CreateAccount("Quintans", id, 100)
 	acc.Deposit(30)
-	// acc.Withdraw(5)
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(time.Second)
 	events = s.GetEvents()
 	assert.Equal(t, 5, len(events), "event size")
 
 	cancel()
+	time.Sleep(100 * time.Millisecond)
 }
 
 func feeding(ctx context.Context, sinker sink.Sinker) {
 	done := make(chan struct{})
-	listener := mysql.NewFeed(dbConfig)
+	listener := postgresql.NewFeedLogRepl(dbConfig)
 	go func() {
 		close(done)
 		err := listener.Feed(ctx, sinker)

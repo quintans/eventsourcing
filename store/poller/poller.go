@@ -1,9 +1,11 @@
 package poller
 
 import (
+	"bytes"
 	"context"
 	"time"
 
+	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
@@ -153,11 +155,20 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 // Feed forwars the handling to a sink.
 // eg: a message queue
 func (p Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
-	afterEventID, _, err := store.LastEventIDInSink(ctx, sinker, p.partitionsLow, p.partitionsHi)
+	var afterEventID []byte
+	err := store.LastEventIDInSink(ctx, sinker, p.partitionsLow, p.partitionsHi, func(resumeToken []byte) error {
+		if bytes.Compare(resumeToken, afterEventID) > 0 {
+			afterEventID = resumeToken
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
 	log.Println("Starting to feed from event ID:", afterEventID)
-	return p.forward(ctx, afterEventID, sinker.Sink)
+	return p.forward(ctx, string(afterEventID), func(ctx context.Context, e eventstore.Event) error {
+		e.ResumeToken = []byte(e.ID)
+		return sinker.Sink(ctx, e)
+	})
 }

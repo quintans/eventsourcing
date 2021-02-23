@@ -1,4 +1,4 @@
-package mysql
+package wal
 
 import (
 	"context"
@@ -10,20 +10,21 @@ import (
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/jmoiron/sqlx"
+	"github.com/jackc/pgconn"
 	_ "github.com/lib/pq"
-	"github.com/quintans/eventstore/store/mysql"
+	"github.com/quintans/eventstore/store/postgresql"
+	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 var (
-	dbConfig = mysql.DBConfig{
-		Database: "eventstore",
+	dbConfig = postgresql.DBConfig{
+		Database: "pglogrepl",
 		Host:     "localhost",
-		Port:     3306,
-		Username: "root",
-		Password: "example",
+		Port:     5432,
+		Username: "pglogrepl",
+		Password: "secret",
 	}
 )
 
@@ -48,24 +49,29 @@ func setup() (func(), error) {
 
 	tearDown, err := bootstrapDbContainer(ctx)
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	return tearDown, nil
 }
 
 func bootstrapDbContainer(ctx context.Context) (func(), error) {
-	tcpPort := strconv.Itoa(dbConfig.Port)
+	tcpPort := strconv.Itoa(5432)
 	natPort := nat.Port(tcpPort)
 
 	req := testcontainers.ContainerRequest{
-		Image:        "mariadb:10.2",
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context: ".",
+		},
+		// Image:        "postgres:12.3",
 		ExposedPorts: []string{tcpPort + "/tcp"},
 		Env: map[string]string{
-			"MYSQL_ROOT_PASSWORD": dbConfig.Password,
-			"MYSQL_DATABASE":      dbConfig.Database,
+			"POSTGRES_USER":     "root",
+			"POSTGRES_PASSWORD": "postgres",
+			"POSTGRES_DB":       dbConfig.Database,
+			"PG_REP_USER":       dbConfig.Username,
+			"PG_REP_PASSWORD":   dbConfig.Password,
 		},
-		Cmd:        []string{"--log-bin", "--binlog-format=ROW"},
 		WaitingFor: wait.ForListeningPort(natPort),
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -73,7 +79,7 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 		Started:          true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	tearDown := func() {
@@ -83,35 +89,35 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	ip, err := container.Host(ctx)
 	if err != nil {
 		tearDown()
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
 		tearDown()
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()
 
-	dbURL := fmt.Sprintf("%s:%s@(%s:%s)/%s", dbConfig.Username, dbConfig.Password, ip, port.Port(), dbConfig.Database)
-	err = dbSchema(dbURL)
+	err = dbSchema(dbConfig)
 	if err != nil {
 		tearDown()
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	return tearDown, nil
 }
 
-func dbSchema(dbURL string) error {
-	db, err := sqlx.Connect("mysql", dbURL)
+func dbSchema(config postgresql.DBConfig) error {
+	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?replication=database&sslmode=disable", config.Username, config.Password, config.Host, config.Port, config.Database)
+	conn, err := pgconn.Connect(context.Background(), dburl)
 	if err != nil {
-		return err
+		return faults.Errorf("failed to connect %s: %w", dburl, err)
 	}
-	defer db.Close()
+	defer conn.Close(context.Background())
 
-	cmds := []string{
+	sqls := []string{
 		`CREATE TABLE IF NOT EXISTS events(
 			id VARCHAR (50) PRIMARY KEY,
 			aggregate_id VARCHAR (50) NOT NULL,
@@ -119,31 +125,33 @@ func dbSchema(dbURL string) error {
 			aggregate_version INTEGER NOT NULL,
 			aggregate_type VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
-			body VARBINARY(60000) NOT NULL,
+			body bytea NOT NULL,
 			idempotency_key VARCHAR (50),
-			labels JSON NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)ENGINE=innodb;`,
-		`CREATE UNIQUE INDEX agg_id_ver_idx ON events(aggregate_id, aggregate_version);`,
-		`CREATE UNIQUE INDEX agg_idempot_idx ON events(aggregate_type, idempotency_key);`,
-		`CREATE INDEX agg_id_idx ON events(aggregate_id);`,
-
+			labels JSONB NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP
+		);`,
+		`CREATE INDEX evt_agg_id_idx ON events (aggregate_id);`,
+		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
+		`CREATE UNIQUE INDEX evt_agg_idempot_uk ON events (aggregate_type, idempotency_key);`,
+		`CREATE INDEX evt_labels_idx ON events USING GIN (labels jsonb_path_ops);`,
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,
 			aggregate_id VARCHAR (50) NOT NULL,
 			aggregate_version INTEGER NOT NULL,
 			aggregate_type VARCHAR (50) NOT NULL,
-			body VARBINARY(60000) NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			body bytea NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 			FOREIGN KEY (id) REFERENCES events (id)
-		)ENGINE=innodb;`,
-		`CREATE INDEX agg_id_idx ON snapshots(aggregate_id);`,
+		);`,
+		`CREATE INDEX snap_agg_id_idx ON snapshots (aggregate_id);`,
+		`CREATE PUBLICATION events_pub FOR TABLE events WITH (publish = 'insert');`,
 	}
 
-	for _, cmd := range cmds {
-		_, err := db.Exec(cmd)
+	for _, s := range sqls {
+		result := conn.Exec(context.Background(), s)
+		_, err := result.ReadAll()
 		if err != nil {
-			return fmt.Errorf("failed to execute '%s': %w", cmd, err)
+			return faults.Errorf("failed to execute %s: %w", s, err)
 		}
 	}
 

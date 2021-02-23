@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -19,13 +20,22 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var codec = eventstore.JSONCodec{}
+var (
+	codec = eventstore.JSONCodec{}
+
+	dbConfig = mongodb.DBConfig{
+		Database: DBName,
+		Host:     "localhost",
+		Port:     27017,
+	}
+)
 
 // creates a independent connection
 func connect() (*mongo.Database, error) {
-	ctx := context.Background()
-	opts := options.Client().ApplyURI(DBURL)
-	client, err := mongo.Connect(ctx, opts)
+	connString := fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", dbConfig.Host, dbConfig.Port, dbConfig.Database)
+
+	opts := options.Client().ApplyURI(connString)
+	client, err := mongo.Connect(context.Background(), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +45,7 @@ func connect() (*mongo.Database, error) {
 
 func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
-	r, err := mongodb.NewStore(DBURL, DBName)
+	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
@@ -106,7 +116,7 @@ func TestSaveAndGet(t *testing.T) {
 
 func TestPollListener(t *testing.T) {
 	ctx := context.Background()
-	r, err := mongodb.NewStore(DBURL, DBName)
+	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
@@ -124,7 +134,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r, err = mongodb.NewStore(DBURL, DBName)
+	r, err = mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	lm := poller.New(r)
@@ -164,7 +174,7 @@ func TestPollListener(t *testing.T) {
 
 func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
-	r, err := mongodb.NewStore(DBURL, DBName)
+	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
@@ -182,7 +192,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mongodb.NewStore(DBURL, DBName)
+	repository, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(repository, poller.WithAggregateTypes("Account"))
@@ -217,7 +227,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
-	r, err := mongodb.NewStore(DBURL, DBName)
+	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
@@ -236,7 +246,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mongodb.NewStore(DBURL, DBName)
+	repository, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(repository, poller.WithLabel("geo", "EU"))
@@ -271,7 +281,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 func TestForget(t *testing.T) {
 	ctx := context.Background()
-	r, err := mongodb.NewStore(DBURL, DBName)
+	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})

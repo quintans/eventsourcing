@@ -11,7 +11,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
@@ -24,11 +24,12 @@ import (
 const resumeTokenSep = ":"
 
 type Feed struct {
+	config        DBConfig
 	eventsTable   string
-	canal         *canal.Canal
 	partitions    uint32
 	partitionsLow uint32
 	partitionsHi  uint32
+	flavour       string
 }
 
 type FeedOption func(*FeedOptions)
@@ -64,14 +65,14 @@ func WithFlavour(flavour string) FeedOption {
 }
 
 type DBConfig struct {
-	Name     string
+	Database string
 	Host     string
 	Port     int
 	Username string
 	Password string
 }
 
-func NewFeed(config DBConfig, opts ...FeedOption) (Feed, error) {
+func NewFeed(config DBConfig, opts ...FeedOption) Feed {
 	options := FeedOptions{
 		eventsTable: "events",
 		flavour:     "mariadb",
@@ -80,78 +81,72 @@ func NewFeed(config DBConfig, opts ...FeedOption) (Feed, error) {
 		o(&options)
 	}
 
-	cfg := canal.NewDefaultConfig()
-	cfg.Addr = fmt.Sprintf("%s:%d", config.Host, config.Port)
-	cfg.User = config.Username
-	cfg.Password = config.Password
-	cfg.HeartbeatPeriod = 200 * time.Millisecond
-	cfg.ReadTimeout = 300 * time.Millisecond
-	cfg.Flavor = options.flavour
-	cfg.Dump.TableDB = config.Name
-	cfg.Dump.Tables = []string{options.eventsTable}
-	cfg.Dump.ExecutionPath = ""
-	// cfg.Dump.Where = `"id='0'"`
-
-	cfg.IncludeTableRegex = []string{".*\\." + options.eventsTable}
-
-	c, err := canal.NewCanal(cfg)
-	if err != nil {
-		return Feed{}, faults.Wrap(err)
-	}
-
-	feed := Feed{
+	return Feed{
+		config:        config,
 		eventsTable:   options.eventsTable,
 		partitions:    options.partitions,
 		partitionsLow: options.partitionsLow,
 		partitionsHi:  options.partitionsHi,
-		canal:         c,
+		flavour:       options.flavour,
 	}
-
-	return feed, nil
-}
-
-type FeedEvent struct {
-	ID               string        `db:"column:id"`
-	AggregateID      string        `db:"column:aggregate_id"`
-	AggregateIDHash  uint32        `db:"column:aggregate_id_hash"`
-	AggregateVersion uint32        `db:"column:aggregate_version"`
-	AggregateType    string        `db:"column:aggregate_type"`
-	Kind             string        `db:"column:kind"`
-	Body             encoding.Json `db:"column:body"`
-	IdempotencyKey   string        `db:"column:idempotency_key"`
-	Labels           encoding.Json `db:"column:labels"`
-	CreatedAt        time.Time     `db:"column:created_at"`
 }
 
 func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
-	_, resumeToken, err := store.LastEventIDInSink(ctx, sinker, m.partitionsLow, m.partitionsHi)
+	var lastResumePosition mysql.Position
+	var lastResumeToken []byte
+	err := store.LastEventIDInSink(ctx, sinker, m.partitionsLow, m.partitionsHi, func(resumeToken []byte) error {
+		p, err := parse(string(resumeToken))
+		if err != nil {
+			return faults.Wrap(err)
+		}
+		if p.Compare(lastResumePosition) > 0 {
+			lastResumePosition = p
+			lastResumeToken = resumeToken
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
-	m.canal.SetEventHandler(&binlogHandler{
+	cfg := canal.NewDefaultConfig()
+	cfg.Addr = fmt.Sprintf("%s:%d", m.config.Host, m.config.Port)
+	cfg.User = m.config.Username
+	cfg.Password = m.config.Password
+	cfg.HeartbeatPeriod = 200 * time.Millisecond
+	cfg.ReadTimeout = 300 * time.Millisecond
+	cfg.Flavor = m.flavour
+	cfg.Dump.ExecutionPath = ""
+	// cfg.Dump.Where = `"id='0'"`
+
+	cfg.IncludeTableRegex = []string{".*\\." + m.eventsTable}
+
+	c, err := canal.NewCanal(cfg)
+	if err != nil {
+		return faults.Wrap(err)
+	}
+	go func() {
+		<-ctx.Done()
+		c.Close()
+	}()
+
+	c.SetEventHandler(&binlogHandler{
 		sinker:          sinker,
-		lastResumeToken: resumeToken,
+		lastResumeToken: lastResumeToken,
+		partitions:      m.partitions,
+		partitionsLow:   m.partitionsLow,
+		partitionsHi:    m.partitionsHi,
 	})
 
-	if len(resumeToken) != 0 {
-		log.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", m.partitionsLow, m.partitionsHi, resumeToken)
-		s := strings.Split(string(resumeToken), resumeTokenSep)
-		pos, err := strconv.ParseUint(s[1], 10, 32)
-		if err != nil {
-			return faults.Errorf("unable to parse '%s' as uint32: %w", s[1], err)
-		}
-		p := mysql.Position{
-			Name: s[0],
-			Pos:  uint32(pos),
-		}
-		err = m.canal.RunFrom(p)
+	if lastResumePosition.Name == "" {
+		log.Infof("Starting feeding (partitions: [%d-%d]) from the beginning???", m.partitionsLow, m.partitionsHi)
+		err = c.Run()
 		if err != nil && errors.Unwrap(err) != context.Canceled {
 			return faults.Errorf("failed to start from: %w", err)
 		}
 	} else {
-		log.Infof("Starting feeding (partitions: [%d-%d]) from the beginning???", m.partitionsLow, m.partitionsHi)
-		err = m.canal.Run()
+		log.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", m.partitionsLow, m.partitionsHi, lastResumePosition)
+		err = c.RunFrom(lastResumePosition)
 		if err != nil && errors.Unwrap(err) != context.Canceled {
 			return faults.Errorf("failed to start from: %w", err)
 		}
@@ -160,9 +155,27 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	return nil
 }
 
-func (m Feed) Close(ctx context.Context) error {
-	m.canal.Close()
-	return nil
+func parse(lastResumeToken string) (mysql.Position, error) {
+	if len(lastResumeToken) == 0 {
+		return mysql.Position{}, nil
+	}
+
+	s := strings.Split(string(lastResumeToken), resumeTokenSep)
+	pos, err := strconv.ParseUint(s[1], 10, 32)
+	if err != nil {
+		return mysql.Position{}, faults.Errorf("unable to parse '%s' as uint32: %w", s[1], err)
+	}
+	return mysql.Position{
+		Name: s[0],
+		Pos:  uint32(pos),
+	}, nil
+}
+
+func format(xid mysql.Position) []byte {
+	if xid.Name == "" {
+		return []byte{}
+	}
+	return []byte(xid.Name + resumeTokenSep + strconv.FormatInt(int64(xid.Pos), 10))
 }
 
 type binlogHandler struct {
@@ -170,6 +183,9 @@ type binlogHandler struct {
 	events                  []eventstore.Event
 	sinker                  sink.Sinker
 	lastResumeToken         []byte
+	partitions              uint32
+	partitionsLow           uint32
+	partitionsHi            uint32
 }
 
 func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
@@ -188,14 +204,25 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 	// base value for canal.InsertAction
 	for i := 0; i < len(e.Rows); i++ {
 		r := rec{row: e.Rows[i], cols: columns}
+		hash := r.getAsUint32("aggregate_id_hash")
+		// we check the first because all the rows are for the same transaction,
+		// and for the same aggregate
+		if i == 0 && h.partitions > 0 {
+			// check if the event is to be forwarded to the sinker
+			part := common.WhichPartition(hash, h.partitions)
+			if part < h.partitionsLow || part > h.partitionsHi {
+				// we exit the loop because all rows are for the same aggregate
+				return nil
+			}
+		}
 		h.events = append(h.events, eventstore.Event{
 			ID:               r.getAsString("id"),
 			AggregateID:      r.getAsString("aggregate_id"),
-			AggregateIDHash:  r.getAsUint32("aggregate_id_hash"),
+			AggregateIDHash:  hash,
 			AggregateVersion: r.getAsUint32("aggregate_version"),
 			AggregateType:    r.getAsString("aggregate_type"),
 			Kind:             r.getAsString("kind"),
-			Body:             []byte(r.getAsString("body")),
+			Body:             r.getAsBytes("body"),
 			IdempotencyKey:   r.getAsString("idempotency_key"),
 			Labels:           r.getAsMap("labels"),
 			CreatedAt:        r.getAsTimeDate("created_at"),
@@ -208,6 +235,10 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 type rec struct {
 	row  []interface{}
 	cols []schema.TableColumn
+}
+
+func (r *rec) getAsBytes(colName string) []byte {
+	return []byte(r.getAsString(colName))
 }
 
 func (r *rec) getAsString(colName string) string {
@@ -261,12 +292,12 @@ func (h *binlogHandler) OnXID(xid mysql.Position) error {
 	for k, event := range h.events {
 		if k == len(h.events)-1 {
 			// we update the resume token on the last event of the transaction
-			h.lastResumeToken = []byte(xid.Name + resumeTokenSep + strconv.FormatInt(int64(xid.Pos), 10))
+			h.lastResumeToken = format(xid)
 		}
 		event.ResumeToken = h.lastResumeToken
 		err := h.sinker.Sink(context.Background(), event)
 		if err != nil {
-			return err
+			return faults.Wrap(err)
 		}
 	}
 

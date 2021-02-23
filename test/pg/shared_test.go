@@ -5,18 +5,27 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/quintans/eventstore/store/postgresql"
+	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 var (
-	dbURL string
+	dbConfig = postgresql.DBConfig{
+		Database: "eventstore",
+		Host:     "localhost",
+		Port:     5432,
+		Username: "postgres",
+		Password: "postgres",
+	}
 )
 
 func TestMain(m *testing.M) {
@@ -43,26 +52,20 @@ func setup() (func(), error) {
 		return nil, err
 	}
 
-	err = dbSchema()
-	if err != nil {
-		tearDown()
-		return nil, err
-	}
-
 	return tearDown, nil
 }
 
 func bootstrapDbContainer(ctx context.Context) (func(), error) {
-	tcpPort := "5432"
+	tcpPort := strconv.Itoa(dbConfig.Port)
 	natPort := nat.Port(tcpPort)
 
 	req := testcontainers.ContainerRequest{
 		Image:        "postgres:12.3",
 		ExposedPorts: []string{tcpPort + "/tcp"},
 		Env: map[string]string{
-			"POSTGRES_USER":     "postgres",
-			"POSTGRES_PASSWORD": "postgres",
-			"POSTGRES_DB":       "eventstore",
+			"POSTGRES_USER":     dbConfig.Username,
+			"POSTGRES_PASSWORD": dbConfig.Password,
+			"POSTGRES_DB":       dbConfig.Database,
 		},
 		WaitingFor: wait.ForListeningPort(natPort),
 	}
@@ -71,7 +74,7 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 		Started:          true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	tearDown := func() {
@@ -81,23 +84,33 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	ip, err := container.Host(ctx)
 	if err != nil {
 		tearDown()
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
 		tearDown()
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
-	dbURL = fmt.Sprintf("postgres://postgres:postgres@%s:%s/eventstore?sslmode=disable", ip, port.Port())
+	dbConfig.Host = ip
+	dbConfig.Port = port.Int()
+
+	err = dbSchema(dbConfig)
+	if err != nil {
+		tearDown()
+		return nil, faults.Wrap(err)
+	}
+
 	return tearDown, nil
 }
 
-func dbSchema() error {
+func dbSchema(dbConfig postgresql.DBConfig) error {
+	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
 	db, err := sqlx.Connect("postgres", dbURL)
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
+	defer db.Close()
 
 	db.MustExec(`
 	CREATE TABLE IF NOT EXISTS events(
@@ -112,10 +125,10 @@ func dbSchema() error {
 		labels JSONB NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP
 	);
-	CREATE INDEX aggregate_id_idx ON events (aggregate_id);
-	CREATE UNIQUE INDEX aggregate_id_ver_idx ON events (aggregate_id, aggregate_version);
-	CREATE UNIQUE INDEX aggregate_idempot_idx ON events (aggregate_type, idempotency_key);
-	CREATE UNIQUE INDEX labels_idx ON events USING GIN (labels jsonb_path_ops);
+	CREATE INDEX evt_agg_id_idx ON events (aggregate_id);
+	CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);
+	CREATE UNIQUE INDEX evt_agg_idempot_uk ON events (aggregate_type, idempotency_key);
+	CREATE INDEX evt_labels_idx ON events USING GIN (labels jsonb_path_ops);
 
 	CREATE TABLE IF NOT EXISTS snapshots(
 		id VARCHAR (50) PRIMARY KEY,
@@ -126,7 +139,7 @@ func dbSchema() error {
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		FOREIGN KEY (id) REFERENCES events (id)
 	);
-	CREATE INDEX aggregate_id_idx ON snapshots (aggregate_id);
+	CREATE INDEX snap_agg_id_idx ON snapshots (aggregate_id);
 	
 	CREATE OR REPLACE FUNCTION notify_event() RETURNS TRIGGER AS $FN$
 		DECLARE 

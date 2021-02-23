@@ -72,6 +72,14 @@ func WithSnapshotsCollection(snapshotsCollection string) StoreOption {
 	}
 }
 
+type DBConfig struct {
+	Database string
+	Host     string
+	Port     int
+	Username string
+	Password string
+}
+
 type EsRepository struct {
 	dbName                  string
 	client                  *mongo.Client
@@ -81,7 +89,9 @@ type EsRepository struct {
 }
 
 // NewStore creates a new instance of MongoEsRepository
-func NewStore(connString string, dbName string, opts ...StoreOption) (*EsRepository, error) {
+func NewStore(config DBConfig, opts ...StoreOption) (*EsRepository, error) {
+	connString := dburl(config)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -90,22 +100,25 @@ func NewStore(connString string, dbName string, opts ...StoreOption) (*EsReposit
 		return nil, faults.Wrap(err)
 	}
 
-	return NewStoreDB(client, dbName, opts...), nil
-}
-
-// NewStoreDB creates a new instance of MongoEsRepository
-func NewStoreDB(client *mongo.Client, dbName string, opts ...StoreOption) *EsRepository {
 	r := &EsRepository{
-		dbName:                  dbName,
+		dbName:                  config.Database,
 		client:                  client,
 		eventsCollectionName:    defaultEventsCollection,
 		snapshotsCollectionName: defaultSnapshotsCollection,
 	}
+
 	for _, o := range opts {
 		o(r)
 	}
 
-	return r
+	return r, nil
+}
+
+func dburl(config DBConfig) string {
+	if config.Password != "" {
+		return fmt.Sprintf("mongodb://%s:%s@%s:%d/%s?replicaSet=rs0", config.Username, config.Password, config.Host, config.Port, config.Database)
+	}
+	return fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", config.Host, config.Port, config.Database)
 }
 
 func (r *EsRepository) Close(ctx context.Context) {
@@ -272,7 +285,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 }
 
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType, idempotencyKey string) (bool, error) {
-	filter := bson.D{{"idempotency_key", aggregateType}, {"idempotency_key", idempotencyKey}}
+	filter := bson.D{{"aggregate_type", aggregateType}, {"idempotency_key", idempotencyKey}}
 	opts := options.FindOne().SetProjection(bson.D{{"_id", 1}})
 	evt := Event{}
 	if err := r.eventsCollection().FindOne(ctx, filter, opts).Decode(&evt); err != nil {

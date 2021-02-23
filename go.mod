@@ -11,8 +11,14 @@ require (
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.1.2
 	github.com/hashicorp/consul/api v1.8.0
+	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
+	github.com/jackc/pgconn v1.6.5-0.20200823013804-5db484908cf7
+	github.com/jackc/pglogrepl v0.0.0-20210109153808-a78a685a0bff
+	github.com/jackc/pgproto3/v2 v2.0.4
+	github.com/jackc/pgx v3.2.0+incompatible
 	github.com/jackc/pgx/v4 v4.8.1
 	github.com/jmoiron/sqlx v1.2.0
+	github.com/kyleconroy/pgoutput v0.1.0
 	github.com/lib/pq v1.7.0
 	github.com/mattn/go-sqlite3 v1.11.0 // indirect
 	github.com/nats-io/nats-server/v2 v2.1.8 // indirect

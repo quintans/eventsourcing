@@ -331,8 +331,8 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	return nil
 }
 
-func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error) {
-	return es.store.HasIdempotencyKey(ctx, aggregateID, idempotencyKey)
+func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateType, idempotencyKey string) (bool, error) {
+	return es.store.HasIdempotencyKey(ctx, aggregateType, idempotencyKey)
 }
 
 type ForgetRequest struct {

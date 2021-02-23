@@ -1,8 +1,10 @@
 package postgresql
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -53,7 +55,7 @@ type Feed struct {
 	play           player.Player
 	repository     player.Repository
 	limit          int
-	pool           *pgxpool.Pool
+	dbURL          string
 	offset         time.Duration
 	channel        string
 	aggregateTypes []string
@@ -81,6 +83,9 @@ func WithOffset(offset time.Duration) FeedOption {
 
 func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 	return func(f *Feed) {
+		if partitions <= 1 {
+			return
+		}
 		f.partitions = partitions
 		f.partitionsLow = partitionsLow
 		f.partitionsHi = partitionsHi
@@ -89,17 +94,13 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 
 // NewFeed instantiates a new PgListener.
 // important:repo should NOT implement lag
-func NewFeed(dbUrl string, repository player.Repository, channel string, options ...FeedOption) (Feed, error) {
-	pool, err := pgxpool.Connect(context.Background(), dbUrl)
-	if err != nil {
-		return Feed{}, faults.Errorf("Unable to connect to '%s': %w", dbUrl, err)
-	}
-
+func NewFeed(config DBConfig, repository player.Repository, channel string, options ...FeedOption) Feed {
+	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", config.Username, config.Password, config.Host, config.Port, config.Database)
 	p := Feed{
 		offset:     player.TrailingLag,
 		limit:      20,
 		repository: repository,
-		pool:       pool,
+		dbURL:      dburl,
 		channel:    channel,
 	}
 
@@ -109,25 +110,37 @@ func NewFeed(dbUrl string, repository player.Repository, channel string, options
 
 	p.play = player.New(repository, player.WithBatchSize(p.limit), player.WithTrailingLag(p.offset))
 
-	return p, nil
+	return p
 }
 
 // Feed will forward messages to the sinker
 // important: sinker.LastMessage should implement lag
 func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
-	afterEventID, _, err := store.LastEventIDInSink(ctx, sinker, p.partitionsLow, p.partitionsHi)
+	afterEventID := []byte{}
+	err := store.LastEventIDInSink(ctx, sinker, p.partitionsLow, p.partitionsHi, func(resumeToken []byte) error {
+		if bytes.Compare(resumeToken, afterEventID) > 0 {
+			afterEventID = resumeToken
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
+	pool, err := pgxpool.Connect(context.Background(), p.dbURL)
+	if err != nil {
+		return faults.Errorf("Unable to connect to '%s': %w", p.dbURL, err)
+	}
+	defer pool.Close()
+
 	log.Println("Starting to feed from event ID:", afterEventID)
-	return p.forward(ctx, afterEventID, sinker.Sink)
+	return p.forward(ctx, pool, string(afterEventID), sinker.Sink)
 }
 
-func (p Feed) forward(ctx context.Context, afterEventID string, handler player.EventHandlerFunc) error {
+func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID string, handler player.EventHandlerFunc) error {
 	lastID := afterEventID
 	for {
-		conn, err := p.pool.Acquire(ctx)
+		conn, err := pool.Acquire(ctx)
 		if err != nil {
 			return faults.Errorf("Error acquiring connection: %w", err)
 		}
@@ -226,6 +239,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		}
 		event := eventstore.Event{
 			ID:               pgEvent.ID,
+			ResumeToken:      []byte(pgEvent.ID),
 			AggregateID:      pgEvent.AggregateID,
 			AggregateIDHash:  pgEvent.AggregateIDHash,
 			AggregateVersion: pgEvent.AggregateVersion,
@@ -241,8 +255,4 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 			return "", false, faults.Errorf("Error handling event %+v: %w", event, err)
 		}
 	}
-}
-
-func (p Feed) Close() {
-	p.pool.Close()
 }

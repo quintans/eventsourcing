@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 
-	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/faults"
 	log "github.com/sirupsen/logrus"
@@ -46,32 +45,26 @@ func (f *Forwarder) Cancel() {
 }
 
 // LastEventIDInSink retrieves the highest event ID and resume token found in the partition range
-func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32) (afterEventID string, resumeToken []byte, err error) {
+func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32, forEach func(resumeToken []byte) error) error {
+	if partitionLow == 0 {
+		partitionHi = 0
+	}
+
 	// looking for the highest message ID in all partitions.
 	// Sending a message to partitions is done synchronously, so we should start from the last successful sent message.
-	if partitionLow == 0 {
-		message, err := sinker.LastMessage(ctx, 0)
+	for i := partitionLow; i <= partitionHi; i++ {
+		message, err := sinker.LastMessage(ctx, i)
 		if err != nil {
-			return "", nil, faults.Errorf("Unable to get the last event ID in sink (unpartitioned): %w", err)
+			return faults.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
 		}
-		if message != nil {
-			afterEventID = message.ID
-			resumeToken = message.ResumeToken
-		}
-	} else {
-		afterEventID = common.MinEventID
-		for i := partitionLow; i <= partitionHi; i++ {
-			message, err := sinker.LastMessage(ctx, i)
+		// highest
+		if message != nil && len(message.ResumeToken) > 0 {
+			err := forEach(message.ResumeToken)
 			if err != nil {
-				return "", nil, faults.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
-			}
-			// highest
-			if message != nil && message.ID > afterEventID {
-				afterEventID = message.ID
-				resumeToken = message.ResumeToken
+				return faults.Wrap(err)
 			}
 		}
 	}
 
-	return
+	return nil
 }

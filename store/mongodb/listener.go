@@ -1,6 +1,7 @@
 package mongodb
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -17,9 +18,9 @@ import (
 )
 
 type Feed struct {
+	connString       string
 	dbName           string
 	eventsCollection string
-	client           *mongo.Client
 	partitions       uint32
 	partitionsLow    uint32
 	partitionsHi     uint32
@@ -44,19 +45,12 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(connString string, dbName string, opts ...FeedOption) (Feed, error) {
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
-	if err != nil {
-		return Feed{}, faults.Errorf("Unable to connect to '%s': %w", connString, err)
-	}
-	return NewFeedDB(client, dbName, opts...)
-}
+func NewFeed(config DBConfig, opts ...FeedOption) (Feed, error) {
+	connString := dburl(config)
 
-func NewFeedDB(client *mongo.Client, dbName string, opts ...FeedOption) (Feed, error) {
 	m := Feed{
-		dbName:           dbName,
-		client:           client,
+		dbName:           config.Database,
+		connString:       connString,
 		eventsCollection: "events",
 	}
 
@@ -71,10 +65,26 @@ type ChangeEvent struct {
 }
 
 func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
-	_, resumeToken, err := store.LastEventIDInSink(ctx, sinker, m.partitionsLow, m.partitionsHi)
+	var lastResumeToken []byte
+	err := store.LastEventIDInSink(ctx, sinker, m.partitionsLow, m.partitionsHi, func(resumeToken []byte) error {
+		if bytes.Compare(resumeToken, lastResumeToken) > 0 {
+			lastResumeToken = resumeToken
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
+
+	ctx2, cancel := context.WithTimeout(ctx, 10*time.Second)
+	client, err := mongo.Connect(ctx2, options.Client().ApplyURI(m.connString))
+	cancel()
+	if err != nil {
+		return faults.Errorf("Unable to connect to '%s': %w", m.connString, err)
+	}
+	defer func() {
+		client.Disconnect(context.Background())
+	}()
 
 	match := bson.D{
 		{"operationType", "insert"},
@@ -86,11 +96,11 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	matchPipeline := bson.D{{Key: "$match", Value: match}}
 	pipeline := mongo.Pipeline{matchPipeline}
 
-	eventsCollection := m.client.Database(m.dbName).Collection(m.eventsCollection)
+	eventsCollection := client.Database(m.dbName).Collection(m.eventsCollection)
 	var eventsStream *mongo.ChangeStream
-	if len(resumeToken) != 0 {
-		log.Infof("Starting feeding (partitions: [%d-%d]) from '%X'", m.partitionsLow, m.partitionsHi, resumeToken)
-		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(resumeToken)))
+	if len(lastResumeToken) != 0 {
+		log.Infof("Starting feeding (partitions: [%d-%d]) from '%X'", m.partitionsLow, m.partitionsHi, lastResumeToken)
+		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -111,9 +121,15 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		eventDoc := data.FullDocument
 
 		for k, d := range eventDoc.Details {
+			if k == len(eventDoc.Details)-1 {
+				// we update the resume token on the last event of the transaction
+				lastResumeToken = []byte(eventsStream.ResumeToken())
+			}
 			event := eventstore.Event{
-				ID:               common.NewMessageID(eventDoc.ID, uint8(k)),
-				ResumeToken:      []byte(eventsStream.ResumeToken()),
+				ID: common.NewMessageID(eventDoc.ID, uint8(k)),
+				// the resume token should be from the last fully completed sinked doc, because it may fail midway.
+				// We should use the last eventID to filter out the ones that were successfully sent.
+				ResumeToken:      lastResumeToken,
 				AggregateID:      eventDoc.AggregateID,
 				AggregateIDHash:  eventDoc.AggregateIDHash,
 				AggregateVersion: eventDoc.AggregateVersion,
@@ -131,8 +147,4 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		}
 	}
 	return nil
-}
-
-func (m Feed) Close(ctx context.Context) error {
-	return m.client.Disconnect(ctx)
 }

@@ -82,16 +82,14 @@ type EsRepository struct {
 	projectorFactory ProjectorFactory
 }
 
-func NewStore(dburl string, options ...StoreOption) (*EsRepository, error) {
+func NewStore(config DBConfig, options ...StoreOption) (*EsRepository, error) {
+	dburl := fmt.Sprintf("%s:%s@(%s:%d)/%s", config.Username, config.Password, config.Host, config.Port, config.Database)
+
 	db, err := sql.Open(driverName, dburl)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	return NewStoreDB(db, options...)
-}
 
-// NewStoreDB creates a new instance of EsRepository
-func NewStoreDB(db *sql.DB, options ...StoreOption) (*EsRepository, error) {
 	dbx := sqlx.NewDb(db, driverName)
 	r := &EsRepository{
 		db: dbx,
@@ -254,7 +252,7 @@ func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql
 
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType, idempotencyKey string) (bool, error) {
 	var exists bool
-	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=? AND idempotency_key=?) AS "EXISTS"`, aggregateType, idempotencyKey)
+	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE aggregate_type=? AND idempotency_key=?) AS "EXISTS"`, aggregateType, idempotencyKey)
 	if err != nil {
 		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
 	}
