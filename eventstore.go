@@ -237,11 +237,11 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 }
 
 func (es EventStore) RehydrateAggregate(kind string, body []byte) (Typer, error) {
-	return rehydrate(es.factory, es.codec, es.upcaster, kind, body, false)
+	return RehydrateAggregate(es.factory, es.codec, es.upcaster, kind, body)
 }
 
 func (es EventStore) RehydrateEvent(kind string, body []byte) (Typer, error) {
-	return rehydrate(es.factory, es.codec, es.upcaster, kind, body, true)
+	return RehydrateEvent(es.factory, es.codec, es.upcaster, kind, body)
 }
 
 // Save saves the events of the aggregater into the event store
