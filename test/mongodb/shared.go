@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/quintans/eventstore/store/mongodb"
 	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"go.mongodb.org/mongo-driver/bson"
@@ -18,12 +19,17 @@ const (
 	CollEvents    = "events"
 )
 
-func Setup(dockerComposePath string) (func(), error) {
-	ctx := context.Background()
+func Setup(dockerComposePath string) (mongodb.DBConfig, func(), error) {
+	dbConfig := mongodb.DBConfig{
+		Database: DBName,
+		Host:     "localhost",
+		Port:     27017,
+	}
 
+	ctx := context.Background()
 	destroy, err := dockerCompose(ctx, dockerComposePath)
 	if err != nil {
-		return nil, err
+		return mongodb.DBConfig{}, nil, err
 	}
 
 	DBURL := fmt.Sprintf("mongodb://localhost:27017/%s?replicaSet=rs0", DBName)
@@ -32,17 +38,17 @@ func Setup(dockerComposePath string) (func(), error) {
 	client, err := mongo.Connect(ctx, opts)
 	if err != nil {
 		destroy()
-		return nil, err
+		return mongodb.DBConfig{}, nil, err
 	}
 	defer client.Disconnect(context.Background())
 
 	err = dbSchema(client)
 	if err != nil {
 		destroy()
-		return nil, err
+		return mongodb.DBConfig{}, nil, err
 	}
 
-	return destroy, nil
+	return dbConfig, destroy, nil
 }
 
 func dockerCompose(ctx context.Context, path string) (func(), error) {

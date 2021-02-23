@@ -22,16 +22,10 @@ import (
 
 var (
 	codec = eventstore.JSONCodec{}
-
-	dbConfig = mongodb.DBConfig{
-		Database: DBName,
-		Host:     "localhost",
-		Port:     27017,
-	}
 )
 
 // creates a independent connection
-func connect() (*mongo.Database, error) {
+func connect(dbConfig mongodb.DBConfig) (*mongo.Database, error) {
 	connString := fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", dbConfig.Host, dbConfig.Port, dbConfig.Database)
 
 	opts := options.Client().ApplyURI(connString)
@@ -44,12 +38,16 @@ func connect() (*mongo.Database, error) {
 }
 
 func TestSaveAndGet(t *testing.T) {
+	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -64,7 +62,7 @@ func TestSaveAndGet(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(time.Second)
 
-	db, err := connect()
+	db, err := connect(dbConfig)
 	require.NoError(t, err)
 
 	count, err := db.Collection(CollSnapshots).CountDocuments(ctx, bson.M{
@@ -115,11 +113,15 @@ func TestSaveAndGet(t *testing.T) {
 }
 
 func TestPollListener(t *testing.T) {
+	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -173,11 +175,15 @@ func TestPollListener(t *testing.T) {
 }
 
 func TestListenerWithAggregateType(t *testing.T) {
+	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -226,11 +232,15 @@ func TestListenerWithAggregateType(t *testing.T) {
 }
 
 func TestListenerWithLabels(t *testing.T) {
+	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -280,11 +290,15 @@ func TestListenerWithLabels(t *testing.T) {
 }
 
 func TestForget(t *testing.T) {
+	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -302,7 +316,7 @@ func TestForget(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := connect()
+	db, err := connect(dbConfig)
 	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id},

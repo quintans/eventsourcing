@@ -3,10 +3,7 @@ package wal
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
 	"strconv"
-	"testing"
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -18,44 +15,15 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-var (
-	dbConfig = postgresql.DBConfig{
+func setup() (postgresql.DBConfig, func(), error) {
+	dbConfig := postgresql.DBConfig{
 		Database: "pglogrepl",
 		Host:     "localhost",
 		Port:     5432,
 		Username: "pglogrepl",
 		Password: "secret",
 	}
-)
 
-func TestMain(m *testing.M) {
-	tearDown, err := setup()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// test run
-	var code int
-	func() {
-		defer tearDown()
-		code = m.Run()
-	}()
-
-	os.Exit(code)
-}
-
-func setup() (func(), error) {
-	ctx := context.Background()
-
-	tearDown, err := bootstrapDbContainer(ctx)
-	if err != nil {
-		return nil, faults.Wrap(err)
-	}
-
-	return tearDown, nil
-}
-
-func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	tcpPort := strconv.Itoa(5432)
 	natPort := nat.Port(tcpPort)
 
@@ -74,12 +42,13 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 		},
 		WaitingFor: wait.ForListeningPort(natPort),
 	}
+	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	if err != nil {
-		return nil, faults.Wrap(err)
+		return postgresql.DBConfig{}, nil, faults.Wrap(err)
 	}
 
 	tearDown := func() {
@@ -89,12 +58,12 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	ip, err := container.Host(ctx)
 	if err != nil {
 		tearDown()
-		return nil, faults.Wrap(err)
+		return postgresql.DBConfig{}, nil, faults.Wrap(err)
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
 		tearDown()
-		return nil, faults.Wrap(err)
+		return postgresql.DBConfig{}, nil, faults.Wrap(err)
 	}
 
 	dbConfig.Host = ip
@@ -103,10 +72,10 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	err = dbSchema(dbConfig)
 	if err != nil {
 		tearDown()
-		return nil, faults.Wrap(err)
+		return postgresql.DBConfig{}, nil, faults.Wrap(err)
 	}
 
-	return tearDown, nil
+	return dbConfig, tearDown, nil
 }
 
 func dbSchema(config postgresql.DBConfig) error {

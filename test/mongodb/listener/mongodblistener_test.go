@@ -21,12 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var dbConfig = mongodb.DBConfig{
-	Database: tmg.DBName,
-	Host:     "localhost",
-	Port:     27017,
-}
-
 type slot struct {
 	low  uint32
 	high uint32
@@ -76,10 +70,8 @@ func TestMongoListenere(t *testing.T) {
 
 	for _, tt := range testcases {
 		t.Run(tt.name, func(t *testing.T) {
-			tearDown, err := tmg.Setup("../docker-compose.yaml")
-			if err != nil {
-				log.Fatal(err)
-			}
+			dbConfig, tearDown, err := tmg.Setup("../docker-compose.yaml")
+			require.NoError(t, err)
 			defer tearDown()
 
 			repository, err := mongodb.NewStore(dbConfig)
@@ -93,10 +85,10 @@ func TestMongoListenere(t *testing.T) {
 			mockSink := test.NewMockSink(partitions)
 
 			ctx, cancel := context.WithCancel(context.Background())
-			feeding(ctx, t, partitions, tt.partitionSlots, mockSink)
+			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
 			time.Sleep(200 * time.Millisecond)
 
-			es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{}, test.EventFactory{})
+			es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{})
 
 			id := uuid.New().String()
 			acc := test.CreateAccount("Paulo", id, 100)
@@ -119,7 +111,7 @@ func TestMongoListenere(t *testing.T) {
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			feeding(ctx, t, partitions, tt.partitionSlots, mockSink)
+			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
 			time.Sleep(200 * time.Millisecond)
 
 			events = mockSink.GetEvents()
@@ -144,7 +136,7 @@ func TestMongoListenere(t *testing.T) {
 
 			// connecting
 			ctx, cancel = context.WithCancel(context.Background())
-			feeding(ctx, t, partitions, tt.partitionSlots, mockSink)
+			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
 			time.Sleep(200 * time.Millisecond)
 
 			events = mockSink.GetEvents()
@@ -160,7 +152,7 @@ func TestMongoListenere(t *testing.T) {
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			feeding(ctx, t, partitions, tt.partitionSlots, mockSink)
+			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
 			time.Sleep(200 * time.Millisecond)
 
 			events = mockSink.GetEvents()
@@ -184,7 +176,7 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, t *testing.T, partitions uint32, slots []slot, sinker sink.Sinker) {
+func feeding(ctx context.Context, t *testing.T, dbConfig mongodb.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) {
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)

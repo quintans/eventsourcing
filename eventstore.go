@@ -150,18 +150,16 @@ type EventStore struct {
 	store             EsRepository
 	snapshotThreshold uint32
 	upcaster          Upcaster
-	aggregateFactory  Factory
-	eventFactory      Factory
+	factory           Factory
 	codec             Codec
 }
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, snapshotThreshold uint32, aggregateFactory Factory, eventFactory Factory, options ...EsOptions) EventStore {
+func NewEventStore(repo EsRepository, snapshotThreshold uint32, factory Factory, options ...EsOptions) EventStore {
 	es := EventStore{
 		store:             repo,
 		snapshotThreshold: snapshotThreshold,
-		aggregateFactory:  aggregateFactory,
-		eventFactory:      eventFactory,
+		factory:           factory,
 		codec:             JSONCodec{},
 	}
 	for _, v := range options {
@@ -239,11 +237,11 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 }
 
 func (es EventStore) RehydrateAggregate(kind string, body []byte) (Typer, error) {
-	return RehydrateAggregate(es.aggregateFactory, es.codec, es.upcaster, kind, body)
+	return rehydrate(es.factory, es.codec, es.upcaster, kind, body, false)
 }
 
 func (es EventStore) RehydrateEvent(kind string, body []byte) (Typer, error) {
-	return RehydrateEvent(es.eventFactory, es.codec, es.upcaster, kind, body)
+	return rehydrate(es.factory, es.codec, es.upcaster, kind, body, true)
 }
 
 // Save saves the events of the aggregater into the event store
@@ -342,7 +340,7 @@ type ForgetRequest struct {
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
 	fun := func(kind string, body []byte) ([]byte, error) {
-		e, err := es.eventFactory.New(kind)
+		e, err := es.factory.New(kind)
 		if err != nil {
 			return nil, err
 		}

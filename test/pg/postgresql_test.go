@@ -25,7 +25,7 @@ const (
 	aggregateType = "Account"
 )
 
-func connect() (*sqlx.DB, error) {
+func connect(dbConfig postgresql.DBConfig) (*sqlx.DB, error) {
 	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
 
 	db, err := sqlx.Open("postgres", dburl)
@@ -39,10 +39,14 @@ func connect() (*sqlx.DB, error) {
 }
 
 func TestSaveAndGet(t *testing.T) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -58,7 +62,7 @@ func TestSaveAndGet(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := connect()
+	db, err := connect(dbConfig)
 	require.NoError(t, err)
 	count := 0
 	err = db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = $1", id)
@@ -97,10 +101,14 @@ func TestSaveAndGet(t *testing.T) {
 }
 
 func TestPollListener(t *testing.T) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -153,10 +161,14 @@ func TestPollListener(t *testing.T) {
 }
 
 func TestListenerWithAggregateType(t *testing.T) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -204,10 +216,14 @@ func TestListenerWithAggregateType(t *testing.T) {
 }
 
 func TestListenerWithLabels(t *testing.T) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -256,10 +272,14 @@ func TestListenerWithLabels(t *testing.T) {
 }
 
 func TestForget(t *testing.T) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(t, err)
+	defer tearDown()
+
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -277,7 +297,7 @@ func TestForget(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := connect()
+	db, err := connect(dbConfig)
 	require.NoError(t, err)
 	evts := []encoding.Json{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id)
@@ -345,8 +365,12 @@ func TestForget(t *testing.T) {
 }
 
 func BenchmarkDepositAndSave2(b *testing.B) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(b, err)
+	defer tearDown()
+
 	r, _ := postgresql.NewStore(dbConfig)
-	es := eventstore.NewEventStore(r, 50, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(r, 50, test.AggregateFactory{})
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New().String()

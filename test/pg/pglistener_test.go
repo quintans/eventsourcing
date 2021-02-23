@@ -18,6 +18,10 @@ import (
 )
 
 func TestPgListener(t *testing.T) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(t, err)
+	defer tearDown()
+
 	repository, err := postgresql.NewStore(dbConfig)
 	require.NoError(t, err)
 
@@ -37,7 +41,7 @@ func TestPgListener(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)

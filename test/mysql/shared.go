@@ -3,10 +3,7 @@ package mysql
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
 	"strconv"
-	"testing"
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -17,44 +14,15 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-var (
-	dbConfig = mysql.DBConfig{
+func setup() (mysql.DBConfig, func(), error) {
+	dbConfig := mysql.DBConfig{
 		Database: "eventstore",
 		Host:     "localhost",
 		Port:     3306,
 		Username: "root",
 		Password: "example",
 	}
-)
 
-func TestMain(m *testing.M) {
-	tearDown, err := setup()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// test run
-	var code int
-	func() {
-		defer tearDown()
-		code = m.Run()
-	}()
-
-	os.Exit(code)
-}
-
-func setup() (func(), error) {
-	ctx := context.Background()
-
-	tearDown, err := bootstrapDbContainer(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return tearDown, nil
-}
-
-func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	tcpPort := strconv.Itoa(dbConfig.Port)
 	natPort := nat.Port(tcpPort)
 
@@ -68,12 +36,13 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 		Cmd:        []string{"--log-bin", "--binlog-format=ROW"},
 		WaitingFor: wait.ForListeningPort(natPort),
 	}
+	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	if err != nil {
-		return nil, err
+		return mysql.DBConfig{}, nil, err
 	}
 
 	tearDown := func() {
@@ -83,12 +52,12 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	ip, err := container.Host(ctx)
 	if err != nil {
 		tearDown()
-		return nil, err
+		return mysql.DBConfig{}, nil, err
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
 		tearDown()
-		return nil, err
+		return mysql.DBConfig{}, nil, err
 	}
 
 	dbConfig.Host = ip
@@ -98,10 +67,10 @@ func bootstrapDbContainer(ctx context.Context) (func(), error) {
 	err = dbSchema(dbURL)
 	if err != nil {
 		tearDown()
-		return nil, err
+		return mysql.DBConfig{}, nil, err
 	}
 
-	return tearDown, nil
+	return dbConfig, tearDown, nil
 }
 
 func dbSchema(dbURL string) error {

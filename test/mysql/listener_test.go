@@ -20,17 +20,21 @@ import (
 )
 
 func TestListener(t *testing.T) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(t, err)
+	defer tearDown()
+
 	repository, err := mysql.NewStore(dbConfig)
 	require.NoError(t, err)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{}, test.EventFactory{})
+	es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{})
 
 	s := test.NewMockSink(0)
 	ctx, cancel := context.WithCancel(context.Background())
-	feeding(ctx, s)
+	feeding(ctx, dbConfig, s)
 	time.Sleep(200 * time.Millisecond)
 
 	id := uuid.New().String()
@@ -51,7 +55,7 @@ func TestListener(t *testing.T) {
 	time.Sleep(time.Second)
 
 	ctx, cancel = context.WithCancel(context.Background())
-	feeding(ctx, s)
+	feeding(ctx, dbConfig, s)
 	time.Sleep(200 * time.Millisecond)
 
 	id = uuid.New().String()
@@ -68,7 +72,7 @@ func TestListener(t *testing.T) {
 	cancel()
 }
 
-func feeding(ctx context.Context, sinker sink.Sinker) {
+func feeding(ctx context.Context, dbConfig mysql.DBConfig, sinker sink.Sinker) {
 	done := make(chan struct{})
 	listener := mysql.NewFeed(dbConfig)
 	go func() {
