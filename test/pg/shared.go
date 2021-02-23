@@ -9,14 +9,29 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-	"github.com/quintans/eventstore/store/postgresql"
 	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func setup() (postgresql.DBConfig, func(), error) {
-	dbConfig := postgresql.DBConfig{
+type DBConfig struct {
+	Database string
+	Host     string
+	Port     int
+	Username string
+	Password string
+}
+
+func (c DBConfig) ReplicationUrl() string {
+	return c.Url() + "&replication=database"
+}
+
+func (c DBConfig) Url() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", c.Username, c.Password, c.Host, c.Port, c.Database)
+}
+
+func setup() (DBConfig, func(), error) {
+	dbConfig := DBConfig{
 		Database: "eventstore",
 		Host:     "localhost",
 		Port:     5432,
@@ -42,7 +57,7 @@ func setup() (postgresql.DBConfig, func(), error) {
 		Started:          true,
 	})
 	if err != nil {
-		return postgresql.DBConfig{}, nil, faults.Wrap(err)
+		return DBConfig{}, nil, faults.Wrap(err)
 	}
 
 	tearDown := func() {
@@ -52,12 +67,12 @@ func setup() (postgresql.DBConfig, func(), error) {
 	ip, err := container.Host(ctx)
 	if err != nil {
 		tearDown()
-		return postgresql.DBConfig{}, nil, faults.Wrap(err)
+		return DBConfig{}, nil, faults.Wrap(err)
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
 		tearDown()
-		return postgresql.DBConfig{}, nil, faults.Wrap(err)
+		return DBConfig{}, nil, faults.Wrap(err)
 	}
 
 	dbConfig.Host = ip
@@ -66,13 +81,13 @@ func setup() (postgresql.DBConfig, func(), error) {
 	err = dbSchema(dbConfig)
 	if err != nil {
 		tearDown()
-		return postgresql.DBConfig{}, nil, faults.Wrap(err)
+		return DBConfig{}, nil, faults.Wrap(err)
 	}
 
 	return dbConfig, tearDown, nil
 }
 
-func dbSchema(dbConfig postgresql.DBConfig) error {
+func dbSchema(dbConfig DBConfig) error {
 	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
 	db, err := sqlx.Connect("postgres", dbURL)
 	if err != nil {

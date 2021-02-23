@@ -9,13 +9,24 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-	"github.com/quintans/eventstore/store/mysql"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func setup() (mysql.DBConfig, func(), error) {
-	dbConfig := mysql.DBConfig{
+type DBConfig struct {
+	Database string
+	Host     string
+	Port     int
+	Username string
+	Password string
+}
+
+func (c DBConfig) Url() string {
+	return fmt.Sprintf("%s:%s@(%s:%d)/%s", c.Username, c.Password, c.Host, c.Port, c.Database)
+}
+
+func setup() (DBConfig, func(), error) {
+	dbConfig := DBConfig{
 		Database: "eventstore",
 		Host:     "localhost",
 		Port:     3306,
@@ -42,7 +53,7 @@ func setup() (mysql.DBConfig, func(), error) {
 		Started:          true,
 	})
 	if err != nil {
-		return mysql.DBConfig{}, nil, err
+		return DBConfig{}, nil, err
 	}
 
 	tearDown := func() {
@@ -52,12 +63,12 @@ func setup() (mysql.DBConfig, func(), error) {
 	ip, err := container.Host(ctx)
 	if err != nil {
 		tearDown()
-		return mysql.DBConfig{}, nil, err
+		return DBConfig{}, nil, err
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
 		tearDown()
-		return mysql.DBConfig{}, nil, err
+		return DBConfig{}, nil, err
 	}
 
 	dbConfig.Host = ip
@@ -67,7 +78,7 @@ func setup() (mysql.DBConfig, func(), error) {
 	err = dbSchema(dbURL)
 	if err != nil {
 		tearDown()
-		return mysql.DBConfig{}, nil, err
+		return DBConfig{}, nil, err
 	}
 
 	return dbConfig, tearDown, nil

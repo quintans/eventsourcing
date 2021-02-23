@@ -72,14 +72,6 @@ func WithSnapshotsCollection(snapshotsCollection string) StoreOption {
 	}
 }
 
-type DBConfig struct {
-	Database string
-	Host     string
-	Port     int
-	Username string
-	Password string
-}
-
 type EsRepository struct {
 	dbName                  string
 	client                  *mongo.Client
@@ -89,9 +81,7 @@ type EsRepository struct {
 }
 
 // NewStore creates a new instance of MongoEsRepository
-func NewStore(config DBConfig, opts ...StoreOption) (*EsRepository, error) {
-	connString := dburl(config)
-
+func NewStore(connString, database string, opts ...StoreOption) (*EsRepository, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -101,7 +91,7 @@ func NewStore(config DBConfig, opts ...StoreOption) (*EsRepository, error) {
 	}
 
 	r := &EsRepository{
-		dbName:                  config.Database,
+		dbName:                  database,
 		client:                  client,
 		eventsCollectionName:    defaultEventsCollection,
 		snapshotsCollectionName: defaultSnapshotsCollection,
@@ -112,13 +102,6 @@ func NewStore(config DBConfig, opts ...StoreOption) (*EsRepository, error) {
 	}
 
 	return r, nil
-}
-
-func dburl(config DBConfig) string {
-	if config.Password != "" {
-		return fmt.Sprintf("mongodb://%s:%s@%s:%d/%s?replicaSet=rs0", config.Username, config.Password, config.Host, config.Port, config.Database)
-	}
-	return fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", config.Host, config.Port, config.Database)
 }
 
 func (r *EsRepository) Close(ctx context.Context) {

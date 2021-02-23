@@ -25,7 +25,7 @@ const (
 	aggregateType = "Account"
 )
 
-func connect(dbConfig postgresql.DBConfig) (*sqlx.DB, error) {
+func connect(dbConfig DBConfig) (*sqlx.DB, error) {
 	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
 
 	db, err := sqlx.Open("postgres", dburl)
@@ -44,7 +44,7 @@ func TestSaveAndGet(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig)
+	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
@@ -106,7 +106,7 @@ func TestPollListener(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig)
+	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
@@ -123,7 +123,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbConfig)
+	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 	lm := poller.New(repository)
 
@@ -166,7 +166,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig)
+	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
@@ -183,7 +183,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbConfig)
+	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 	p := poller.New(repository, poller.WithAggregateTypes(aggregateType))
 
@@ -221,7 +221,7 @@ func TestListenerWithLabels(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig)
+	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
@@ -239,7 +239,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := postgresql.NewStore(dbConfig)
+	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 	p := poller.New(repository, poller.WithLabel("geo", "EU"))
 
@@ -277,7 +277,7 @@ func TestForget(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig)
+	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
 
@@ -369,7 +369,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 	require.NoError(b, err)
 	defer tearDown()
 
-	r, _ := postgresql.NewStore(dbConfig)
+	r, _ := postgresql.NewStore(dbConfig.Url())
 	es := eventstore.NewEventStore(r, 50, test.AggregateFactory{})
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()

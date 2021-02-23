@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
@@ -92,15 +91,14 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 	}
 }
 
-// NewFeed instantiates a new PgListener.
+// NewFeedListenNotify instantiates a new PgListener.
 // important:repo should NOT implement lag
-func NewFeed(config DBConfig, repository player.Repository, channel string, options ...FeedOption) Feed {
-	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", config.Username, config.Password, config.Host, config.Port, config.Database)
+func NewFeedListenNotify(connString string, repository player.Repository, channel string, options ...FeedOption) Feed {
 	p := Feed{
 		offset:     player.TrailingLag,
 		limit:      20,
 		repository: repository,
-		dbURL:      dburl,
+		dbURL:      connString,
 		channel:    channel,
 	}
 

@@ -22,15 +22,6 @@ import (
 
 const outputPlugin = "pgoutput"
 
-type DBConfig struct {
-	Database string
-	Host     string
-	Port     int
-	Username string
-	Password string
-	SslMode  bool
-}
-
 type FeedLogreplOption func(*FeedLogrepl)
 
 func WithLogRepPartitions(partitions, partitionsLow, partitionsHi uint32) FeedLogreplOption {
@@ -58,13 +49,9 @@ type FeedLogrepl struct {
 	slotName      string
 }
 
-func NewFeedLogRepl(config DBConfig, options ...FeedLogreplOption) FeedLogrepl {
-	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?replication=database", config.Username, config.Password, config.Host, config.Port, config.Database)
-	if !config.SslMode {
-		dburl += "&sslmode=disable"
-	}
+func NewFeed(connString string, options ...FeedLogreplOption) FeedLogrepl {
 	f := FeedLogrepl{
-		dburl:    dburl,
+		dburl:    connString,
 		slotName: "events_pub",
 	}
 

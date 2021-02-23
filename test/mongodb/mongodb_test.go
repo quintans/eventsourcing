@@ -25,7 +25,7 @@ var (
 )
 
 // creates a independent connection
-func connect(dbConfig mongodb.DBConfig) (*mongo.Database, error) {
+func connect(dbConfig DBConfig) (*mongo.Database, error) {
 	connString := fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", dbConfig.Host, dbConfig.Port, dbConfig.Database)
 
 	opts := options.Client().ApplyURI(connString)
@@ -43,7 +43,7 @@ func TestSaveAndGet(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig)
+	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
@@ -118,7 +118,7 @@ func TestPollListener(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig)
+	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
@@ -136,7 +136,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r, err = mongodb.NewStore(dbConfig)
+	r, err = mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	lm := poller.New(r)
@@ -180,7 +180,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig)
+	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
@@ -198,7 +198,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mongodb.NewStore(dbConfig)
+	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(repository, poller.WithAggregateTypes("Account"))
@@ -237,7 +237,7 @@ func TestListenerWithLabels(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig)
+	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
@@ -256,7 +256,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mongodb.NewStore(dbConfig)
+	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(repository, poller.WithLabel("geo", "EU"))
@@ -295,7 +295,7 @@ func TestForget(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig)
+	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})

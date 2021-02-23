@@ -9,14 +9,14 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgconn"
 	_ "github.com/lib/pq"
-	"github.com/quintans/eventstore/store/postgresql"
+	tpg "github.com/quintans/eventstore/test/pg"
 	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func setup() (postgresql.DBConfig, func(), error) {
-	dbConfig := postgresql.DBConfig{
+func setup() (tpg.DBConfig, func(), error) {
+	dbConfig := tpg.DBConfig{
 		Database: "pglogrepl",
 		Host:     "localhost",
 		Port:     5432,
@@ -48,7 +48,7 @@ func setup() (postgresql.DBConfig, func(), error) {
 		Started:          true,
 	})
 	if err != nil {
-		return postgresql.DBConfig{}, nil, faults.Wrap(err)
+		return tpg.DBConfig{}, nil, faults.Wrap(err)
 	}
 
 	tearDown := func() {
@@ -58,12 +58,12 @@ func setup() (postgresql.DBConfig, func(), error) {
 	ip, err := container.Host(ctx)
 	if err != nil {
 		tearDown()
-		return postgresql.DBConfig{}, nil, faults.Wrap(err)
+		return tpg.DBConfig{}, nil, faults.Wrap(err)
 	}
 	port, err := container.MappedPort(ctx, natPort)
 	if err != nil {
 		tearDown()
-		return postgresql.DBConfig{}, nil, faults.Wrap(err)
+		return tpg.DBConfig{}, nil, faults.Wrap(err)
 	}
 
 	dbConfig.Host = ip
@@ -72,13 +72,13 @@ func setup() (postgresql.DBConfig, func(), error) {
 	err = dbSchema(dbConfig)
 	if err != nil {
 		tearDown()
-		return postgresql.DBConfig{}, nil, faults.Wrap(err)
+		return tpg.DBConfig{}, nil, faults.Wrap(err)
 	}
 
 	return dbConfig, tearDown, nil
 }
 
-func dbSchema(config postgresql.DBConfig) error {
+func dbSchema(config tpg.DBConfig) error {
 	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?replication=database&sslmode=disable", config.Username, config.Password, config.Host, config.Port, config.Database)
 	conn, err := pgconn.Connect(context.Background(), dburl)
 	if err != nil {

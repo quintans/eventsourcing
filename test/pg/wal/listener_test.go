@@ -14,6 +14,7 @@ import (
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store/postgresql"
 	"github.com/quintans/eventstore/test"
+	tpg "github.com/quintans/eventstore/test/pg"
 	"github.com/quintans/faults"
 	"github.com/stretchr/testify/require"
 	"gotest.tools/assert"
@@ -24,7 +25,7 @@ func TestListener(t *testing.T) {
 	require.NoError(t, err)
 	defer tearDown()
 
-	repository, err := postgresql.NewStore(dbConfig)
+	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 
 	quit := make(chan os.Signal, 1)
@@ -73,9 +74,9 @@ func TestListener(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-func feeding(ctx context.Context, dbConfig postgresql.DBConfig, sinker sink.Sinker) {
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) {
 	done := make(chan struct{})
-	listener := postgresql.NewFeedLogRepl(dbConfig)
+	listener := postgresql.NewFeed(dbConfig.ReplicationUrl())
 	go func() {
 		close(done)
 		err := listener.Feed(ctx, sinker)

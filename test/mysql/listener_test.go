@@ -24,7 +24,7 @@ func TestListener(t *testing.T) {
 	require.NoError(t, err)
 	defer tearDown()
 
-	repository, err := mysql.NewStore(dbConfig)
+	repository, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 
 	quit := make(chan os.Signal, 1)
@@ -34,7 +34,14 @@ func TestListener(t *testing.T) {
 
 	s := test.NewMockSink(0)
 	ctx, cancel := context.WithCancel(context.Background())
-	feeding(ctx, dbConfig, s)
+	cfg := mysql.DBConfig{
+		Host:     dbConfig.Host,
+		Port:     dbConfig.Port,
+		Database: dbConfig.Database,
+		Username: dbConfig.Username,
+		Password: dbConfig.Password,
+	}
+	feeding(ctx, cfg, s)
 	time.Sleep(200 * time.Millisecond)
 
 	id := uuid.New().String()
@@ -55,7 +62,7 @@ func TestListener(t *testing.T) {
 	time.Sleep(time.Second)
 
 	ctx, cancel = context.WithCancel(context.Background())
-	feeding(ctx, dbConfig, s)
+	feeding(ctx, cfg, s)
 	time.Sleep(200 * time.Millisecond)
 
 	id = uuid.New().String()

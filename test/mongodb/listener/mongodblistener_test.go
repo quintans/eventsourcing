@@ -74,7 +74,7 @@ func TestMongoListenere(t *testing.T) {
 			require.NoError(t, err)
 			defer tearDown()
 
-			repository, err := mongodb.NewStore(dbConfig)
+			repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 			require.NoError(t, err)
 			defer repository.Close(context.Background())
 
@@ -176,11 +176,11 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, t *testing.T, dbConfig mongodb.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) {
+func feeding(ctx context.Context, t *testing.T, dbConfig tmg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) {
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)
-		listener, err := mongodb.NewFeed(dbConfig, mongodb.WithPartitions(partitions, v.low, v.high))
+		listener, err := mongodb.NewFeed(dbConfig.Url(), dbConfig.Database, mongodb.WithPartitions(partitions, v.low, v.high))
 		require.NoError(t, err)
 		go func() {
 			wg.Done()

@@ -45,11 +45,9 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(config DBConfig, opts ...FeedOption) (Feed, error) {
-	connString := dburl(config)
-
+func NewFeed(connString, database string, opts ...FeedOption) (Feed, error) {
 	m := Feed{
-		dbName:           config.Database,
+		dbName:           database,
 		connString:       connString,
 		eventsCollection: "events",
 	}

@@ -22,13 +22,13 @@ func TestPgListener(t *testing.T) {
 	require.NoError(t, err)
 	defer tearDown()
 
-	repository, err := postgresql.NewStore(dbConfig)
+	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	listener := postgresql.NewFeed(dbConfig, repository, "events_channel")
+	listener := postgresql.NewFeedListenNotify(dbConfig.ReplicationUrl(), repository, "events_channel")
 
 	s := test.NewMockSink(1)
 	ctx, cancel := context.WithCancel(context.Background())

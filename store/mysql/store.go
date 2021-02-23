@@ -82,10 +82,8 @@ type EsRepository struct {
 	projectorFactory ProjectorFactory
 }
 
-func NewStore(config DBConfig, options ...StoreOption) (*EsRepository, error) {
-	dburl := fmt.Sprintf("%s:%s@(%s:%d)/%s", config.Username, config.Password, config.Host, config.Port, config.Database)
-
-	db, err := sql.Open(driverName, dburl)
+func NewStore(connString string, options ...StoreOption) (*EsRepository, error) {
+	db, err := sql.Open(driverName, connString)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
