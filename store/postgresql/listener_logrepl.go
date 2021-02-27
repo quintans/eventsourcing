@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgproto3/v2"
@@ -64,7 +65,7 @@ func NewFeed(connString string, options ...FeedLogreplOption) FeedLogrepl {
 
 func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var lastResumeToken pglogrepl.LSN
-	err := store.LastEventIDInSink(ctx, sinker, f.partitionsLow, f.partitionsHi, func(resumeToken []byte) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, f.partitionsLow, f.partitionsHi, func(resumeToken []byte) error {
 		xLogPos, err := pglogrepl.ParseLSN(string(resumeToken))
 		if err != nil {
 			return faults.Errorf("IdentifySystem failed: %w", err)
@@ -103,67 +104,75 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 
 	set := pgoutput.NewRelationSet()
 
-	for {
-		if time.Now().After(nextStandbyMessageDeadline) {
-			err = pglogrepl.SendStandbyStatusUpdate(ctx, conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
+	// TODO should be configurable
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 10 * time.Second
+
+	return backoff.Retry(func() error {
+		for {
+			if time.Now().After(nextStandbyMessageDeadline) {
+				err = pglogrepl.SendStandbyStatusUpdate(ctx, conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
+				if err != nil {
+					return faults.Errorf("SendStandbyStatusUpdate failed: %w", err)
+				}
+				nextStandbyMessageDeadline = time.Now().Add(standbyMessageTimeout)
+			}
+
+			ctx2, cancel := context.WithDeadline(ctx, nextStandbyMessageDeadline)
+			msg, err := conn.ReceiveMessage(ctx2)
+			cancel()
 			if err != nil {
-				return faults.Errorf("SendStandbyStatusUpdate failed: %w", err)
-			}
-			nextStandbyMessageDeadline = time.Now().Add(standbyMessageTimeout)
-		}
-
-		ctx2, cancel := context.WithDeadline(ctx, nextStandbyMessageDeadline)
-		msg, err := conn.ReceiveMessage(ctx2)
-		cancel()
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return nil
-			}
-			if pgconn.Timeout(err) {
-				continue
-			}
-			return faults.Errorf("ReceiveMessage failed: %w", err)
-		}
-
-		switch msg := msg.(type) {
-		case *pgproto3.CopyData:
-			switch msg.Data[0] {
-			case pglogrepl.PrimaryKeepaliveMessageByteID:
-				pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
-				if err != nil {
-					return faults.Errorf("ParsePrimaryKeepaliveMessage failed: %w", err)
+				if errors.Is(err, context.Canceled) {
+					return backoff.Permanent(err)
 				}
-
-				if pkm.ReplyRequested {
-					nextStandbyMessageDeadline = time.Time{}
-				}
-
-			case pglogrepl.XLogDataByteID:
-				xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
-				if err != nil {
-					return faults.Errorf("ParseXLogData failed: %w", err)
-				}
-
-				clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
-
-				event, err := f.parse(set, xld.WALData)
-				if err != nil {
-					return faults.Wrap(err)
-				}
-				if event == nil {
+				if pgconn.Timeout(err) {
 					continue
 				}
-
-				event.ResumeToken = []byte(clientXLogPos.String())
-				err = sinker.Sink(context.Background(), *event)
-				if err != nil {
-					return faults.Wrap(err)
-				}
+				return faults.Errorf("ReceiveMessage failed: %w", err)
 			}
-		default:
-			log.Printf("Received unexpected message: %#v\n", msg)
+
+			switch msg := msg.(type) {
+			case *pgproto3.CopyData:
+				switch msg.Data[0] {
+				case pglogrepl.PrimaryKeepaliveMessageByteID:
+					pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
+					if err != nil {
+						return faults.Errorf("ParsePrimaryKeepaliveMessage failed: %w", backoff.Permanent(err))
+					}
+
+					if pkm.ReplyRequested {
+						nextStandbyMessageDeadline = time.Time{}
+					}
+
+				case pglogrepl.XLogDataByteID:
+					xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
+					if err != nil {
+						return faults.Errorf("ParseXLogData failed: %w", backoff.Permanent(err))
+					}
+
+					clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
+
+					event, err := f.parse(set, xld.WALData)
+					if err != nil {
+						return faults.Wrap(backoff.Permanent(err))
+					}
+					if event == nil {
+						continue
+					}
+
+					event.ResumeToken = []byte(clientXLogPos.String())
+					err = sinker.Sink(context.Background(), *event)
+					if err != nil {
+						return faults.Wrap(backoff.Permanent(err))
+					}
+				}
+			default:
+				log.Printf("Received unexpected message: %#v\n", msg)
+			}
+
+			b.Reset()
 		}
-	}
+	}, b)
 }
 
 func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventstore.Event, error) {

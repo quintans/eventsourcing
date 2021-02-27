@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
-	log "github.com/sirupsen/logrus"
-
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/encoding"
@@ -18,6 +18,7 @@ import (
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
+	log "github.com/sirupsen/logrus"
 )
 
 type FeedEvent struct {
@@ -115,7 +116,7 @@ func NewFeedListenNotify(connString string, repository player.Repository, channe
 // important: sinker.LastMessage should implement lag
 func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	afterEventID := []byte{}
-	err := store.LastEventIDInSink(ctx, sinker, p.partitionsLow, p.partitionsHi, func(resumeToken []byte) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, p.partitionsLow, p.partitionsHi, func(resumeToken []byte) error {
 		if bytes.Compare(resumeToken, afterEventID) > 0 {
 			afterEventID = resumeToken
 		}
@@ -132,71 +133,73 @@ func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	defer pool.Close()
 
 	log.Println("Starting to feed from event ID:", afterEventID)
-	return p.forward(ctx, pool, string(afterEventID), sinker.Sink)
+
+	// TODO should be configured
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 10 * time.Second
+
+	lastID := string(afterEventID)
+	return backoff.Retry(func() error {
+		var err error
+		lastID, err = p.forward(ctx, pool, lastID, sinker, b)
+		if errors.Is(err, context.Canceled) {
+			return backoff.Permanent(err)
+		}
+		return err
+	}, b)
 }
 
-func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID string, handler player.EventHandlerFunc) error {
+func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID string, sinker sink.Sinker, b backoff.BackOff) (string, error) {
 	lastID := afterEventID
-	for {
-		conn, err := pool.Acquire(ctx)
-		if err != nil {
-			return faults.Errorf("Error acquiring connection: %w", err)
-		}
-		defer conn.Release()
-
-		// start listening for events
-		_, err = conn.Exec(ctx, "listen "+p.channel)
-		if err != nil {
-			return faults.Errorf("Error listening to %s channel: %w", p.channel, err)
-		}
-
-		// replay events applying a safety margin, in case we missed events
-		lastID, err = eventid.DelayEventID(lastID, p.offset)
-		if err != nil {
-			return faults.Errorf("Error offsetting event ID: %w", err)
-		}
-
-		log.Infof("Replaying events from %s", lastID)
-		filters := []store.FilterOption{
-			store.WithAggregateTypes(p.aggregateTypes...),
-			store.WithLabels(p.labels),
-			store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
-		}
-		lastID, err = p.play.Replay(ctx, handler, lastID, filters...)
-		if err != nil {
-			return faults.Errorf("Error replaying events: %w", err)
-		}
-		filter := store.Filter{}
-		for _, f := range filters {
-			f(&filter)
-		}
-		// remaining records due to the safety margin
-		events, err := p.repository.GetEvents(ctx, lastID, 0, p.offset, filter)
-		if err != nil {
-			return faults.Errorf("Error getting all events events: %w", err)
-		}
-		for _, event := range events {
-			err = handler(ctx, event)
-			if err != nil {
-				return faults.Errorf("Error handling event %+v: %w", event, err)
-			}
-			lastID = event.ID
-		}
-
-		// applying safety margin for messages inserted out of order - lag
-		var retry bool
-		lastID, retry, err = p.listen(ctx, conn, lastID, handler)
-		if !retry {
-			if err != nil {
-				return faults.Errorf("Error while listening PostgreSQL: %w", err)
-			}
-			return nil
-		}
-		log.Warn("Error waiting for PostgreSQL notification: ", err)
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return lastID, faults.Errorf("Error acquiring connection: %w", err)
 	}
+	defer conn.Release()
+
+	// start listening for events
+	_, err = conn.Exec(ctx, "listen "+p.channel)
+	if err != nil {
+		return lastID, faults.Errorf("Error listening to %s channel: %w", p.channel, err)
+	}
+
+	// replay events applying a safety margin, in case we missed events
+	lastID, err = eventid.DelayEventID(lastID, p.offset)
+	if err != nil {
+		return lastID, faults.Errorf("Error offsetting event ID: %w", backoff.Permanent(err))
+	}
+
+	log.Infof("Replaying events from %s", lastID)
+	filters := []store.FilterOption{
+		store.WithAggregateTypes(p.aggregateTypes...),
+		store.WithLabels(p.labels),
+		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
+	}
+	lastID, err = p.play.Replay(ctx, sinker.Sink, lastID, filters...)
+	if err != nil {
+		return lastID, faults.Errorf("Error replaying events: %w", err)
+	}
+	filter := store.Filter{}
+	for _, f := range filters {
+		f(&filter)
+	}
+	// remaining records due to the safety margin
+	events, err := p.repository.GetEvents(ctx, lastID, 0, p.offset, filter)
+	if err != nil {
+		return lastID, faults.Errorf("Error getting all events events: %w", err)
+	}
+	for _, event := range events {
+		err = sinker.Sink(ctx, event)
+		if err != nil {
+			return lastID, faults.Errorf("Error handling event %+v: %w", event, backoff.Permanent(err))
+		}
+		lastID = event.ID
+	}
+
+	return p.listen(ctx, conn, lastID, sinker, b)
 }
 
-func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string, handler player.EventHandlerFunc) (lastID string, retry bool, err error) {
+func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string, sinker sink.Sinker, b backoff.BackOff) (lastID string, err error) {
 	defer conn.Release()
 
 	log.Infof("Listening for PostgreSQL notifications on channel %s starting at %s", p.channel, thresholdID)
@@ -204,10 +207,10 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		msg, err := conn.Conn().WaitForNotification(ctx)
 		select {
 		case <-ctx.Done():
-			return lastID, false, nil
+			return lastID, backoff.Permanent(context.Canceled)
 		default:
 			if err != nil {
-				return lastID, true, faults.Errorf("Error waiting for notification: %w", err)
+				return lastID, faults.Errorf("Error waiting for notification: %w", err)
 			}
 		}
 
@@ -215,7 +218,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		pgEvent := FeedEvent{}
 		err = json.Unmarshal([]byte(msg.Payload), &pgEvent)
 		if err != nil {
-			return "", false, faults.Errorf("Error unmarshalling Postgresql Event: %w", err)
+			return "", faults.Errorf("Error unmarshalling Postgresql Event: %w", backoff.Permanent(err))
 		}
 		lastID = pgEvent.ID
 
@@ -233,7 +236,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		labels := map[string]interface{}{}
 		err = json.Unmarshal(pgEvent.Labels, &labels)
 		if err != nil {
-			return "", false, faults.Errorf("Unable unmarshal labels to map: %w", err)
+			return "", faults.Errorf("Unable unmarshal labels to map: %w", backoff.Permanent(err))
 		}
 		event := eventstore.Event{
 			ID:               pgEvent.ID,
@@ -248,9 +251,12 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 			Labels:           labels,
 			CreatedAt:        time.Time(pgEvent.CreatedAt),
 		}
-		err = handler(ctx, event)
+
+		err = sinker.Sink(ctx, event)
 		if err != nil {
-			return "", false, faults.Errorf("Error handling event %+v: %w", event, err)
+			return "", faults.Errorf("Error handling event %+v: %w", event, backoff.Permanent(err))
 		}
+
+		b.Reset()
 	}
 }

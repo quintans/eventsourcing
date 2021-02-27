@@ -2,6 +2,7 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -34,7 +35,7 @@ func TestPgListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		err := listener.Feed(ctx, s)
-		if err != nil {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Fatalf("Error feeding #1: %v", err)
 		}
 	}()

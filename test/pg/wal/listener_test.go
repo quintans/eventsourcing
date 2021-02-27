@@ -2,6 +2,7 @@ package wal
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -15,7 +16,6 @@ import (
 	"github.com/quintans/eventstore/store/postgresql"
 	"github.com/quintans/eventstore/test"
 	tpg "github.com/quintans/eventstore/test/pg"
-	"github.com/quintans/faults"
 	"github.com/stretchr/testify/require"
 	"gotest.tools/assert"
 )
@@ -80,9 +80,10 @@ func feeding(ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) {
 	go func() {
 		close(done)
 		err := listener.Feed(ctx, sinker)
-		if err != nil {
-			log.Fatalf("Error feeding on #1: %v", faults.Wrap(err))
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.Fatalf("Error feeding #1: %v", err)
 		}
 	}()
+	// wait for the goroutine to run
 	<-done
 }

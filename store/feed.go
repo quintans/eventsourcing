@@ -44,8 +44,8 @@ func (f *Forwarder) Cancel() {
 	f.sinker.Close()
 }
 
-// LastEventIDInSink retrieves the highest event ID and resume token found in the partition range
-func LastEventIDInSink(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32, forEach func(resumeToken []byte) error) error {
+// ForEachResumeTokenInSinkPartitions retrieves the highest event ID and resume token found in the partition range
+func ForEachResumeTokenInSinkPartitions(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32, forEach func(resumeToken []byte) error) error {
 	if partitionLow == 0 {
 		partitionHi = 0
 	}

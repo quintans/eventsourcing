@@ -3,6 +3,7 @@ module github.com/quintans/eventstore
 go 1.15
 
 require (
+	github.com/cenkalti/backoff/v4 v4.1.0
 	github.com/docker/go-connections v0.4.0
 	github.com/elastic/go-elasticsearch/v7 v7.10.0
 	github.com/go-redis/redis/v8 v8.4.0

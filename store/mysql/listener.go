@@ -3,13 +3,15 @@ package mysql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/sink"
@@ -94,7 +96,7 @@ func NewFeed(config DBConfig, opts ...FeedOption) Feed {
 func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
-	err := store.LastEventIDInSink(ctx, sinker, m.partitionsLow, m.partitionsHi, func(resumeToken []byte) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, m.partitionsLow, m.partitionsHi, func(resumeToken []byte) error {
 		p, err := parse(string(resumeToken))
 		if err != nil {
 			return faults.Wrap(err)
@@ -125,34 +127,57 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	if err != nil {
 		return faults.Wrap(err)
 	}
+
+	var mu sync.Mutex
+	var canalClosed bool
 	go func() {
 		<-ctx.Done()
+		log.Info("closing channel on context cancel...")
+		mu.Lock()
+		canalClosed = true
 		c.Close()
+		mu.Unlock()
 	}()
 
-	c.SetEventHandler(&binlogHandler{
+	// TODO should be configurable
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 10 * time.Second
+
+	blh := &binlogHandler{
 		sinker:          sinker,
 		lastResumeToken: lastResumeToken,
 		partitions:      m.partitions,
 		partitionsLow:   m.partitionsLow,
 		partitionsHi:    m.partitionsHi,
-	})
-
-	if lastResumePosition.Name == "" {
-		log.Infof("Starting feeding (partitions: [%d-%d]) from the beginning???", m.partitionsLow, m.partitionsHi)
-		err = c.Run()
-		if err != nil && errors.Unwrap(err) != context.Canceled {
-			return faults.Errorf("failed to start from: %w", err)
-		}
-	} else {
-		log.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", m.partitionsLow, m.partitionsHi, lastResumePosition)
-		err = c.RunFrom(lastResumePosition)
-		if err != nil && errors.Unwrap(err) != context.Canceled {
-			return faults.Errorf("failed to start from: %w", err)
-		}
+		backoff:         b,
 	}
+	c.SetEventHandler(blh)
 
-	return nil
+	return backoff.Retry(func() error {
+		var err error
+		if lastResumePosition.Name == "" {
+			log.Infof("Starting feeding (partitions: [%d-%d]) from the beginning???", m.partitionsLow, m.partitionsHi)
+			err = c.Run()
+		} else {
+			log.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", m.partitionsLow, m.partitionsHi, lastResumePosition)
+			err = c.RunFrom(lastResumePosition)
+		}
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return backoff.Permanent(faults.Wrap(err))
+			}
+
+			mu.Lock()
+			if canalClosed {
+				mu.Unlock()
+				return nil
+			}
+			mu.Unlock()
+
+			return faults.Wrap(err)
+		}
+		return nil
+	}, b)
 }
 
 func parse(lastResumeToken string) (mysql.Position, error) {
@@ -186,6 +211,7 @@ type binlogHandler struct {
 	partitions              uint32
 	partitionsLow           uint32
 	partitionsHi            uint32
+	backoff                 *backoff.ExponentialBackOff
 }
 
 func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
@@ -195,7 +221,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Print(r, " ", string(debug.Stack()))
+			log.Error(r, " ", string(debug.Stack()))
 		}
 	}()
 
@@ -297,10 +323,11 @@ func (h *binlogHandler) OnXID(xid mysql.Position) error {
 		event.ResumeToken = h.lastResumeToken
 		err := h.sinker.Sink(context.Background(), event)
 		if err != nil {
-			return faults.Wrap(err)
+			return faults.Wrap(backoff.Permanent(err))
 		}
 	}
 
+	h.backoff.Reset()
 	h.events = nil
 	return nil
 }

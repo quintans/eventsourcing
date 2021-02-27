@@ -2,6 +2,7 @@ package listener
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -16,7 +17,6 @@ import (
 	"github.com/quintans/eventstore/store/mongodb"
 	"github.com/quintans/eventstore/test"
 	tmg "github.com/quintans/eventstore/test/mongodb"
-	"github.com/quintans/faults"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -185,10 +185,11 @@ func feeding(ctx context.Context, t *testing.T, dbConfig tmg.DBConfig, partition
 		go func() {
 			wg.Done()
 			err := listener.Feed(ctx, sinker)
-			if err != nil {
-				log.Fatalf("Error feeding on #1: %v", faults.Wrap(err))
+			if err != nil && !errors.Is(err, context.Canceled) {
+				log.Fatalf("Error feeding #1: %v", err)
 			}
 		}()
 	}
+	// wait for all goroutines to run
 	wg.Wait()
 }

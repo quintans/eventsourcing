@@ -156,7 +156,7 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 // eg: a message queue
 func (p Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var afterEventID []byte
-	err := store.LastEventIDInSink(ctx, sinker, p.partitionsLow, p.partitionsHi, func(resumeToken []byte) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, p.partitionsLow, p.partitionsHi, func(resumeToken []byte) error {
 		if bytes.Compare(resumeToken, afterEventID) > 0 {
 			afterEventID = resumeToken
 		}

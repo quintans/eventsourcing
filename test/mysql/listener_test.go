@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -14,7 +15,6 @@ import (
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store/mysql"
 	"github.com/quintans/eventstore/test"
-	"github.com/quintans/faults"
 	"github.com/stretchr/testify/require"
 	"gotest.tools/assert"
 )
@@ -85,8 +85,8 @@ func feeding(ctx context.Context, dbConfig mysql.DBConfig, sinker sink.Sinker) {
 	go func() {
 		close(done)
 		err := listener.Feed(ctx, sinker)
-		if err != nil {
-			log.Fatalf("Error feeding on #1: %v", faults.Wrap(err))
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.Fatalf("Error feeding #1: %v", err)
 		}
 	}()
 	<-done

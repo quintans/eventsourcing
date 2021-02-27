@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/nats-io/stan.go"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
@@ -90,7 +91,18 @@ func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
 
 	topic := common.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
 	logrus.Debugf("publishing '%+v' to topic '%s'", e, topic)
-	err = p.client.Publish(topic, b)
+
+	// TODO should be configurable
+	bo := backoff.NewExponentialBackOff()
+	bo.MaxElapsedTime = 10 * time.Second
+
+	err = backoff.Retry(func() error {
+		err := p.client.Publish(topic, b)
+		if err != nil && p.client.NatsConn().IsClosed() {
+			return backoff.Permanent(err)
+		}
+		return err
+	}, bo)
 	if err != nil {
 		return faults.Errorf("Failed to send message: %w", err)
 	}
