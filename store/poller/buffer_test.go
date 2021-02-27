@@ -7,13 +7,17 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 var (
+	logger = log.NewLogrus(logrus.StandardLogger())
+
 	events1 = []eventstore.Event{
 		{ID: "A", AggregateID: "1", AggregateType: "Test", Kind: "Created", Body: []byte(`{"message":"zero"}`)},
 		{ID: "B", AggregateID: "1", AggregateType: "Test", Kind: "Updated", Body: []byte(`{"message":"one"}`)},
@@ -79,7 +83,7 @@ func TestSingleConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
-	c := NewBufferedPoller(r, WithLimit(2))
+	c := NewBufferedPoller(logger, r, WithLimit(2))
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -128,7 +132,7 @@ func TestBuffer(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		r := NewMockRepo()
-		p := New(r, WithLimit(2))
+		p := New(logger, r, WithLimit(2))
 		c := NewBuffer(p)
 		fastIDs := []string{}
 		slowIDs := []string{}
@@ -170,7 +174,7 @@ func TestSingleLateConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
-	p := New(r, WithLimit(2))
+	p := New(logger, r, WithLimit(2))
 	c := NewBuffer(p)
 	var mu sync.Mutex
 
@@ -213,7 +217,7 @@ func TestLateConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
-	p := New(r, WithLimit(2))
+	p := New(logger, r, WithLimit(2))
 	c := NewBuffer(p)
 	firstIDs := []string{}
 	lateIDs := []string{}
@@ -274,7 +278,7 @@ func TestStopConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
-	p := New(r, WithLimit(2))
+	p := New(logger, r, WithLimit(2))
 	c := NewBuffer(p)
 	var mu sync.Mutex
 
@@ -337,7 +341,7 @@ func TestRestartSingleConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
-	p := New(r, WithLimit(2))
+	p := New(logger, r, WithLimit(2))
 	c := NewBuffer(p)
 	count := []string{}
 	var mu sync.Mutex
@@ -397,7 +401,7 @@ func TestRestartConsumer(t *testing.T) {
 	t.Parallel()
 
 	r := NewMockRepo()
-	p := New(r, WithLimit(2))
+	p := New(logger, r, WithLimit(2))
 	c := NewBuffer(p)
 	var mu sync.Mutex
 

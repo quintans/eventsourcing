@@ -8,10 +8,10 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
-	log "github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,6 +19,7 @@ import (
 )
 
 type Feed struct {
+	logger           log.Logger
 	connString       string
 	dbName           string
 	eventsCollection string
@@ -46,8 +47,9 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(connString, database string, opts ...FeedOption) (Feed, error) {
+func NewFeed(logger log.Logger, connString, database string, opts ...FeedOption) (Feed, error) {
 	m := Feed{
+		logger:           logger,
 		dbName:           database,
 		connString:       connString,
 		eventsCollection: "events",
@@ -98,13 +100,13 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	eventsCollection := client.Database(m.dbName).Collection(m.eventsCollection)
 	var eventsStream *mongo.ChangeStream
 	if len(lastResumeToken) != 0 {
-		log.Infof("Starting feeding (partitions: [%d-%d]) from '%X'", m.partitionsLow, m.partitionsHi, lastResumeToken)
+		m.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%X'", m.partitionsLow, m.partitionsHi, lastResumeToken)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
 		if err != nil {
 			return faults.Wrap(err)
 		}
 	} else {
-		log.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", m.partitionsLow, m.partitionsHi)
+		m.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", m.partitionsLow, m.partitionsHi)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
 		if err != nil {
 			return faults.Wrap(err)

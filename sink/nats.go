@@ -8,11 +8,12 @@ import (
 	"github.com/nats-io/stan.go"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/faults"
-	"github.com/sirupsen/logrus"
 )
 
 type NatsSink struct {
+	logger     log.Logger
 	topic      string
 	client     stan.Conn
 	partitions uint32
@@ -20,8 +21,9 @@ type NatsSink struct {
 }
 
 // NewNatsSink instantiate PulsarSink
-func NewNatsSink(topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) (*NatsSink, error) {
+func NewNatsSink(logger log.Logger, topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) (*NatsSink, error) {
 	p := &NatsSink{
+		logger:     logger,
 		topic:      topic,
 		partitions: partitions,
 		codec:      JsonCodec{},
@@ -90,7 +92,9 @@ func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
 	}
 
 	topic := common.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
-	logrus.Debugf("publishing '%+v' to topic '%s'", e, topic)
+	p.logger.WithTags(log.Tags{
+		"topic": topic,
+	}).Debugf("publishing '%+v'", e)
 
 	// TODO should be configurable
 	bo := backoff.NewExponentialBackOff()

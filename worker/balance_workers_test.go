@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/worker"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,7 +97,7 @@ func newBalancerWithTimeout(members *sync.Map, timeout time.Duration) ([]worker.
 	ctx, cancel := context.WithCancel(context.Background())
 	member := NewInMemMemberList(ctx, members)
 	ws := getWorkers(timeout)
-	go worker.BalanceWorkers(ctx, member, ws, time.Second/2)
+	go worker.BalanceWorkers(ctx, log.NewLogrus(logrus.StandardLogger()), member, ws, time.Second/2)
 	return ws, cancel
 }
 

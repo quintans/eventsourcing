@@ -3,7 +3,6 @@ package mysql
 import (
 	"context"
 	"errors"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -41,7 +40,7 @@ func TestListener(t *testing.T) {
 		Username: dbConfig.Username,
 		Password: dbConfig.Password,
 	}
-	feeding(ctx, cfg, s)
+	feeding(t, ctx, cfg, s)
 	time.Sleep(200 * time.Millisecond)
 
 	id := uuid.New().String()
@@ -62,7 +61,7 @@ func TestListener(t *testing.T) {
 	time.Sleep(time.Second)
 
 	ctx, cancel = context.WithCancel(context.Background())
-	feeding(ctx, cfg, s)
+	feeding(t, ctx, cfg, s)
 	time.Sleep(200 * time.Millisecond)
 
 	id = uuid.New().String()
@@ -79,14 +78,14 @@ func TestListener(t *testing.T) {
 	cancel()
 }
 
-func feeding(ctx context.Context, dbConfig mysql.DBConfig, sinker sink.Sinker) {
+func feeding(t *testing.T, ctx context.Context, dbConfig mysql.DBConfig, sinker sink.Sinker) {
 	done := make(chan struct{})
-	listener := mysql.NewFeed(dbConfig)
+	listener := mysql.NewFeed(logger, dbConfig)
 	go func() {
 		close(done)
 		err := listener.Feed(ctx, sinker)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			log.Fatalf("Error feeding #1: %v", err)
+			t.Fatalf("Error feeding #1: %v", err)
 		}
 	}()
 	<-done

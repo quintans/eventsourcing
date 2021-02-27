@@ -14,11 +14,11 @@ import (
 	"github.com/quintans/eventstore/common"
 	"github.com/quintans/eventstore/encoding"
 	"github.com/quintans/eventstore/eventid"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
-	log "github.com/sirupsen/logrus"
 )
 
 type FeedEvent struct {
@@ -52,6 +52,7 @@ func (pgt *PgTime) UnmarshalJSON(b []byte) error {
 }
 
 type Feed struct {
+	logger         log.Logger
 	play           player.Player
 	repository     player.Repository
 	limit          int
@@ -94,8 +95,9 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 
 // NewFeedListenNotify instantiates a new PgListener.
 // important:repo should NOT implement lag
-func NewFeedListenNotify(connString string, repository player.Repository, channel string, options ...FeedOption) Feed {
+func NewFeedListenNotify(logger log.Logger, connString string, repository player.Repository, channel string, options ...FeedOption) Feed {
 	p := Feed{
+		logger:     logger,
 		offset:     player.TrailingLag,
 		limit:      20,
 		repository: repository,
@@ -132,7 +134,7 @@ func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}
 	defer pool.Close()
 
-	log.Println("Starting to feed from event ID:", afterEventID)
+	p.logger.Info("Starting to feed from event ID:", afterEventID)
 
 	// TODO should be configured
 	b := backoff.NewExponentialBackOff()
@@ -169,7 +171,7 @@ func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID stri
 		return lastID, faults.Errorf("Error offsetting event ID: %w", backoff.Permanent(err))
 	}
 
-	log.Infof("Replaying events from %s", lastID)
+	p.logger.Infof("Replaying events from %s", lastID)
 	filters := []store.FilterOption{
 		store.WithAggregateTypes(p.aggregateTypes...),
 		store.WithLabels(p.labels),
@@ -202,7 +204,7 @@ func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID stri
 func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string, sinker sink.Sinker, b backoff.BackOff) (lastID string, err error) {
 	defer conn.Release()
 
-	log.Infof("Listening for PostgreSQL notifications on channel %s starting at %s", p.channel, thresholdID)
+	p.logger.Infof("Listening for PostgreSQL notifications on channel %s starting at %s", p.channel, thresholdID)
 	for {
 		msg, err := conn.Conn().WaitForNotification(ctx)
 		select {

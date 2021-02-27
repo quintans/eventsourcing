@@ -3,7 +3,6 @@ package wal
 import (
 	"context"
 	"errors"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,7 +34,7 @@ func TestListener(t *testing.T) {
 
 	s := test.NewMockSink(1)
 	ctx, cancel := context.WithCancel(context.Background())
-	feeding(ctx, dbConfig, s)
+	feeding(t, ctx, dbConfig, s)
 	time.Sleep(200 * time.Millisecond)
 
 	id := uuid.New().String()
@@ -57,7 +56,7 @@ func TestListener(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	ctx, cancel = context.WithCancel(context.Background())
-	feeding(ctx, dbConfig, s)
+	feeding(t, ctx, dbConfig, s)
 	time.Sleep(200 * time.Millisecond)
 
 	id = uuid.New().String()
@@ -74,14 +73,14 @@ func TestListener(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-func feeding(ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) {
+func feeding(t *testing.T, ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) {
 	done := make(chan struct{})
 	listener := postgresql.NewFeed(dbConfig.ReplicationUrl())
 	go func() {
 		close(done)
 		err := listener.Feed(ctx, sinker)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			log.Fatalf("Error feeding #1: %v", err)
+			t.Fatalf("Error feeding #1: %v", err)
 		}
 	}()
 	// wait for the goroutine to run

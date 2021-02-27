@@ -8,6 +8,7 @@ import (
 
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
@@ -133,7 +134,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 	}
 
 	version := eRec.Version + 1
-	id := common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
+	id := eventid.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
 	doc := Event{
 		ID:               id,
 		AggregateID:      eRec.AggregateID,

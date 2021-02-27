@@ -133,3 +133,14 @@ func DelayEventID(eventID string, offset time.Duration) (string, error) {
 
 	return id.String(), nil
 }
+
+func NewEventID(createdAt time.Time, aggregateID string, version uint32) string {
+	var id uuid.UUID
+	if aggregateID != "" {
+		id, _ = uuid.Parse(aggregateID)
+	} else {
+		id = uuid.UUID{}
+	}
+	eid := New(createdAt, id, version)
+	return eid.String()
+}

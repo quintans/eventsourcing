@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/player"
 )
 
 // Buffer manager a list of events.
 // Attached consumers consume theses events.
 // New events are added to the buffer only if requested by a consumer.
+// ! Deprecated
 type Buffer struct {
 	mu        sync.Mutex
 	events    *list.List
@@ -23,8 +25,8 @@ type Buffer struct {
 	drainer   *Consumer
 }
 
-func NewBufferedPoller(r player.Repository, options ...Option) *Buffer {
-	return NewBuffer(New(r, options...))
+func NewBufferedPoller(logger log.Logger, r player.Repository, options ...Option) *Buffer {
+	return NewBuffer(New(logger, r, options...))
 }
 
 func NewBuffer(p Poller) *Buffer {

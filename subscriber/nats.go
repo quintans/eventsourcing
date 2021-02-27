@@ -8,10 +8,10 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/stan.go"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/projection"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/faults"
-	log "github.com/sirupsen/logrus"
 )
 
 type Option func(*NatsSubscriber)
@@ -23,6 +23,7 @@ func WithMessageCodec(codec sink.Codec) Option {
 }
 
 type NatsSubscriber struct {
+	logger       log.Logger
 	stream       stan.Conn
 	topicResumer projection.StreamResumer
 	messageCodec sink.Codec
@@ -30,6 +31,7 @@ type NatsSubscriber struct {
 
 func NewNatsSubscriber(
 	ctx context.Context,
+	logger log.Logger,
 	addresses string,
 	stanClusterID,
 	clientID string,
@@ -47,6 +49,7 @@ func NewNatsSubscriber(
 	}()
 
 	s := &NatsSubscriber{
+		logger:       logger,
 		stream:       stream,
 		topicResumer: topicResumer,
 		messageCodec: sink.JsonCodec{},
@@ -83,7 +86,7 @@ func (s NatsSubscriber) GetResumeToken(ctx context.Context, topic string) (strin
 }
 
 func (s NatsSubscriber) StartConsumer(ctx context.Context, resume projection.StreamResume, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) (chan struct{}, error) {
-	logger := log.WithField("topic", resume.Topic)
+	logger := s.logger.WithTags(log.Tags{"topic": resume.Topic})
 	opts := projection.ConsumerOptions{}
 	for _, v := range options {
 		v(&opts)
@@ -188,6 +191,7 @@ func WithProjectionMessageCodec(codec sink.Codec) ProjectionOption {
 }
 
 type NatsProjectionSubscriber struct {
+	logger       log.Logger
 	queue        *nats.Conn
 	managerTopic string
 	messageCodec sink.Codec
@@ -195,6 +199,7 @@ type NatsProjectionSubscriber struct {
 
 func NewNatsProjectionSubscriber(
 	ctx context.Context,
+	logger log.Logger,
 	addresses string,
 	managerTopic string,
 	options ...ProjectionOption,
@@ -210,6 +215,7 @@ func NewNatsProjectionSubscriber(
 	}()
 
 	s := &NatsProjectionSubscriber{
+		logger:       logger,
 		queue:        nc,
 		managerTopic: managerTopic,
 		messageCodec: sink.JsonCodec{},
@@ -227,7 +233,7 @@ func (s NatsProjectionSubscriber) GetQueue() *nats.Conn {
 }
 
 func (s NatsProjectionSubscriber) ListenCancelProjection(ctx context.Context, canceller projection.Canceller) error {
-	logger := log.WithField("topic", s.managerTopic)
+	logger := s.logger.WithTags(log.Tags{"topic": s.managerTopic})
 	sub, err := s.queue.Subscribe(s.managerTopic, func(msg *nats.Msg) {
 		n := projection.Notification{}
 		err := json.Unmarshal(msg.Data, &n)
@@ -243,7 +249,7 @@ func (s NatsProjectionSubscriber) ListenCancelProjection(ctx context.Context, ca
 		case projection.Release:
 			canceller.Cancel()
 		default:
-			logger.WithField("notification", n).Error("Unknown notification")
+			logger.WithTags(log.Tags{"notification": n}).Error("Unknown notification")
 		}
 	})
 	if err != nil {
@@ -259,7 +265,7 @@ func (s NatsProjectionSubscriber) ListenCancelProjection(ctx context.Context, ca
 }
 
 func (s NatsProjectionSubscriber) CancelProjection(ctx context.Context, projectionName string, listenerCount int) error {
-	log.WithField("projection", projectionName).Info("Cancelling projection")
+	s.logger.WithTags(log.Tags{"projection": projectionName}).Info("Cancelling projection")
 
 	payload, err := json.Marshal(projection.Notification{
 		Projection: projectionName,

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/quintans/eventstore/log"
 )
 
 type MemberWorkers struct {
@@ -25,13 +25,13 @@ type Worker interface {
 	Stop(context.Context)
 }
 
-func BalanceWorkers(ctx context.Context, member Memberlister, workers []Worker, heartbeat time.Duration) {
+func BalanceWorkers(ctx context.Context, logger log.Logger, member Memberlister, workers []Worker, heartbeat time.Duration) {
 	ticker := time.NewTicker(heartbeat)
 	defer ticker.Stop()
 	for {
 		err := run(ctx, member, workers)
 		if err != nil {
-			log.Warnf("Error while balancing partitions: %v", err)
+			logger.Warnf("Error while balancing partitions: %v", err)
 		}
 		select {
 		case <-ctx.Done():

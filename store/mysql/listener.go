@@ -14,18 +14,19 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
 	"github.com/siddontang/go-mysql/canal"
 	"github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/schema"
-	log "github.com/sirupsen/logrus"
 )
 
 const resumeTokenSep = ":"
 
 type Feed struct {
+	logger        log.Logger
 	config        DBConfig
 	eventsTable   string
 	partitions    uint32
@@ -74,7 +75,7 @@ type DBConfig struct {
 	Password string
 }
 
-func NewFeed(config DBConfig, opts ...FeedOption) Feed {
+func NewFeed(logger log.Logger, config DBConfig, opts ...FeedOption) Feed {
 	options := FeedOptions{
 		eventsTable: "events",
 		flavour:     "mariadb",
@@ -84,6 +85,7 @@ func NewFeed(config DBConfig, opts ...FeedOption) Feed {
 	}
 
 	return Feed{
+		logger:        logger,
 		config:        config,
 		eventsTable:   options.eventsTable,
 		partitions:    options.partitions,
@@ -132,7 +134,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var canalClosed bool
 	go func() {
 		<-ctx.Done()
-		log.Info("closing channel on context cancel...")
+		m.logger.Info("closing channel on context cancel...")
 		mu.Lock()
 		canalClosed = true
 		c.Close()
@@ -144,6 +146,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	b.MaxElapsedTime = 10 * time.Second
 
 	blh := &binlogHandler{
+		logger:          m.logger,
 		sinker:          sinker,
 		lastResumeToken: lastResumeToken,
 		partitions:      m.partitions,
@@ -156,10 +159,10 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	return backoff.Retry(func() error {
 		var err error
 		if lastResumePosition.Name == "" {
-			log.Infof("Starting feeding (partitions: [%d-%d]) from the beginning???", m.partitionsLow, m.partitionsHi)
+			m.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning???", m.partitionsLow, m.partitionsHi)
 			err = c.Run()
 		} else {
-			log.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", m.partitionsLow, m.partitionsHi, lastResumePosition)
+			m.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", m.partitionsLow, m.partitionsHi, lastResumePosition)
 			err = c.RunFrom(lastResumePosition)
 		}
 		if err != nil {
@@ -205,6 +208,7 @@ func format(xid mysql.Position) []byte {
 
 type binlogHandler struct {
 	canal.DummyEventHandler // Dummy handler from external lib
+	logger                  log.Logger
 	events                  []eventstore.Event
 	sinker                  sink.Sinker
 	lastResumeToken         []byte
@@ -221,7 +225,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error(r, " ", string(debug.Stack()))
+			h.logger.Error(r, " ", string(debug.Stack()))
 		}
 	}()
 

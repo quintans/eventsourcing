@@ -8,7 +8,6 @@ import (
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -22,7 +21,7 @@ type DBConfig struct {
 }
 
 func (c DBConfig) Url() string {
-	return fmt.Sprintf("%s:%s@(%s:%d)/%s", c.Username, c.Password, c.Host, c.Port, c.Database)
+	return fmt.Sprintf("%s:%s@(%s:%d)/%s?parseTime=true", c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 
 func setup() (DBConfig, func(), error) {

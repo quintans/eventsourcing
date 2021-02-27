@@ -14,6 +14,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
 )
@@ -120,7 +121,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		}
 		for _, e := range eRec.Details {
 			version++
-			id = common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
+			id = eventid.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
 			hash := common.Hash(eRec.AggregateID)
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at, aggregate_id_hash)
@@ -384,7 +385,7 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 					query.WriteString(" OR ")
 				}
 				v = escape(v)
-				query.WriteString(fmt.Sprintf(`JSON_EXTRACT(labels, "$.%s") = "%s"'`, k, v))
+				query.WriteString(fmt.Sprintf(`JSON_EXTRACT(labels, '$.%s') = '%s'`, k, v))
 				query.WriteString(")")
 			}
 		}
@@ -402,7 +403,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 		if err == sql.ErrNoRows {
 			return []eventstore.Event{}, nil
 		}
-		return nil, faults.Errorf("Unable to query events: %w", err)
+		return nil, faults.Errorf("Unable to query events with %s: %w", query, err)
 	}
 	events := []eventstore.Event{}
 	for rows.Next() {

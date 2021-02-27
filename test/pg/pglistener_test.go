@@ -3,7 +3,6 @@ package pg
 import (
 	"context"
 	"errors"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -29,14 +28,14 @@ func TestPgListener(t *testing.T) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	listener := postgresql.NewFeedListenNotify(dbConfig.ReplicationUrl(), repository, "events_channel")
+	listener := postgresql.NewFeedListenNotify(logger, dbConfig.ReplicationUrl(), repository, "events_channel")
 
 	s := test.NewMockSink(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		err := listener.Feed(ctx, s)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			log.Fatalf("Error feeding #1: %v", err)
+			t.Fatalf("Error feeding #1: %v", err)
 		}
 	}()
 

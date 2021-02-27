@@ -3,7 +3,6 @@ package listener
 import (
 	"context"
 	"errors"
-	"log"
 	"os"
 	"os/signal"
 	"sync"
@@ -13,12 +12,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store/mongodb"
 	"github.com/quintans/eventstore/test"
 	tmg "github.com/quintans/eventstore/test/mongodb"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+var (
+	logger = log.NewLogrus(logrus.StandardLogger())
 )
 
 type slot struct {
@@ -180,13 +185,13 @@ func feeding(ctx context.Context, t *testing.T, dbConfig tmg.DBConfig, partition
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)
-		listener, err := mongodb.NewFeed(dbConfig.Url(), dbConfig.Database, mongodb.WithPartitions(partitions, v.low, v.high))
+		listener, err := mongodb.NewFeed(logger, dbConfig.Url(), dbConfig.Database, mongodb.WithPartitions(partitions, v.low, v.high))
 		require.NoError(t, err)
 		go func() {
 			wg.Done()
 			err := listener.Feed(ctx, sinker)
 			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Fatalf("Error feeding #1: %v", err)
+				t.Fatalf("Error feeding #1: %v", err)
 			}
 		}()
 	}

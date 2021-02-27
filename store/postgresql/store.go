@@ -14,6 +14,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventstore/eventid"
 	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
 )
@@ -120,7 +121,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		}
 		for _, e := range eRec.Details {
 			version++
-			id = common.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
+			id = eventid.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
 			hash := common.Hash(eRec.AggregateID)
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at, aggregate_id_hash)

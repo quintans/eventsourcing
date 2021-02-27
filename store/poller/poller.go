@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/sink"
 	"github.com/quintans/eventstore/store"
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -17,6 +17,7 @@ const (
 )
 
 type Poller struct {
+	logger       log.Logger
 	store        player.Repository
 	pollInterval time.Duration
 	limit        int
@@ -87,8 +88,9 @@ func WithLabels(labels store.Labels) Option {
 	}
 }
 
-func New(repository player.Repository, options ...Option) Poller {
+func New(logger log.Logger, repository player.Repository, options ...Option) Poller {
 	p := Poller{
+		logger:       logger,
 		pollInterval: 200 * time.Millisecond,
 		trailingLag:  player.TrailingLag,
 		limit:        20,
@@ -134,7 +136,7 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 			if wait > maxWait {
 				wait = maxWait
 			}
-			log.WithField("backoff", wait).
+			p.logger.WithTags(log.Tags{"backoff": wait}).
 				WithError(err).
 				Error("Failure retrieving events. Backing off.")
 		} else {
@@ -166,7 +168,7 @@ func (p Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
 		return err
 	}
 
-	log.Println("Starting to feed from event ID:", afterEventID)
+	p.logger.Info("Starting to feed from event ID: ", afterEventID)
 	return p.forward(ctx, string(afterEventID), func(ctx context.Context, e eventstore.Event) error {
 		e.ResumeToken = []byte(e.ID)
 		return sinker.Sink(ctx, e)

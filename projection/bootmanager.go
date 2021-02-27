@@ -5,9 +5,9 @@ import (
 	"sync"
 
 	"github.com/quintans/eventstore"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/worker"
 	"github.com/quintans/faults"
-	log "github.com/sirupsen/logrus"
 )
 
 // Canceller is the interface for cancelling a running projection
@@ -55,6 +55,7 @@ type StreamResumer interface {
 type EventHandlerFunc func(ctx context.Context, e eventstore.Event) error
 
 type ProjectionPartition struct {
+	logger      log.Logger
 	handler     EventHandlerFunc
 	restartLock worker.WaitForUnlocker
 	notifier    Notifier
@@ -69,6 +70,7 @@ type ProjectionPartition struct {
 
 // NewProjectionPartition creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
 func NewProjectionPartition(
+	logger log.Logger,
 	restartLock worker.WaitForUnlocker,
 	notifier Notifier,
 	subscriber Subscriber,
@@ -77,6 +79,7 @@ func NewProjectionPartition(
 	handler EventHandlerFunc,
 ) *ProjectionPartition {
 	mc := &ProjectionPartition{
+		logger:      logger,
 		restartLock: restartLock,
 		handler:     handler,
 		notifier:    notifier,
@@ -95,7 +98,9 @@ func (m *ProjectionPartition) Name() string {
 
 // Run action to be executed on boot
 func (m *ProjectionPartition) Run(ctx context.Context) error {
-	logger := log.WithField("projection", m.resume.Stream)
+	logger := m.logger.WithTags(log.Tags{
+		"projection": m.resume.Stream,
+	})
 	for {
 		logger.Info("Waiting for Unlock")
 		m.restartLock.WaitForUnlock(ctx)

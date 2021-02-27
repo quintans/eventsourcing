@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,16 +13,22 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/quintans/eventstore"
 	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/eventstore/log"
 	"github.com/quintans/eventstore/player"
 	"github.com/quintans/eventstore/store/poller"
 	"github.com/quintans/eventstore/store/postgresql"
 	"github.com/quintans/eventstore/test"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const (
 	aggregateType = "Account"
+)
+
+var (
+	logger = log.NewLogrus(logrus.StandardLogger())
 )
 
 func connect(dbConfig DBConfig) (*sqlx.DB, error) {
@@ -125,33 +131,25 @@ func TestPollListener(t *testing.T) {
 	counter := 0
 	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	lm := poller.New(repository)
+	p := poller.New(logger, repository)
 
-	done := make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-done:
-			log.Println("Done...")
-		case <-time.After(2 * time.Second):
-			log.Println("Timeout...")
-		}
-		log.Println("Cancelling...")
-		cancel()
-	}()
-	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
+	ctx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
+			mu.Lock()
 			counter++
-			if counter == 4 {
-				log.Println("Reached the expected count. Done.")
-				close(done)
-			}
+			mu.Unlock()
 		}
 		return nil
 	})
+
+	time.Sleep(time.Second)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
@@ -185,29 +183,26 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	p := poller.New(repository, poller.WithAggregateTypes(aggregateType))
+	p := poller.New(logger, repository, poller.WithAggregateTypes(aggregateType))
 
-	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
+			mu.Lock()
 			counter++
-			if counter == 4 {
-				log.Println("Reached the expected count. Done.")
-				close(done)
-			}
+			mu.Unlock()
 		}
 		return nil
 	})
 
-	select {
-	case <-done:
-		log.Println("Done...")
-	case <-time.After(time.Second):
-		log.Println("Timeout...")
-	}
+	time.Sleep(time.Second)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(4), acc2.Version)
@@ -241,30 +236,29 @@ func TestListenerWithLabels(t *testing.T) {
 
 	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	p := poller.New(repository, poller.WithLabel("geo", "EU"))
+	p := poller.New(logger, repository, poller.WithLabel("geo", "EU"))
 
-	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
 		if e.AggregateID == id {
 			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
+			mu.Lock()
 			counter++
-			if counter == 3 {
-				log.Println("Reached the expected count. Done.")
-				close(done)
-			}
+			mu.Unlock()
 		}
 		return nil
 	})
 
-	select {
-	case <-done:
-		log.Println("Done...")
-	case <-time.After(time.Second):
-		log.Println("Timeout...")
-	}
+	time.Sleep(time.Second)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
 	assert.Equal(t, 3, counter)
+	mu.Unlock()
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(3), acc2.Version)
 	assert.Equal(t, int64(130), acc2.Balance)
