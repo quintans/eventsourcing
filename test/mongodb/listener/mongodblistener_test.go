@@ -22,9 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	logger = log.NewLogrus(logrus.StandardLogger())
-)
+var logger = log.NewLogrus(logrus.StandardLogger())
 
 type slot struct {
 	low  uint32
@@ -185,8 +183,7 @@ func feeding(ctx context.Context, t *testing.T, dbConfig tmg.DBConfig, partition
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)
-		listener, err := mongodb.NewFeed(logger, dbConfig.Url(), dbConfig.Database, mongodb.WithPartitions(partitions, v.low, v.high))
-		require.NoError(t, err)
+		listener := mongodb.NewFeed(logger, dbConfig.Url(), dbConfig.Database, mongodb.WithPartitions(partitions, v.low, v.high))
 		go func() {
 			wg.Done()
 			err := listener.Feed(ctx, sinker)
