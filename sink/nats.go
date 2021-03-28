@@ -21,7 +21,9 @@ type NatsSink struct {
 }
 
 // NewNatsSink instantiate PulsarSink
-func NewNatsSink(logger log.Logger, topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) (*NatsSink, error) {
+func NewNatsSink(logger log.Logger, topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) (_ *NatsSink, err error) {
+	defer faults.Catch(&err, "NewNatsSink(topic=%d, partitions=%s)", topic, partitions)
+
 	p := &NatsSink{
 		logger:     logger,
 		topic:      topic,

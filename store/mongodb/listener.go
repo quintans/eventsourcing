@@ -47,7 +47,7 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(logger log.Logger, connString, database string, opts ...FeedOption) (Feed, error) {
+func NewFeed(logger log.Logger, connString, database string, opts ...FeedOption) Feed {
 	m := Feed{
 		logger:           logger,
 		dbName:           database,
@@ -58,7 +58,7 @@ func NewFeed(logger log.Logger, connString, database string, opts ...FeedOption)
 	for _, o := range opts {
 		o(&m)
 	}
-	return m, nil
+	return m
 }
 
 type ChangeEvent struct {

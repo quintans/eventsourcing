@@ -115,7 +115,7 @@ sinker := sink.NewNatsSink(cfg.ConfigNats.Topic, partitions, "test-cluster", "pu
 defer sinker.Close()
 
 dbURL := fmt.Sprintf("mongodb://%s:%s@%s:%d?connect=direct", cfg.EsUser, cfg.EsPassword, cfg.EsHost, cfg.EsPort)
-pool, _ := locks.NewConsulLockPool(cfg.ConsulAddress)
+pool, _ := lock.NewConsulLockPool(cfg.ConsulAddress)
 
 lockMonitors := make([]common.LockWorker, len(partitionSlots))
 for i, v := range partitionSlots {

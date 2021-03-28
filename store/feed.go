@@ -29,12 +29,7 @@ func NewForwarder(logger log.Logger, name string, feeder Feeder, sinker sink.Sin
 }
 
 func (f *Forwarder) Run(ctx context.Context) error {
-	f.logger.Infof("Initialising Sink '%s'", f.name)
-	defer func() {
-		f.sinker.Close()
-	}()
-
-	f.logger.Infof("Starting Seed '%s'", f.name)
+	f.logger.Infof("Starting Feed '%s'", f.name)
 	err := f.feeder.Feed(ctx, f.sinker)
 	if err != nil {
 		return faults.Errorf("Error feeding '%s' on boot: %w", f.name, err)
@@ -42,9 +37,7 @@ func (f *Forwarder) Run(ctx context.Context) error {
 	return nil
 }
 
-func (f *Forwarder) Cancel() {
-	f.sinker.Close()
-}
+func (f *Forwarder) Cancel() {}
 
 // ForEachResumeTokenInSinkPartitions retrieves the highest event ID and resume token found in the partition range
 func ForEachResumeTokenInSinkPartitions(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32, forEach func(resumeToken []byte) error) error {

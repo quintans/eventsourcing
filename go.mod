@@ -27,7 +27,7 @@ require (
 	github.com/nats-io/nats.go v1.10.0
 	github.com/nats-io/stan.go v0.7.0
 	github.com/pingcap/check v0.0.0-20200212061837-5e12011dc712 // indirect
-	github.com/quintans/faults v1.1.0
+	github.com/quintans/faults v1.2.2
 	github.com/siddontang/go-mysql v0.0.0-20190312052122-c6ab05a85eb8
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.6.1
