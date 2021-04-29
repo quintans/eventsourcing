@@ -191,7 +191,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsto
 		}
 
 		var hash, version int32
-		var labels string
+		var metadata string
 		body := []byte{}
 
 		e := eventstore.Event{}
@@ -221,18 +221,18 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsto
 			"kind":              &e.Kind,
 			"body":              &body,
 			"idempotency_key":   &e.IdempotencyKey,
-			"labels":            &labels,
+			"metadata":          &metadata,
 			"created_at":        &e.CreatedAt,
 		})
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
 
-		if labels != "" {
-			e.Labels = map[string]interface{}{}
-			err = json.Unmarshal([]byte(labels), &e.Labels)
+		if metadata != "" {
+			e.Metadata = map[string]interface{}{}
+			err = json.Unmarshal([]byte(metadata), &e.Metadata)
 			if err != nil {
-				return nil, faults.Errorf("failed to unmarshal labels %s: %s", labels, err)
+				return nil, faults.Errorf("failed to unmarshal metadata %s: %s", metadata, err)
 			}
 		}
 

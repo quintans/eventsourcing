@@ -143,7 +143,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 					Kind:             d.Kind,
 					Body:             d.Body,
 					IdempotencyKey:   eventDoc.IdempotencyKey,
-					Labels:           eventDoc.Labels,
+					Metadata:         eventDoc.Metadata,
 					CreatedAt:        eventDoc.CreatedAt,
 				}
 				err = sinker.Sink(ctx, event)

@@ -30,7 +30,7 @@ type FeedEvent struct {
 	Kind             string        `json:"kind,omitempty"`
 	Body             encoding.Json `json:"body,omitempty"`
 	IdempotencyKey   string        `json:"idempotency_key,omitempty"`
-	Labels           encoding.Json `json:"labels,omitempty"`
+	Metadata         encoding.Json `json:"metadata,omitempty"`
 	CreatedAt        PgTime        `json:"created_at,omitempty"`
 }
 
@@ -60,7 +60,7 @@ type Feed struct {
 	offset         time.Duration
 	channel        string
 	aggregateTypes []string
-	labels         store.Labels
+	metadata       store.Metadata
 	partitions     uint32
 	partitionsLow  uint32
 	partitionsHi   uint32
@@ -174,7 +174,7 @@ func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID stri
 	p.logger.Infof("Replaying events from %s", lastID)
 	filters := []store.FilterOption{
 		store.WithAggregateTypes(p.aggregateTypes...),
-		store.WithLabels(p.labels),
+		store.WithMetadata(p.metadata),
 		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
 	}
 	lastID, err = p.play.Replay(ctx, sinker.Sink, lastID, filters...)
@@ -235,10 +235,10 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 			continue
 		}
 
-		labels := map[string]interface{}{}
-		err = json.Unmarshal(pgEvent.Labels, &labels)
+		metadata := map[string]interface{}{}
+		err = json.Unmarshal(pgEvent.Metadata, &metadata)
 		if err != nil {
-			return "", faults.Errorf("Unable unmarshal labels to map: %w", backoff.Permanent(err))
+			return "", faults.Errorf("Unable unmarshal metadata to map: %w", backoff.Permanent(err))
 		}
 		event := eventstore.Event{
 			ID:               pgEvent.ID,
@@ -250,7 +250,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 			Kind:             pgEvent.Kind,
 			Body:             []byte(pgEvent.Body),
 			IdempotencyKey:   pgEvent.IdempotencyKey,
-			Labels:           labels,
+			Metadata:         metadata,
 			CreatedAt:        time.Time(pgEvent.CreatedAt),
 		}
 

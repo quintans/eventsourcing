@@ -25,9 +25,7 @@ const (
 	aggregateType = "Account"
 )
 
-var (
-	logger = log.NewLogrus(logrus.StandardLogger())
-)
+var logger = log.NewLogrus(logrus.StandardLogger())
 
 func connect(dbConfig DBConfig) (*sqlx.DB, error) {
 	dburl := dbConfig.Url()
@@ -233,10 +231,10 @@ func TestListenerWithLabels(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "EU"}))
+	err = es.Save(ctx, acc, eventstore.WithMetadata(map[string]interface{}{"geo": "EU"}))
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "US"}))
+	err = es.Save(ctx, acc, eventstore.WithMetadata(map[string]interface{}{"geo": "US"}))
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -245,7 +243,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 	repository, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithLabel("geo", "EU"))
+	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex

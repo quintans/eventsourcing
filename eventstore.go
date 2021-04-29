@@ -60,7 +60,7 @@ type Event struct {
 	Kind             string
 	Body             encoding.Base64
 	IdempotencyKey   string
-	Labels           map[string]interface{}
+	Metadata         map[string]interface{}
 	CreatedAt        time.Time
 }
 
@@ -115,9 +115,9 @@ func WithIdempotencyKey(key string) SaveOption {
 	}
 }
 
-func WithLabels(labels map[string]interface{}) SaveOption {
+func WithMetadata(metadata map[string]interface{}) SaveOption {
 	return func(o *Options) {
-		o.Labels = labels
+		o.Labels = metadata
 	}
 }
 

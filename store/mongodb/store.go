@@ -31,7 +31,7 @@ type Event struct {
 	AggregateType    string        `bson:"aggregate_type,omitempty"`
 	Details          []EventDetail `bson:"details,omitempty"`
 	IdempotencyKey   string        `bson:"idempotency_key,omitempty"`
-	Labels           bson.M        `bson:"labels,omitempty"`
+	Metadata         bson.M        `bson:"metadata,omitempty"`
 	CreatedAt        time.Time     `bson:"created_at,omitempty"`
 }
 
@@ -142,7 +142,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 		Details:          details,
 		AggregateVersion: version,
 		IdempotencyKey:   eRec.IdempotencyKey,
-		Labels:           eRec.Labels,
+		Metadata:         eRec.Labels,
 		CreatedAt:        eRec.CreatedAt,
 		AggregateIDHash:  common.Hash(eRec.AggregateID),
 	}
@@ -166,7 +166,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 					IdempotencyKey:   doc.IdempotencyKey,
 					Kind:             d.Kind,
 					Body:             d.Body,
-					Labels:           doc.Labels,
+					Metadata:         doc.Metadata,
 					CreatedAt:        doc.CreatedAt,
 				}
 				projector.Project(evt)
@@ -425,9 +425,9 @@ func buildFilter(filter store.Filter, flt bson.D) bson.D {
 		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Partitions, filter.PartitionLow, filter.PartitionHi))
 	}
 
-	if len(filter.Labels) > 0 {
-		for k, v := range filter.Labels {
-			flt = append(flt, bson.E{"labels." + k, bson.D{{"$in", v}}})
+	if len(filter.Metadata) > 0 {
+		for k, v := range filter.Metadata {
+			flt = append(flt, bson.E{"metadata." + k, bson.D{{"$in", v}}})
 		}
 	}
 	return flt
@@ -509,7 +509,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 					Kind:             d.Kind,
 					Body:             d.Body,
 					IdempotencyKey:   v.IdempotencyKey,
-					Labels:           v.Labels,
+					Metadata:         v.Metadata,
 					CreatedAt:        v.CreatedAt,
 				})
 			}

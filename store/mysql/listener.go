@@ -61,6 +61,7 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 		p.eventsTable = eventsCollection
 	}
 }
+
 func WithFlavour(flavour string) FeedOption {
 	return func(p *FeedOptions) {
 		p.flavour = flavour
@@ -254,7 +255,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 			Kind:             r.getAsString("kind"),
 			Body:             r.getAsBytes("body"),
 			IdempotencyKey:   r.getAsString("idempotency_key"),
-			Labels:           r.getAsMap("labels"),
+			Metadata:         r.getAsMap("metadata"),
 			CreatedAt:        r.getAsTimeDate("created_at"),
 		})
 	}

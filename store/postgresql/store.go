@@ -34,7 +34,7 @@ type Event struct {
 	Kind             string    `db:"kind"`
 	Body             []byte    `db:"body"`
 	IdempotencyKey   NilString `db:"idempotency_key"`
-	Labels           []byte    `db:"labels"`
+	Metadata         []byte    `db:"metadata"`
 	CreatedAt        time.Time `db:"created_at"`
 }
 
@@ -102,7 +102,7 @@ func NewStore(connString string, options ...StoreOption) (*EsRepository, error) 
 }
 
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
-	labels, err := json.Marshal(eRec.Labels)
+	metadata, err := json.Marshal(eRec.Labels)
 	if err != nil {
 		return "", 0, faults.Wrap(err)
 	}
@@ -124,9 +124,9 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 			id = eventid.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
 			hash := common.Hash(eRec.AggregateID)
 			_, err = tx.ExecContext(ctx,
-				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, labels, created_at, aggregate_id_hash)
+				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, labels, eRec.CreatedAt, int32ring(hash))
+				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, metadata, eRec.CreatedAt, int32ring(hash))
 
 			if err != nil {
 				if isDup(err) {
@@ -144,7 +144,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 					AggregateType:    eRec.AggregateType,
 					Kind:             e.Kind,
 					Body:             e.Body,
-					Labels:           eRec.Labels,
+					Metadata:         eRec.Labels,
 					CreatedAt:        eRec.CreatedAt,
 				}
 				projector.Project(evt)
@@ -377,8 +377,8 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 		}
 	}
 
-	if len(filter.Labels) > 0 {
-		for k, values := range filter.Labels {
+	if len(filter.Metadata) > 0 {
+		for k, values := range filter.Metadata {
 			k = escape(k)
 			query.WriteString(" AND (")
 			for idx, v := range values {
@@ -386,7 +386,7 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 					query.WriteString(" OR ")
 				}
 				v = escape(v)
-				query.WriteString(fmt.Sprintf(`labels  @> '{"%s": "%s"}'`, k, v))
+				query.WriteString(fmt.Sprintf(`metadata  @> '{"%s": "%s"}'`, k, v))
 				query.WriteString(")")
 			}
 		}
@@ -413,10 +413,10 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 		if err != nil {
 			return nil, faults.Errorf("Unable to scan to struct: %w", err)
 		}
-		labels := map[string]interface{}{}
-		err = json.Unmarshal(pg.Labels, &labels)
+		metadata := map[string]interface{}{}
+		err = json.Unmarshal(pg.Metadata, &metadata)
 		if err != nil {
-			return nil, faults.Errorf("Unable to unmarshal labels to map: %w", err)
+			return nil, faults.Errorf("Unable to unmarshal metadata to map: %w", err)
 		}
 
 		events = append(events, eventstore.Event{
@@ -427,7 +427,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 			AggregateType:    pg.AggregateType,
 			Kind:             pg.Kind,
 			Body:             pg.Body,
-			Labels:           labels,
+			Metadata:         metadata,
 			CreatedAt:        pg.CreatedAt,
 		})
 	}
