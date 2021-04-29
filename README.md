@@ -1,26 +1,27 @@
-# Event Store
-a simple implementation of an event store using a database
+# Event Sourcing
+a simple implementation of event sourcing using a database as an event store
 
-This an exercise on how I could implement a event store and how this could be used with CQRS.
+This an exercise on how I could implement event sourcing and how this could be used with CQRS.
 
 ## Introduction
 
 The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture pattern where each side (write and read) can scale independently.
 
 This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS.
-To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database. I f we would like to write the read model into the same database, we could easily extend the current implementation to allow an event handler for the read model (maybe in the future)
 
-I went a bit further and also implemented an orchestration layer for the event consumer on the read side.
+To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
+If we would like to write the read model into the same database in the same transaction as the write model (dual write), we can easily add an event handler for that.
+Unfortunately this approach makes it hard to rebuild a projection or introduce new projections. Only use for the simplest cases.
 
-*This library started as an event store then it evolved to be a lot more, and that is why it wrongly named **eventstore*** 
+Other than the event store and the event streaming I also implemented an orchestration layer for the event consumer on the read side.
 
 I first talk about the several challenges and then about the solutions for those challenges.
 
-## Design
+## Pipeline
 
-This libraries implements the following pipeline:
+This library implements the following pipeline:
 
-A service **writes** to a **database** (the event store), a **forwarder** service listens to inserts into the database and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary views.
+A service **writes** to a **database** (the event store), a **forwarder** component (can be an external service) listens to inserts into the database and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary views.
 
 ![Design](eventstore-design.png)
 
@@ -32,7 +33,7 @@ I assume that the reader is familiar with the concepts of event sourcing and CQR
 
 ### Aggregate
 
-The aggregate must "extend" `eventstore.RootAggregate`, that implements `eventstore.Aggregater` interface, and implement `eventstore.Typer` and `eventstore.EventHandler` interface.
+The aggregate must "extend" `eventsourcing.RootAggregate`, that implements `eventsourcing.Aggregater` interface, and implement `eventsourcing.Typer` and `eventsourcing.EventHandler` interface.
 Any change to the aggregate is recorded as a series of events.
 
 You can find an example [here](./test/aggregate.go#L95)
@@ -45,15 +46,15 @@ Example [here](./test/aggregate.go#L51)
 
 ### Codec
 
-To encode and decode the events to and from binary data we need to provide a `eventstore.Codec`. This codec be as simple as a wrapper around `json.Marshaller/json.Unmarshaller` or a more complex implementation involving a schema registry.
+To encode and decode the events to and from binary data we need to provide a `eventsourcing.Codec`. This codec be as simple as a wrapper around `json.Marshaller/json.Unmarshaller` or a more complex implementation involving a schema registry.
 
 ### Upcaster
 
-As the application evolves, domain events may change in a way that previously serialized events may no longer be compatible with the current event schema. So when we rehydrate an event, we must transform into an higher version of that event, and this is done by providing an implementation of the `eventstore.Upcaster` interface.
+As the application evolves, domain events may change in a way that previously serialized events may no longer be compatible with the current event schema. So when we rehydrate an event, we must transform into an higher version of that event, and this is done by providing an implementation of the `eventsourcing.Upcaster` interface.
 
 ### Events
 
-Events must implement the `eventstore.Eventer` interface.
+Events must implement the `eventsourcing.Eventer` interface.
 
 Example [here](./test/aggregate.go#L17)
 
@@ -61,13 +62,14 @@ Example [here](./test/aggregate.go#L17)
 
 The event data can be stored in any database. Currently we have implementations for:
 * PostgreSQL
+* MySQL
 * MongoDB
 
 After we choose one, we can instantiate our event store.
 
 ```go
 esRepo := mongodb.NewStoreDB(client, cfg.EsName)
-es := eventstore.NewEventStore(esRepo, cfg.SnapshotThreshold, entity.Factory{})
+es := eventsourcing.NewEventStore(esRepo, cfg.SnapshotThreshold, entity.Factory{})
 ```
 
 After that we just interact normally with the aggregate and then we save.
@@ -102,8 +104,8 @@ feeder.Feed(ctx, sinker)
 
 In a distributed system where we can have multiple instance replicas of a service, we need to avoid duplication of events being forwarded to the message bus.
 To avoid duplication and **keep the order of events** we could have only one active instance using a distributed lock to elect the leader.
-But this would mean that we would have an idle instance and it is just a wast of resources.
-To take advantage of all the replicas we can partition the events and balance the different partitions across the existing instances of the forwarder service.
+But this would mean that we would have an idle instance and it is just a waste of resources.
+To take advantage of all the replicas, we can partition the events and balance the different partitions across the existing instances of the forwarder service.
 
 **Example**: consider 2 forwarder instances and and we want to partition the events into 12 partitions.
 Each forwarder instance would be responsible 6 partitions.
@@ -142,7 +144,7 @@ Since events are being partitioned we use the same approach of spreading the par
 
 ![Balancing Projection Partitioning](balancing-projection-partitions.png)
 
-The above picture depicts the this balancing over several instances.
+The above picture depicts balancing over several instances.
 
 Consider a Projection A that listens for messages coming from topic X and Y.
 If messages are partitioned into 2 partitions, we create a worker for each partition (we could also group partitions per worker). Each worker has an associated lock and a service instance can only run a worker for which it has a lock for. So `Projection A1` consumes messages in partition `X1` and `Y1` and `Worker 1` manages the `Projection A1` instance lifecycle.
@@ -160,7 +162,7 @@ Balancing them, as the instances come online, would happen int the following man
     2 instances -> balanced to 2 workers each
     3 instances -> due to the non remainder, each would try to lock 2 workers, but since the first 2 instances already have a lock, they would not release it and the 3rd instance would have zero workers locked, ending in an unfair distribution.
 
-I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection.
+I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection. The process is described as follow:
 
 Request Rebuild projections
 - Acquire Freeze Lock
@@ -208,13 +210,14 @@ memberlist, _ := common.NewConsulMemberList(cfg.ConsulAddress, "balance-member",
 go common.BalanceWorkers(ctx, memberlist, workers, cfg.LockExpiry/2)
 ```
 
+All this balancing and projection rebuilds assumes that a projection is idempotent.
+
 ## Rationale
 
 ### Event Bus
 
-The main challenge is, how to store events into a database and then propagate it to a event bus without losing any event.
-
-In some of the implementations that I have seen, some sort of event bus is used to deliver the domain events to external consumers, without considering that it is not possible to write into a database and publish to a event bus in a transaction. There is no guarantee that this would always work.For example, we could use a transaction and publish to the event bus only if we were able to successfully insert in the database, but the commit may fail, resulting in an inconsistency between the database and the published event.
+One of the challenges that I faced was how to store events into a database and then propagate it to a event bus without losing any event, since it is not possible to write into a database and publish to a event bus in a transaction, because there is no guarantee that this would always work.
+For example, we could think of publishing the event only if we were able to successfully insert into the database, but the commit may fail, resulting in an inconsistency between the database and the published event.
 
 That being said, first we write to the database and then a second process picks up the database changes.
 
@@ -237,10 +240,10 @@ also because, if events are incremental, it is easy to implement idempotency. Fo
 * **If events are inserted out of order how will they impact the projections?**
 
   If what I said before is true, then it will not matter, even if consider projection built with different aggregates.
-  Consider the aggregates A and B that are materialised in the projection C, so that `A + B = C`. This exactly the same as `B + A = C` 
+  Consider the aggregates A and B that are materialised in the projection C, so that `A + B = C`. This is exactly the same as `B + A = C` 
 
 
-Ideally we would like to have global monotonic events, but that is impossible to have unless we have a single node writer, creating a bottleneck.
+Ideally we would like to have global monotonic events, but that is impossible to have unless we have a single node writer (to set an absolute order), creating a bottleneck.
 Even then there is no guarantee that the events will appear in order if we have concurrent writes, unless we have some kind of lock at the node level, 
 creating an even greater bottleneck.
 
@@ -257,15 +260,39 @@ Unfortunately, there is no guarantee that two nodes, generating IDs for an aggre
 Compensating for clock skews, is easy if the tool allows to set the time, but for the randomness, not so much.
 
 Taking a step back, what do we need our ID to be? For a given aggregate, we need it to be monotonic and Lexicographically sortable.
-That can be achieved if we consider an ID that has `time + aggregate ID + version`. I could just use it like that, but to make it internet friendly and the smallest possible, I ended up encoding it in base32 (base64 has to many ugly characters)
+That can be achieved if we consider an ID that has `time + aggregate ID + aggregate version`. I could just use it like that, but to make it internet friendly and the smallest possible, I ended up encoding it in base32 (base64 has to many ugly characters)
 With that goal in mind I created a small [tool](./eventid/eventid.go) that handles this composite ID.
 
-### Polling
+### Change Data Capture Strategies (CDC)
 
 We need to forward the events in the event store to processes building the projections.
-One of the ways to achieve this is by polling.
+For this we will need to monitor the event store for new events.
 
-Events should be stored with an incremental sortable key. With this we can then poll for events after the last polled event.
+The event store is a database table that stores serialised events. Since events are immutable only inserts are allowed.
+So, when capturing changes, we are only interested in inserts.
+
+The current library implements two types of strategies.
+* Pushing
+* Polling
+
+#### Pushing
+
+Most modern databases have an some way to stream changes happening in the database.
+So, whenever an event is inserted in the event store, we just have to listen to changes.
+
+As an example of this notification mechanism, we have [change streams](https://docs.mongodb.com/manual/changeStreams/) from MongoDB.
+
+This change streams must all be able to resume, from a specific position or timestamp.
+
+#### Polling
+
+Another the way to achieve insert CDC is by polling.
+This solution is a solution that works for all kinds of databases.
+This can be used when the database does not have an easy way to provide change streams, or you have to pay expensive licenses.
+
+Although polling is straight forward to implement and easy to understand, there are something that we need to be aware.
+
+Events should be stored with an incremental sortable key (discussed above). With this we can then poll for events after the last polled event.
 
 > What is important is that for a given aggregate the events IDs are ordered, so strict ordering between aggregates is not important.
 
@@ -273,13 +300,14 @@ A poller process can then poll the database for new events. The events can be pu
 
 > Consuming events is discuss in more detail below, in CQRS section. 
 
-But there is a catch. Even if we use a single node writer, records might not become available in the same order as the ID order.
-Consider two concurrent transactions relying on database sequence. One acquires the ID 100 and the other the ID 101. If the one with ID 101 is faster to finish the transaction, it will show up first in a query than the one with ID 100.
-Unless we take some precautions, records will not always become visible in the expected order.
+But there is a catch, regarding the ID order of the events. Even if we use a single node writer, records might not become available in the same order as the ID order.
+
+Consider two concurrent transactions relying on database sequence. One acquires the ID 100 and the other the ID 101. If the one with ID 101 is faster to finish the transaction, it will show up first in a query than the one with ID 100. The same applies to time based IDs.
+Unless we take some precautions, records will not always be polled in the expected order.
 
 If we have a polling process that relies on this number to determine from where to start polling, it could miss the last added record, and this could lead to events not being tracked.
 
-But there is a solution. We can only retrieving events older than X milliseconds, to allow for the concurrent transactions to complete or to mitigate the clock skews.
+But there is a solution. If we only retrieve events older than X milliseconds, we allow the concurrent transactions to complete and mitigate any clock skews.
 
 An example of how this could be done in PostgreSQL:
 
@@ -293,23 +321,12 @@ LIMIT 100
 
 This polling strategy can be used both with SQL and NoSQL databases, like Postgresql or MongoDB, to name a few.
 
-I would like to say that I would use polling strategy on databases where it is not easy to implement change data capture, like MySQL because it is simple to understand and straight forward to implement.
-
 Advantages:
 * Easy to implement
 
 Disadvantages
 * Network costs. If the data is updated infrequently we will be polling with no results. On the other hand, if the data change frequency is hight then there will be no difference.
 * events that depend on others will have an accumulated delay due to the time delay applied to the query.
-
-### Pushing
-
-The above polling solution is a solution that works for all kinds of databases.
-
-This is not saying that there aren't other solutions that would work better. Some database provide notification mechanisms from where we collect the changes, like `change streams` from MongoDB.
-
-PostgreSQL also has the `LISTEN / NOTIFY` feature that allow us to be notified on a record change [example](https://pkg.go.dev/github.com/lib/pq/example/listen?tab=doc.)
-
 
 ### NoSQL
 
