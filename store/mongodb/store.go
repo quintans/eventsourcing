@@ -185,7 +185,6 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 	}
 
 	return id, version, nil
-
 }
 
 func isMongoDup(err error) bool {
@@ -411,7 +410,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, bat
 
 		eventID = lastEventID
 		count = lastCount
-		records = append(rows)
+		records = rows
 	}
 
 	return records, nil
@@ -438,7 +437,8 @@ func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint3
 	field = "$" + field
 	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, m.partitions]}],  m.partitionsLow - 1]} }
 	if partitionsLow == partitionsHi {
-		return bson.E{"$expr",
+		return bson.E{
+			"$expr",
 			bson.D{
 				{"$eq", bson.A{
 					bson.D{
@@ -451,7 +451,8 @@ func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint3
 	}
 
 	// {$expr: {$and: [{"$gte": [ { "$mod" : [$field, m.partitions] }, m.partitionsLow - 1 ]}, {$lte: [ { $mod : [$field, m.partitions] }, partitionsHi - 1 ]}  ] }});
-	return bson.E{"$expr",
+	return bson.E{
+		"$expr",
 		bson.D{
 			{"$and", bson.A{
 				bson.D{
@@ -473,7 +474,6 @@ func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint3
 			}},
 		},
 	}
-
 }
 
 func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, string, uint8, error) {

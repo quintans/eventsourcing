@@ -348,7 +348,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batch
 		}
 
 		afterEventID = rows[len(rows)-1].ID
-		records = append(rows)
+		records = rows
 	}
 	return records, nil
 }
