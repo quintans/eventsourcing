@@ -71,10 +71,10 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 		if err != nil {
 			return nil, faults.Errorf("could convert timestamp to time: %w", err)
 		}
-		labels := map[string]interface{}{}
-		err = json.Unmarshal([]byte(v.Labels), &labels)
+		metadata := map[string]interface{}{}
+		err = json.Unmarshal([]byte(v.Metadata), &metadata)
 		if err != nil {
-			return nil, faults.Errorf("Unable unmarshal labels to map: %w", err)
+			return nil, faults.Errorf("Unable unmarshal metadata to map: %w", err)
 		}
 		events[k] = eventstore.Event{
 			ID:               v.Id,
@@ -85,7 +85,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 			Kind:             v.Kind,
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
-			Labels:           labels,
+			Metadata:         metadata,
 			CreatedAt:        *createdAt,
 		}
 	}
@@ -97,15 +97,15 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 	for k, v := range filter.AggregateTypes {
 		types[k] = v
 	}
-	labels := []*pb.Label{}
-	for key, v := range filter.Labels {
+	metadata := []*pb.Metadata{}
+	for key, v := range filter.Metadata {
 		for _, value := range v {
-			labels = append(labels, &pb.Label{Key: key, Value: value})
+			metadata = append(metadata, &pb.Metadata{Key: key, Value: value})
 		}
 	}
 	return &pb.Filter{
 		AggregateTypes: types,
-		Labels:         labels,
+		Metadata:       metadata,
 		Partitions:     filter.Partitions,
 		PartitionLow:   filter.PartitionLow,
 		PartitionHi:    filter.PartitionHi,

@@ -25,7 +25,7 @@ type Poller struct {
 	// lag to account for on same millisecond concurrent inserts and clock skews
 	trailingLag    time.Duration
 	aggregateTypes []string
-	labels         store.Labels
+	metadata       store.Metadata
 	partitions     uint32
 	partitionsLow  uint32
 	partitionsHi   uint32
@@ -67,24 +67,24 @@ func WithAggregateTypes(at ...string) Option {
 	}
 }
 
-func WithLabel(key, value string) Option {
+func WithMetadataKV(key, value string) Option {
 	return func(f *Poller) {
-		if f.labels == nil {
-			f.labels = store.Labels{}
+		if f.metadata == nil {
+			f.metadata = store.Metadata{}
 		}
-		values := f.labels[key]
+		values := f.metadata[key]
 		if values == nil {
 			values = []string{value}
 		} else {
 			values = append(values, value)
 		}
-		f.labels[key] = values
+		f.metadata[key] = values
 	}
 }
 
-func WithLabels(labels store.Labels) Option {
+func WithMetadata(metadata store.Metadata) Option {
 	return func(f *Poller) {
-		f.labels = labels
+		f.metadata = metadata
 	}
 }
 
@@ -126,7 +126,7 @@ func (p Poller) forward(ctx context.Context, afterEventID string, handler player
 	wait := p.pollInterval
 	filters := []store.FilterOption{
 		store.WithAggregateTypes(p.aggregateTypes...),
-		store.WithLabels(p.labels),
+		store.WithMetadata(p.metadata),
 		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
 	}
 	for {

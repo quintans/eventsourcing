@@ -248,10 +248,10 @@ func TestListenerWithLabels(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "EU"}))
+	err = es.Save(ctx, acc, eventstore.WithMetadata(map[string]interface{}{"geo": "EU"}))
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.WithLabels(map[string]interface{}{"geo": "US"}))
+	err = es.Save(ctx, acc, eventstore.WithMetadata(map[string]interface{}{"geo": "US"}))
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -261,7 +261,7 @@ func TestListenerWithLabels(t *testing.T) {
 	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	p := poller.New(logger, repository, poller.WithLabel("geo", "EU"))
+	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {

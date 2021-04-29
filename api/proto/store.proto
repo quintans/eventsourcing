@@ -4,6 +4,8 @@ import "google/protobuf/timestamp.proto";
 
 package proto;
 
+option go_package="/api/proto";
+
 service Store {
   rpc GetLastEventID (GetLastEventIDRequest) returns (GetLastEventIDReply) {}
   rpc GetEvents (GetEventsRequest) returns (GetEventsReply) {}
@@ -27,13 +29,13 @@ message GetEventsRequest {
 
 message Filter {
   repeated string aggregate_types = 1;
-  repeated Label labels = 2;
+  repeated Metadata metadata = 2;
   uint32 partitions = 3;
   uint32 partitionLow = 4;
   uint32 partitionHi = 5;
 }
 
-message Label {
+message Metadata {
   string key = 1;
   string value = 2;
 }
@@ -51,6 +53,6 @@ message Event {
 	string kind = 6;
 	bytes body = 7;
 	string idempotency_key = 8;
-	string labels = 9;
+	string metadata = 9;
 	google.protobuf.Timestamp created_at = 10;
 }

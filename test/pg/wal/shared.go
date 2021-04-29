@@ -96,13 +96,13 @@ func dbSchema(config tpg.DBConfig) error {
 			kind VARCHAR (50) NOT NULL,
 			body bytea NOT NULL,
 			idempotency_key VARCHAR (50),
-			labels JSONB NOT NULL,
+			metadata JSONB NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP
 		);`,
 		`CREATE INDEX evt_agg_id_idx ON events (aggregate_id);`,
 		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
 		`CREATE UNIQUE INDEX evt_agg_idempot_uk ON events (aggregate_type, idempotency_key);`,
-		`CREATE INDEX evt_labels_idx ON events USING GIN (labels jsonb_path_ops);`,
+		`CREATE INDEX evt_metadata_idx ON events USING GIN (metadata jsonb_path_ops);`,
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,
 			aggregate_id VARCHAR (50) NOT NULL,

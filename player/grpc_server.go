@@ -39,9 +39,9 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 		if err != nil {
 			return nil, faults.Errorf("could convert timestamp to proto: %w", err)
 		}
-		labels, err := json.Marshal(v.Labels)
+		metadata, err := json.Marshal(v.Metadata)
 		if err != nil {
-			return nil, faults.Errorf("Unable marshal labels: %w", err)
+			return nil, faults.Errorf("unable marshal metadata: %w", err)
 		}
 		pbEvents[k] = &pb.Event{
 			Id:               v.ID,
@@ -52,7 +52,7 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			Kind:             v.Kind,
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
-			Labels:           string(labels),
+			Metadata:         string(metadata),
 			CreatedAt:        createdAt,
 		}
 	}
@@ -64,19 +64,19 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	for k, v := range pbFilter.AggregateTypes {
 		types[k] = v
 	}
-	labels := store.Labels{}
-	for _, v := range pbFilter.Labels {
-		values := labels[v.Key]
+	metadata := store.Metadata{}
+	for _, v := range pbFilter.Metadata {
+		values := metadata[v.Key]
 		if values == nil {
 			values = []string{v.Value}
 		} else {
 			values = append(values, v.Value)
 		}
-		labels[v.Key] = values
+		metadata[v.Key] = values
 	}
 	return store.Filter{
 		AggregateTypes: types,
-		Labels:         labels,
+		Metadata:       metadata,
 		Partitions:     pbFilter.Partitions,
 		PartitionLow:   pbFilter.PartitionLow,
 		PartitionHi:    pbFilter.PartitionHi,

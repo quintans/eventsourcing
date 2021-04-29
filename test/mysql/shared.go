@@ -100,7 +100,7 @@ func dbSchema(dbURL string) error {
 			kind VARCHAR (50) NOT NULL,
 			body VARBINARY(60000) NOT NULL,
 			idempotency_key VARCHAR (50),
-			labels JSON NOT NULL,
+			metadata JSON NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)ENGINE=innodb;`,
 		`CREATE UNIQUE INDEX agg_id_ver_idx ON events(aggregate_id, aggregate_version);`,

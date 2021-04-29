@@ -75,7 +75,8 @@ func (s NatsSubscriber) GetResumeToken(ctx context.Context, topic string) (strin
 		return "", faults.Wrap(err)
 	}
 	defer sub.Close()
-	ctx, _ = context.WithTimeout(ctx, 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
 	var sequence uint64
 	select {
 	case sequence = <-ch:
@@ -95,10 +96,9 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, resume projection.Str
 	// if no token is found start form the last one
 	start := stan.StartWithLastReceived()
 	var key string
-	var resumers chan uint64
+	saveResume := make(chan uint64, 100)
 	if resume.Stream != "" {
 		key = resume.String()
-		resumers = make(chan uint64, 100)
 		var err error
 		token, err = s.topicResumer.GetStreamResumeToken(ctx, key)
 		if err != nil {
@@ -125,31 +125,21 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, resume projection.Str
 			logger.WithError(err).Errorf("unable to unmarshal event '%s'", string(m.Data))
 			return
 		}
-		if !opts.Filter(evt) {
-			// ignore
-			if err = m.Ack(); err != nil {
-				logger.WithError(err).Errorf("failed to ACK ignored msg: %d", m.Sequence)
+		if opts.Filter(evt) {
+			logger.Debugf("Handling received event '%+v'", evt)
+			err = handler(ctx, evt)
+			if err != nil {
+				logger.WithError(err).Errorf("Error when handling event with ID '%s'", evt.ID)
 				return
 			}
-			if resumers != nil {
-				resumers <- m.Sequence
-			}
-			return
 		}
-		logger.Debugf("Handling received event '%+v'", evt)
-		err = handler(ctx, evt)
-		if err != nil {
-			logger.WithError(err).Errorf("Error when handling event with ID '%s'", evt.ID)
-			return
-		}
+
 		if err := m.Ack(); err != nil {
 			logger.WithError(err).Errorf("failed to ACK msg: %d", m.Sequence)
 			return
 		}
 
-		if resumers != nil {
-			resumers <- m.Sequence
-		}
+		saveResume <- m.Sequence
 	},
 		start,
 		stan.MaxInflight(1),
@@ -165,19 +155,17 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, resume projection.Str
 		<-ctx.Done()
 		sub.Close()
 		close(stopped)
-		close(resumers)
+		close(saveResume)
 	}()
 
-	if resumers != nil {
-		go func() {
-			for seq := range resumers {
-				err := s.topicResumer.SetStreamResumeToken(ctx, key, strconv.FormatUint(seq, 10))
-				if err != nil {
-					logger.WithError(err).Errorf("Failed to set the resume token for %s", key)
-				}
+	go func() {
+		for seq := range saveResume {
+			err := s.topicResumer.SetStreamResumeToken(ctx, key, strconv.FormatUint(seq, 10))
+			if err != nil {
+				logger.WithError(err).Errorf("Failed to set the resume token for %s", key)
 			}
-		}()
-	}
+		}
+	}()
 
 	return stopped, nil
 }

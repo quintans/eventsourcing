@@ -4,9 +4,9 @@ import "github.com/quintans/eventstore"
 
 type Filter struct {
 	AggregateTypes []string
-	// Labels filters on top of labels. Every key of the map is ANDed with every OR of the values
+	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Labels       Labels
+	Metadata     Metadata
 	Partitions   uint32
 	PartitionLow uint32
 	PartitionHi  uint32
@@ -16,7 +16,11 @@ type FilterOption func(*Filter)
 
 func WithFilter(filter Filter) FilterOption {
 	return func(f *Filter) {
-		f = &filter
+		f.AggregateTypes = filter.AggregateTypes
+		f.Metadata = filter.Metadata
+		f.Partitions = filter.Partitions
+		f.PartitionLow = filter.PartitionLow
+		f.PartitionHi = filter.PartitionHi
 	}
 }
 
@@ -26,26 +30,26 @@ func WithAggregateTypes(at ...string) FilterOption {
 	}
 }
 
-func WithLabel(key, value string) FilterOption {
+func WithMetadataKV(key, value string) FilterOption {
 	return func(f *Filter) {
-		if f.Labels == nil {
-			f.Labels = Labels{}
+		if f.Metadata == nil {
+			f.Metadata = Metadata{}
 		}
-		values := f.Labels[key]
+		values := f.Metadata[key]
 		if values == nil {
 			values = []string{value}
 		} else {
 			values = append(values, value)
 		}
-		f.Labels[key] = values
+		f.Metadata[key] = values
 	}
 }
 
-type Labels map[string][]string
+type Metadata map[string][]string
 
-func WithLabels(labels Labels) FilterOption {
+func WithMetadata(metadata Metadata) FilterOption {
 	return func(f *Filter) {
-		f.Labels = labels
+		f.Metadata = metadata
 	}
 }
 

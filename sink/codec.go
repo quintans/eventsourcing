@@ -32,7 +32,7 @@ type Event struct {
 	Kind             string                 `json:"kind,omitempty"`
 	Body             encoding.Base64        `json:"body,omitempty"`
 	IdempotencyKey   string                 `json:"idempotency_key,omitempty"`
-	Labels           map[string]interface{} `json:"labels,omitempty"`
+	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 	CreatedAt        time.Time              `json:"created_at,omitempty"`
 }
 
@@ -49,7 +49,7 @@ func (JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
 		Kind:             e.Kind,
 		Body:             e.Body,
 		IdempotencyKey:   e.IdempotencyKey,
-		Labels:           e.Labels,
+		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 	}
 	b, err := json.Marshal(event)
@@ -76,7 +76,7 @@ func (JsonCodec) Decode(data []byte) (eventstore.Event, error) {
 		Kind:             e.Kind,
 		Body:             []byte(e.Body),
 		IdempotencyKey:   e.IdempotencyKey,
-		Labels:           e.Labels,
+		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 	}
 	return event, nil
