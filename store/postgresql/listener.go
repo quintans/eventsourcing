@@ -10,14 +10,14 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/encoding"
+	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/player"
+	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/encoding"
-	"github.com/quintans/eventstore/eventid"
-	"github.com/quintans/eventstore/log"
-	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/sink"
-	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
 )
 

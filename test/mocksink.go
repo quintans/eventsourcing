@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/common"
 )
 
 type MockSink struct {

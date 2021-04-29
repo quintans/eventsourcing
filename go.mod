@@ -1,4 +1,4 @@
-module github.com/quintans/eventstore
+module github.com/quintans/eventsourcing
 
 go 1.15
 

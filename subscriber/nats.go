@@ -8,9 +8,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/stan.go"
-	"github.com/quintans/eventstore/log"
-	"github.com/quintans/eventstore/projection"
-	"github.com/quintans/eventstore/sink"
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/projection"
+	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/faults"
 )
 

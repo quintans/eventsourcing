@@ -14,10 +14,10 @@ import (
 	"github.com/jackc/pgproto3/v2"
 	"github.com/jackc/pgx/pgtype"
 	"github.com/kyleconroy/pgoutput"
+	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/sink"
-	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
 )
 

@@ -1,12 +1,12 @@
-package eventstore
+package eventsourcing
 
 import (
 	"context"
 	"errors"
 	"time"
 
-	"github.com/quintans/eventstore/common"
-	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/faults"
 )
 

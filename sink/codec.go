@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/encoding"
 	"github.com/quintans/faults"
 )
 

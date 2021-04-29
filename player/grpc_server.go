@@ -8,8 +8,8 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	_ "github.com/lib/pq"
-	pb "github.com/quintans/eventstore/api/proto"
-	"github.com/quintans/eventstore/store"
+	pb "github.com/quintans/eventsourcing/api/proto"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 )

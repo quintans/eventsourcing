@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/quintans/eventstore/log"
+	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/faults"
 )
 

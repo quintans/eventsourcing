@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/faults"
 )
 
@@ -19,9 +19,7 @@ const (
 	VersionSize   = 3
 )
 
-var (
-	ErrInvalidStringSize = errors.New("String size should be 40")
-)
+var ErrInvalidStringSize = errors.New("String size should be 40")
 
 type EventID [EncodingSize]byte
 

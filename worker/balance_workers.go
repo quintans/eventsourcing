@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/quintans/eventstore/log"
+	"github.com/quintans/eventsourcing/log"
 )
 
 type MemberWorkers struct {
@@ -96,7 +96,6 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 }
 
 func balance(ctx context.Context, workers []Worker, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
-
 	running := len(myRunningWorkers)
 	if running == workersToAcquire {
 		return mapToString(myRunningWorkers)

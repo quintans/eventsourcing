@@ -3,7 +3,7 @@ package common
 import (
 	"strings"
 
-	"github.com/quintans/eventstore/encoding"
+	"github.com/quintans/eventsourcing/encoding"
 )
 
 const (

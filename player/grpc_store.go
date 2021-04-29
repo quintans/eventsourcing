@@ -7,9 +7,9 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
+	pb "github.com/quintans/eventsourcing/api/proto"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventstore"
-	pb "github.com/quintans/eventstore/api/proto"
-	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 )

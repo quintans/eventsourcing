@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventsourcing/store/postgresql"
+	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/store/postgresql"
-	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

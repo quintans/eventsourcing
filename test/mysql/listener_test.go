@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store/mysql"
+	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/sink"
-	"github.com/quintans/eventstore/store/mysql"
-	"github.com/quintans/eventstore/test"
 	"github.com/stretchr/testify/require"
 	"gotest.tools/assert"
 )

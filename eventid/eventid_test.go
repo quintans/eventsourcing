@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventstore/eventid"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

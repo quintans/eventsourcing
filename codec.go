@@ -1,9 +1,9 @@
-package eventstore
+package eventsourcing
 
 import (
 	"encoding/json"
 
-	"github.com/quintans/eventstore/common"
+	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/faults"
 )
 

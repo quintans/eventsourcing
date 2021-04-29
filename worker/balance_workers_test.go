@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventstore/log"
-	"github.com/quintans/eventstore/worker"
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/worker"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )

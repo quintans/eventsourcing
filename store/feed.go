@@ -3,8 +3,8 @@ package store
 import (
 	"context"
 
-	"github.com/quintans/eventstore/log"
-	"github.com/quintans/eventstore/sink"
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/faults"
 )
 

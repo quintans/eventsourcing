@@ -3,8 +3,8 @@ package projection
 import (
 	"context"
 
-	"github.com/quintans/eventstore/log"
-	"github.com/quintans/eventstore/worker"
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/worker"
 	"github.com/quintans/faults"
 )
 

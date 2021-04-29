@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/store"
 	"github.com/quintans/faults"
 )
 

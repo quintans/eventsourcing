@@ -5,11 +5,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/player"
+	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventstore"
-	"github.com/quintans/eventstore/log"
-	"github.com/quintans/eventstore/player"
-	"github.com/quintans/eventstore/sink"
-	"github.com/quintans/eventstore/store"
 )
 
 const (
