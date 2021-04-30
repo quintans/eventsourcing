@@ -10,6 +10,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
@@ -17,7 +18,6 @@ import (
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 )
 
@@ -240,7 +240,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		if err != nil {
 			return "", faults.Errorf("Unable unmarshal metadata to map: %w", backoff.Permanent(err))
 		}
-		event := eventstore.Event{
+		event := eventsourcing.Event{
 			ID:               pgEvent.ID,
 			ResumeToken:      []byte(pgEvent.ID),
 			AggregateID:      pgEvent.AggregateID,

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 )
 
@@ -19,7 +19,7 @@ type Replayer interface {
 
 type Repository interface {
 	GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (string, error)
-	GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error)
+	GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error)
 }
 
 type Start int
@@ -30,7 +30,7 @@ const (
 	SEQUENCE
 )
 
-type EventHandlerFunc func(ctx context.Context, e eventstore.Event) error
+type EventHandlerFunc func(ctx context.Context, e eventsourcing.Event) error
 
 type Cancel func()
 
@@ -41,7 +41,7 @@ type Player struct {
 	batchSize int
 	// lag to account for on same millisecond concurrent inserts and clock skews
 	trailingLag  time.Duration
-	customFilter func(eventstore.Event) bool
+	customFilter func(eventsourcing.Event) bool
 }
 
 func WithBatchSize(batchSize int) Option {
@@ -58,7 +58,7 @@ func WithTrailingLag(trailingLag time.Duration) Option {
 	}
 }
 
-func WithCustomFilter(fn func(events eventstore.Event) bool) Option {
+func WithCustomFilter(fn func(events eventsourcing.Event) bool) Option {
 	return func(p *Player) {
 		p.customFilter = fn
 	}

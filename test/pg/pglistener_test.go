@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/quintans/eventstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +41,7 @@ func TestPgListener(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{})
+	es := eventsourcing.NewEventStore(repository, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)

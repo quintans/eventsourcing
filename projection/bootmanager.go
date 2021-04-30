@@ -4,9 +4,9 @@ import (
 	"context"
 	"sync"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/worker"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 )
 
@@ -32,12 +32,12 @@ func (ts StreamResume) String() string {
 }
 
 type ConsumerOptions struct {
-	Filter func(e eventstore.Event) bool
+	Filter func(e eventsourcing.Event) bool
 }
 
 type ConsumerOption func(*ConsumerOptions)
 
-func WithFilter(filter func(e eventstore.Event) bool) ConsumerOption {
+func WithFilter(filter func(e eventsourcing.Event) bool) ConsumerOption {
 	return func(o *ConsumerOptions) {
 		o.Filter = filter
 	}
@@ -52,7 +52,7 @@ type StreamResumer interface {
 	SetStreamResumeToken(ctx context.Context, key string, token string) error
 }
 
-type EventHandlerFunc func(ctx context.Context, e eventstore.Event) error
+type EventHandlerFunc func(ctx context.Context, e eventsourcing.Event) error
 
 type ProjectionPartition struct {
 	logger      log.Logger
@@ -60,7 +60,7 @@ type ProjectionPartition struct {
 	restartLock worker.WaitForUnlocker
 	notifier    Notifier
 	resume      StreamResume
-	filter      func(e eventstore.Event) bool
+	filter      func(e eventsourcing.Event) bool
 	subscriber  Subscriber
 
 	cancel context.CancelFunc
@@ -75,7 +75,7 @@ func NewProjectionPartition(
 	notifier Notifier,
 	subscriber Subscriber,
 	resume StreamResume,
-	filter func(e eventstore.Event) bool,
+	filter func(e eventsourcing.Event) bool,
 	handler EventHandlerFunc,
 ) *ProjectionPartition {
 	mc := &ProjectionPartition{

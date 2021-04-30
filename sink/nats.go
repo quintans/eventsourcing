@@ -6,9 +6,9 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/nats-io/stan.go"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 )
 
@@ -51,7 +51,7 @@ func (p *NatsSink) Close() {
 }
 
 // LastMessage gets the last message sent to NATS
-func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventstore.Event, error) {
+func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsourcing.Event, error) {
 	type message struct {
 		sequence uint64
 		data     []byte
@@ -87,7 +87,7 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsto
 }
 
 // Sink sends the event to pulsar
-func (p *NatsSink) Sink(ctx context.Context, e eventstore.Event) error {
+func (p *NatsSink) Sink(ctx context.Context, e eventsourcing.Event) error {
 	b, err := p.codec.Encode(e)
 	if err != nil {
 		return err

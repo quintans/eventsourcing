@@ -23,7 +23,7 @@ func (c DBConfig) Url() string {
 }
 
 const (
-	DBName        = "eventstore"
+	DBName        = "eventsourcing"
 	CollSnapshots = "snapshots"
 	CollEvents    = "events"
 )
@@ -125,9 +125,10 @@ func dbSchema(cli *mongo.Client) error {
 					{"name", "idx_idempotency_aggregate"},
 					{"unique", true},
 					{"partialFilterExpression", bson.D{
-						{"idempotency_key", bson.D{
-							{"$gt", ""},
-						},
+						{
+							"idempotency_key", bson.D{
+								{"$gt", ""},
+							},
 						},
 					}},
 					{"background", true},

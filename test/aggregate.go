@@ -1,7 +1,7 @@
 package test
 
 import (
-	"github.com/quintans/eventstore"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
 )
 
@@ -51,8 +51,8 @@ type AggregateFactory struct {
 	EventFactory
 }
 
-func (f AggregateFactory) New(kind string) (eventstore.Typer, error) {
-	var e eventstore.Typer
+func (f AggregateFactory) New(kind string) (eventsourcing.Typer, error) {
+	var e eventsourcing.Typer
 	switch kind {
 	case "Account":
 		e = NewAccount()
@@ -71,8 +71,8 @@ func (f AggregateFactory) New(kind string) (eventstore.Typer, error) {
 
 type EventFactory struct{}
 
-func (EventFactory) New(kind string) (eventstore.Typer, error) {
-	var e eventstore.Typer
+func (EventFactory) New(kind string) (eventsourcing.Typer, error) {
+	var e eventsourcing.Typer
 	switch kind {
 	case "AccountCreated":
 		e = &AccountCreated{}
@@ -95,7 +95,7 @@ func CreateAccount(owner string, id string, money int64) *Account {
 		Balance: money,
 		Owner:   owner,
 	}
-	a.RootAggregate = eventstore.NewRootAggregate(a)
+	a.RootAggregate = eventsourcing.NewRootAggregate(a)
 	a.RootAggregate.ID = id
 	a.ApplyChange(AccountCreated{
 		ID:    id,
@@ -107,12 +107,12 @@ func CreateAccount(owner string, id string, money int64) *Account {
 
 func NewAccount() *Account {
 	a := &Account{}
-	a.RootAggregate = eventstore.NewRootAggregate(a)
+	a.RootAggregate = eventsourcing.NewRootAggregate(a)
 	return a
 }
 
 type Account struct {
-	eventstore.RootAggregate
+	eventsourcing.RootAggregate
 	Status  Status `json:"status,omitempty"`
 	Balance int64  `json:"balance,omitempty"`
 	Owner   string `json:"owner,omitempty"`
@@ -138,7 +138,7 @@ func (a *Account) UpdateOwner(owner string) {
 	a.ApplyChange(OwnerUpdated{Owner: owner})
 }
 
-func (a *Account) HandleEvent(event eventstore.Eventer) {
+func (a *Account) HandleEvent(event eventsourcing.Eventer) {
 	switch t := event.(type) {
 	case AccountCreated:
 		a.HandleAccountCreated(t)
@@ -170,13 +170,12 @@ func (a *Account) HandleOwnerUpdated(event OwnerUpdated) {
 	a.Owner = event.Owner
 }
 
-func ApplyChangeFromHistory(es eventstore.EventStore, agg eventstore.Aggregater, e eventstore.Event) error {
-	m := eventstore.EventMetadata{
+func ApplyChangeFromHistory(es eventsourcing.EventStore, agg eventsourcing.Aggregater, e eventsourcing.Event) error {
+	m := eventsourcing.EventMetadata{
 		AggregateVersion: e.AggregateVersion,
 		CreatedAt:        e.CreatedAt,
 	}
 	evt, err := es.RehydrateEvent(e.Kind, e.Body)
-
 	if err != nil {
 		return err
 	}

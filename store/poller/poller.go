@@ -5,11 +5,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventstore"
 )
 
 const (
@@ -169,7 +169,7 @@ func (p Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}
 
 	p.logger.Info("Starting to feed from event ID: ", afterEventID)
-	return p.forward(ctx, string(afterEventID), func(ctx context.Context, e eventstore.Event) error {
+	return p.forward(ctx, string(afterEventID), func(ctx context.Context, e eventsourcing.Event) error {
 		e.ResumeToken = []byte(e.ID)
 		return sinker.Sink(ctx, e)
 	})

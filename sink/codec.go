@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 )
 
@@ -15,11 +15,11 @@ type Codec interface {
 }
 
 type Encoder interface {
-	Encode(eventstore.Event) ([]byte, error)
+	Encode(eventsourcing.Event) ([]byte, error)
 }
 
 type Decoder interface {
-	Decode([]byte) (eventstore.Event, error)
+	Decode([]byte) (eventsourcing.Event, error)
 }
 
 type Event struct {
@@ -38,7 +38,7 @@ type Event struct {
 
 type JsonCodec struct{}
 
-func (JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
+func (JsonCodec) Encode(e eventsourcing.Event) ([]byte, error) {
 	event := Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
@@ -59,14 +59,14 @@ func (JsonCodec) Encode(e eventstore.Event) ([]byte, error) {
 	return b, nil
 }
 
-func (JsonCodec) Decode(data []byte) (eventstore.Event, error) {
+func (JsonCodec) Decode(data []byte) (eventsourcing.Event, error) {
 	e := Event{}
 	err := json.Unmarshal(data, &e)
 	if err != nil {
-		return eventstore.Event{}, faults.Wrap(err)
+		return eventsourcing.Event{}, faults.Wrap(err)
 	}
 
-	event := eventstore.Event{
+	event := eventsourcing.Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
 		AggregateID:      e.AggregateID,

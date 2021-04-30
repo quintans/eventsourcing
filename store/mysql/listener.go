@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 	"github.com/siddontang/go-mysql/canal"
 	"github.com/siddontang/go-mysql/mysql"
@@ -210,7 +210,7 @@ func format(xid mysql.Position) []byte {
 type binlogHandler struct {
 	canal.DummyEventHandler // Dummy handler from external lib
 	logger                  log.Logger
-	events                  []eventstore.Event
+	events                  []eventsourcing.Event
 	sinker                  sink.Sinker
 	lastResumeToken         []byte
 	partitions              uint32
@@ -246,7 +246,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 				return nil
 			}
 		}
-		h.events = append(h.events, eventstore.Event{
+		h.events = append(h.events, eventsourcing.Event{
 			ID:               r.getAsString("id"),
 			AggregateID:      r.getAsString("aggregate_id"),
 			AggregateIDHash:  hash,

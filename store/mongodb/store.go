@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -49,7 +49,7 @@ type Snapshot struct {
 	CreatedAt        time.Time `bson:"created_at,omitempty"`
 }
 
-var _ eventstore.EsRepository = (*EsRepository)(nil)
+var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
 type StoreOption func(*EsRepository)
 
@@ -121,7 +121,7 @@ func (r *EsRepository) snapshotCollection() *mongo.Collection {
 	return r.collection(r.snapshotsCollectionName)
 }
 
-func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecord) (string, uint32, error) {
+func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (string, uint32, error) {
 	if len(eRec.Details) == 0 {
 		return "", 0, faults.New("No events to be saved")
 	}
@@ -157,7 +157,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 
 			projector := r.projectorFactory(mCtx)
 			for _, d := range doc.Details {
-				evt := eventstore.Event{
+				evt := eventsourcing.Event{
 					ID:               doc.ID,
 					AggregateID:      doc.AggregateID,
 					AggregateIDHash:  doc.AggregateIDHash,
@@ -179,7 +179,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventstore.EventRecor
 	}
 	if err != nil {
 		if isMongoDup(err) {
-			return "", 0, eventstore.ErrConcurrentModification
+			return "", 0, eventsourcing.ErrConcurrentModification
 		}
 		return "", 0, faults.Errorf("Unable to insert event: %w", err)
 	}
@@ -214,17 +214,17 @@ func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionCo
 	return nil
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventstore.Snapshot, error) {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventsourcing.Snapshot, error) {
 	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
 	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID}}, opts).Decode(&snap); err != nil {
 		if err == mongo.ErrNoDocuments {
-			return eventstore.Snapshot{}, nil
+			return eventsourcing.Snapshot{}, nil
 		}
-		return eventstore.Snapshot{}, faults.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return eventsourcing.Snapshot{}, faults.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
-	return eventstore.Snapshot{
+	return eventsourcing.Snapshot{
 		ID:               snap.ID,
 		AggregateID:      snap.AggregateID,
 		AggregateVersion: snap.AggregateVersion,
@@ -234,7 +234,7 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 	}, nil
 }
 
-func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Snapshot) error {
+func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.Snapshot) error {
 	snap := Snapshot{
 		ID:               snapshot.ID,
 		AggregateID:      snapshot.AggregateID,
@@ -248,7 +248,7 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventstore.Sna
 	return faults.Wrap(err)
 }
 
-func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventstore.Event, error) {
+func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventsourcing.Event, error) {
 	filter := bson.D{
 		{"aggregate_id", bson.D{{"$eq", aggregateID}}},
 	}
@@ -281,7 +281,7 @@ func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType, ide
 	return true, nil
 }
 
-func (r *EsRepository) Forget(ctx context.Context, request eventstore.ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error {
+func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// for events
@@ -374,13 +374,13 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 	return evt.ID, nil
 }
 
-func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error) {
+func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
 	eventID, count, err := common.SplitMessageID(afterMessageID)
 	if err != nil {
 		return nil, err
 	}
 
-	var records []eventstore.Event
+	var records []eventsourcing.Event
 	for len(records) < batchSize {
 		// since we have to consider the count, the query starts with the eventID
 		flt := bson.D{
@@ -476,11 +476,11 @@ func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint3
 	}
 }
 
-func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventstore.Event, string, uint8, error) {
+func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventsourcing.Event, string, uint8, error) {
 	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return []eventstore.Event{}, "", 0, nil
+			return []eventsourcing.Event{}, "", 0, nil
 		}
 		return nil, "", 0, faults.Wrap(err)
 	}
@@ -490,7 +490,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 		return nil, "", 0, faults.Wrap(err)
 	}
 
-	events := []eventstore.Event{}
+	events := []eventsourcing.Event{}
 	after := int(afterCount)
 	var lastEventID string
 	var lastCount uint8
@@ -500,7 +500,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 			if v.ID > afterEventID || k > after {
 				lastEventID = v.ID
 				lastCount = uint8(k)
-				events = append(events, eventstore.Event{
+				events = append(events, eventsourcing.Event{
 					ID:               common.NewMessageID(lastEventID, lastCount),
 					AggregateID:      v.AggregateID,
 					AggregateIDHash:  v.AggregateIDHash,

@@ -26,7 +26,7 @@ func (c DBConfig) Url() string {
 
 func setup() (DBConfig, func(), error) {
 	dbConfig := DBConfig{
-		Database: "eventstore",
+		Database: "eventsourcing",
 		Host:     "localhost",
 		Port:     3306,
 		Username: "root",

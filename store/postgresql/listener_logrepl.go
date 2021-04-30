@@ -14,10 +14,10 @@ import (
 	"github.com/jackc/pgproto3/v2"
 	"github.com/jackc/pgx/pgtype"
 	"github.com/kyleconroy/pgoutput"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 )
 
@@ -175,7 +175,7 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}, b)
 }
 
-func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventstore.Event, error) {
+func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsourcing.Event, error) {
 	m, err := pgoutput.Parse(WALData)
 	if err != nil {
 		return nil, faults.Errorf("error parsing %s: %w", string(WALData), err)
@@ -194,7 +194,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsto
 		var metadata string
 		body := []byte{}
 
-		e := eventstore.Event{}
+		e := eventsourcing.Event{}
 
 		err = extract(values, map[string]interface{}{
 			"aggregate_id_hash": &hash,

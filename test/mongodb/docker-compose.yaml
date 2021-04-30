@@ -6,7 +6,7 @@ services:
     container_name: mongodb
     image: mongo:latest
     environment:
-      MONGO_INITDB_DATABASE: eventstore
+      MONGO_INITDB_DATABASE: eventsourcing
       MONGO_REPLICA_SET_NAME: rs0
     expose:
       - 27017

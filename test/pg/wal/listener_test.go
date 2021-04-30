@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
 	tpg "github.com/quintans/eventsourcing/test/pg"
-	"github.com/quintans/eventstore"
 	"github.com/stretchr/testify/require"
 	"gotest.tools/assert"
 )
@@ -30,7 +30,7 @@ func TestListener(t *testing.T) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{})
+	es := eventsourcing.NewEventStore(repository, 3, test.AggregateFactory{})
 
 	s := test.NewMockSink(1)
 	ctx, cancel := context.WithCancel(context.Background())

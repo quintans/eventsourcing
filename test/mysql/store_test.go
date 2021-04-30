@@ -15,7 +15,6 @@ import (
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/store/poller"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/quintans/eventstore"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,7 +47,7 @@ func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
+	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -57,7 +56,7 @@ func TestSaveAndGet(t *testing.T) {
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.WithIdempotencyKey("idempotency-key"))
+	err = es.Save(ctx, acc, eventsourcing.WithIdempotencyKey("idempotency-key"))
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -98,7 +97,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.True(t, found)
 
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.WithIdempotencyKey("idempotency-key"))
+	err = es.Save(ctx, acc, eventsourcing.WithIdempotencyKey("idempotency-key"))
 	require.Error(t, err)
 }
 
@@ -110,7 +109,7 @@ func TestPollListener(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
+	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -141,7 +140,7 @@ func TestPollListener(t *testing.T) {
 		logger.Info("Cancelling...")
 		cancel()
 	}()
-	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
+	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 		if e.AggregateID == id {
 			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
@@ -170,7 +169,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
+	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -190,7 +189,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	p := poller.New(logger, repository, poller.WithAggregateTypes(aggregateType))
 
 	done := make(chan struct{})
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 		if e.AggregateID == id {
 			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
@@ -225,16 +224,16 @@ func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
+	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventstore.WithMetadata(map[string]interface{}{"geo": "EU"}))
+	err = es.Save(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
 	require.NoError(t, err)
 	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventstore.WithMetadata(map[string]interface{}{"geo": "US"}))
+	err = es.Save(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "US"}))
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -248,7 +247,7 @@ func TestListenerWithLabels(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 	go func() {
-		err := p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventstore.Event) error {
+		err := p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 			if e.AggregateID == id {
 				if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 					return err
@@ -285,7 +284,7 @@ func TestForget(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventstore.NewEventStore(r, 3, test.AggregateFactory{})
+	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
 	id := uuid.New().String()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -328,7 +327,7 @@ func TestForget(t *testing.T) {
 	}
 
 	err = es.Forget(ctx,
-		eventstore.ForgetRequest{
+		eventsourcing.ForgetRequest{
 			AggregateID: id,
 			EventKind:   "OwnerUpdated",
 		},

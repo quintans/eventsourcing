@@ -7,9 +7,9 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"github.com/quintans/eventsourcing"
 	pb "github.com/quintans/eventsourcing/api/proto"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 )
@@ -44,7 +44,7 @@ func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Dur
 	return r.EventId, nil
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter store.Filter) ([]eventstore.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -65,7 +65,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 		return nil, faults.Errorf("could not get events: %w", err)
 	}
 
-	events := make([]eventstore.Event, len(r.Events))
+	events := make([]eventsourcing.Event, len(r.Events))
 	for k, v := range r.Events {
 		createdAt, err := tsToTime(v.CreatedAt)
 		if err != nil {
@@ -76,7 +76,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 		if err != nil {
 			return nil, faults.Errorf("Unable unmarshal metadata to map: %w", err)
 		}
-		events[k] = eventstore.Event{
+		events[k] = eventsourcing.Event{
 			ID:               v.Id,
 			AggregateID:      v.AggregateId,
 			AggregateIDHash:  v.AggregateIdHash,

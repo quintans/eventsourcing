@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventstore"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -131,7 +131,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 					// we update the resume token on the last event of the transaction
 					lastResumeToken = []byte(eventsStream.ResumeToken())
 				}
-				event := eventstore.Event{
+				event := eventsourcing.Event{
 					ID: common.NewMessageID(eventDoc.ID, uint8(k)),
 					// the resume token should be from the last fully completed sinked doc, because it may fail midway.
 					// We should use the last eventID to filter out the ones that were successfully sent.

@@ -1,6 +1,6 @@
 package store
 
-import "github.com/quintans/eventstore"
+import "github.com/quintans/eventsourcing"
 
 type Filter struct {
 	AggregateTypes []string
@@ -65,5 +65,5 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption
 }
 
 type Projector interface {
-	Project(eventstore.Event)
+	Project(eventsourcing.Event)
 }

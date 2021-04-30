@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
 	tmg "github.com/quintans/eventsourcing/test/mongodb"
-	"github.com/quintans/eventstore"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,7 +91,7 @@ func TestMongoListenere(t *testing.T) {
 			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
 			time.Sleep(200 * time.Millisecond)
 
-			es := eventstore.NewEventStore(repository, 3, test.AggregateFactory{})
+			es := eventsourcing.NewEventStore(repository, 3, test.AggregateFactory{})
 
 			id := uuid.New().String()
 			acc := test.CreateAccount("Paulo", id, 100)
