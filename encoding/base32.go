@@ -15,9 +15,7 @@ const (
 	bitShift = 5
 )
 
-var (
-	ErrInvalidString = errors.New("String contains invalid characters")
-)
+var ErrInvalidString = errors.New("String contains invalid characters")
 
 func I64tob(val uint64) []byte {
 	r := make([]byte, 8)

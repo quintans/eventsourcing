@@ -8,10 +8,11 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/stan.go"
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/faults"
 )
 
 type Option func(*NatsSubscriber)

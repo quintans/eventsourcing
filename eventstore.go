@@ -5,9 +5,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
-	"github.com/quintans/faults"
 )
 
 var (

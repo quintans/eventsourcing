@@ -6,8 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing/encoding"
 )
 
 const (

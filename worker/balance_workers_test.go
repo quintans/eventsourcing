@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/worker"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
+
+	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/worker"
 )
 
 var locks = &sync.Map{}
@@ -158,7 +160,7 @@ type InMemWorker struct {
 	running  bool
 	duration time.Duration
 	mu       sync.RWMutex
-	locker   worker.Locker
+	locker   lock.Locker
 }
 
 func NewInMemWorker(name string, duration time.Duration) *InMemWorker {

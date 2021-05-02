@@ -6,16 +6,17 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
-	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store"
 )
 
 type Feed struct {

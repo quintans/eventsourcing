@@ -130,7 +130,6 @@ func (l *ConsulLock) WaitForUnlock(ctx context.Context) error {
 			}
 			<-ticker.C
 		}
-
 	}()
 	err := <-done
 

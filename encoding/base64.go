@@ -37,8 +37,10 @@ func (m *Base64) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-var _ json.Marshaler = (*Base64)(nil)
-var _ json.Unmarshaler = (*Base64)(nil)
+var (
+	_ json.Marshaler   = (*Base64)(nil)
+	_ json.Unmarshaler = (*Base64)(nil)
+)
 
 func (m Base64) String() string {
 	if m == nil {

@@ -5,9 +5,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventsourcing/eventid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/quintans/eventsourcing/eventid"
 )
 
 func TestSerialise(t *testing.T) {

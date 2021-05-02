@@ -10,6 +10,8 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
@@ -18,7 +20,6 @@ import (
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/faults"
 )
 
 type FeedEvent struct {

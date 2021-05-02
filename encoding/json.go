@@ -29,8 +29,10 @@ func (m *Json) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-var _ json.Marshaler = (*Json)(nil)
-var _ json.Unmarshaler = (*Json)(nil)
+var (
+	_ json.Marshaler   = (*Json)(nil)
+	_ json.Unmarshaler = (*Json)(nil)
+)
 
 func (m Json) String() string {
 	if m == nil {

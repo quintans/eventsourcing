@@ -3,9 +3,10 @@ package projection
 import (
 	"context"
 
-	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/worker"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/log"
 )
 
 type Action int
@@ -32,12 +33,12 @@ type ResumeTokenUpdater interface {
 
 type NotifierLockRebuilder struct {
 	logger             log.Logger
-	lock               worker.Locker
+	lock               lock.Locker
 	notifier           Notifier
 	recordResumeTokens func(ctx context.Context) error
 }
 
-func NewNotifierLockRestarter(logger log.Logger, lock worker.Locker, notifier Notifier, updateResumeTokens func(ctx context.Context) error) *NotifierLockRebuilder {
+func NewNotifierLockRestarter(logger log.Logger, lock lock.Locker, notifier Notifier, updateResumeTokens func(ctx context.Context) error) *NotifierLockRebuilder {
 	return &NotifierLockRebuilder{
 		logger:             logger,
 		lock:               lock,

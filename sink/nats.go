@@ -6,10 +6,11 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/nats-io/stan.go"
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/faults"
 )
 
 type NatsSink struct {

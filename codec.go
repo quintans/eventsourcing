@@ -3,8 +3,9 @@ package eventsourcing
 import (
 	"encoding/json"
 
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing/common"
 )
 
 type JSONCodec struct{}

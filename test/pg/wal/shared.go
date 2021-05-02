@@ -9,10 +9,11 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgconn"
 	_ "github.com/lib/pq"
-	tpg "github.com/quintans/eventsourcing/test/pg"
 	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	tpg "github.com/quintans/eventsourcing/test/pg"
 )
 
 func setup() (tpg.DBConfig, func(), error) {

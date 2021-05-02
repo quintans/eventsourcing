@@ -12,11 +12,12 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/faults"
 )
 
 const (

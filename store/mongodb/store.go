@@ -6,14 +6,15 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
-	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/store"
 )
 
 const (

@@ -14,11 +14,12 @@ import (
 	"github.com/jackc/pgproto3/v2"
 	"github.com/jackc/pgx/pgtype"
 	"github.com/kyleconroy/pgoutput"
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/faults"
 )
 
 const outputPlugin = "pgoutput"

@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"github.com/docker/go-connections/nat"
-	"github.com/quintans/eventsourcing/lock"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/quintans/eventsourcing/lock"
 )
 
 func Setup(ctx context.Context) (testcontainers.Container, string, error) {

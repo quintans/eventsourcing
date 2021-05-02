@@ -1,8 +1,9 @@
 package test
 
 import (
-	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing"
 )
 
 type Status string

@@ -7,17 +7,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/player"
-	"github.com/quintans/eventsourcing/store/mongodb"
-	"github.com/quintans/eventsourcing/store/poller"
-	"github.com/quintans/eventsourcing/test"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/player"
+	"github.com/quintans/eventsourcing/store/mongodb"
+	"github.com/quintans/eventsourcing/store/poller"
+	"github.com/quintans/eventsourcing/test"
 )
 
 var (

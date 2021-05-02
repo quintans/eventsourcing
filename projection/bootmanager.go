@@ -4,10 +4,11 @@ import (
 	"context"
 	"sync"
 
-	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/worker"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/log"
 )
 
 // Canceller is the interface for cancelling a running projection
@@ -57,7 +58,7 @@ type EventHandlerFunc func(ctx context.Context, e eventsourcing.Event) error
 type ProjectionPartition struct {
 	logger      log.Logger
 	handler     EventHandlerFunc
-	restartLock worker.WaitForUnlocker
+	restartLock lock.WaitForUnlocker
 	notifier    Notifier
 	resume      StreamResume
 	filter      func(e eventsourcing.Event) bool
@@ -71,7 +72,7 @@ type ProjectionPartition struct {
 // NewProjectionPartition creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
 func NewProjectionPartition(
 	logger log.Logger,
-	restartLock worker.WaitForUnlocker,
+	restartLock lock.WaitForUnlocker,
 	notifier Notifier,
 	subscriber Subscriber,
 	resume StreamResume,

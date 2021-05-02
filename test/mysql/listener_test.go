@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+	"gotest.tools/assert"
+
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/stretchr/testify/require"
-	"gotest.tools/assert"
 )
 
 func TestListener(t *testing.T) {

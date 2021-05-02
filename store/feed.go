@@ -3,9 +3,10 @@ package store
 import (
 	"context"
 
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/faults"
 )
 
 type Feeder interface {

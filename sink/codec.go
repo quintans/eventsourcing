@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
-	"github.com/quintans/faults"
 )
 
 type Codec interface {
