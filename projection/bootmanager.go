@@ -46,6 +46,7 @@ func WithFilter(filter func(e eventsourcing.Event) bool) ConsumerOption {
 
 type Subscriber interface {
 	StartConsumer(ctx context.Context, resume StreamResume, handler EventHandlerFunc, options ...ConsumerOption) (chan struct{}, error)
+	GetResumeToken(ctx context.Context, topic string) (string, error)
 }
 
 type StreamResumer interface {
@@ -58,7 +59,7 @@ type EventHandlerFunc func(ctx context.Context, e eventsourcing.Event) error
 type ProjectionPartition struct {
 	logger      log.Logger
 	handler     EventHandlerFunc
-	restartLock lock.WaitForUnlocker
+	restartLock lock.Locker
 	notifier    Notifier
 	resume      StreamResume
 	filter      func(e eventsourcing.Event) bool
@@ -72,7 +73,7 @@ type ProjectionPartition struct {
 // NewProjectionPartition creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
 func NewProjectionPartition(
 	logger log.Logger,
-	restartLock lock.WaitForUnlocker,
+	restartLock lock.Locker,
 	notifier Notifier,
 	subscriber Subscriber,
 	resume StreamResume,

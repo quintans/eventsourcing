@@ -2,19 +2,14 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/projection"
-	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/eventsourcing/store"
 )
 
 // Tasker is the interface for tasks that need to be balanced among a set of workers
@@ -186,64 +181,4 @@ func (t *Task) Cancel() {
 	<-t.done
 
 	t.mu.Unlock()
-}
-
-type LockerFactory func(lockName string) lock.Locker
-
-type FeederFactory func(partitionLow, partitionHi uint32) store.Feeder
-
-func EventForwarders(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, feederFactory FeederFactory, sinker sink.Sinker, partitionSlots []PartitionSlot) []Worker {
-	workers := make([]Worker, len(partitionSlots))
-	for i, v := range partitionSlots {
-		// feed provider
-		feeder := feederFactory(v.From, v.To)
-
-		slotsName := fmt.Sprintf("%d-%d", v.From, v.To)
-		workers[i] = NewRunWorker(
-			logger,
-			name+"-worker-"+slotsName,
-			lockerFactory(name+"-lock-"+slotsName),
-			store.NewForwarder(
-				logger,
-				name+"-"+slotsName,
-				feeder,
-				sinker,
-			))
-	}
-
-	return workers
-}
-
-type Consumer interface {
-	StartConsumer(ctx context.Context, resume projection.StreamResume, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) (chan struct{}, error)
-}
-
-func ReactorConsumers(ctx context.Context, logger log.Logger, streamName string, lockerFactory LockerFactory, topic string, partitions uint32, consumer Consumer, handler projection.EventHandlerFunc) []Worker {
-	workers := make([]Worker, partitions)
-	for i := uint32(0); i < partitions; i++ {
-		x := i
-		name := streamName + "-lock-" + strconv.Itoa(int(x))
-		workers[x] = NewRunWorker(
-			logger,
-			name,
-			lockerFactory(name),
-			NewTask(func(ctx context.Context) (<-chan struct{}, error) {
-				done, err := consumer.StartConsumer(
-					ctx,
-					projection.StreamResume{
-						Topic:  common.TopicWithPartition(topic, x+1),
-						Stream: streamName,
-					},
-					handler,
-				)
-				if err != nil {
-					return nil, faults.Errorf("Unable to start consumer for %s: %w", name, err)
-				}
-
-				return done, nil
-			}),
-		)
-	}
-
-	return workers
 }
