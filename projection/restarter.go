@@ -24,7 +24,7 @@ type Notification struct {
 // Any running projection needs to stop until restartFn returns.
 // restartFn() is responsible for cleaning the projection
 type Rebuilder interface {
-	Rebuild(ctx context.Context, projection string, listenerCount int, beforeRecordingTokens func(ctx context.Context) (string, error), afterRecordingTokens func(ctx context.Context, afterEventID string) (string, error)) error
+	Rebuild(ctx context.Context, projection string, beforeRecordingTokens func(ctx context.Context) (string, error), afterRecordingTokens func(ctx context.Context, afterEventID string) (string, error)) error
 }
 
 type ResumeTokenUpdater interface {
@@ -32,22 +32,33 @@ type ResumeTokenUpdater interface {
 }
 
 type NotifierLockRebuilder struct {
-	logger             log.Logger
-	lock               lock.Locker
-	notifier           Notifier
-	recordResumeTokens func(ctx context.Context) error
+	logger        log.Logger
+	lock          lock.Locker
+	notifier      Notifier
+	subscriber    Subscriber
+	streamResumer StreamResumer
+	tokenStreams  []StreamResume
 }
 
-func NewNotifierLockRestarter(logger log.Logger, lock lock.Locker, notifier Notifier, updateResumeTokens func(ctx context.Context) error) *NotifierLockRebuilder {
+func NewNotifierLockRestarter(
+	logger log.Logger,
+	lock lock.Locker,
+	notifier Notifier,
+	subscriber Subscriber,
+	streamResumer StreamResumer,
+	tokenStreams []StreamResume,
+) *NotifierLockRebuilder {
 	return &NotifierLockRebuilder{
-		logger:             logger,
-		lock:               lock,
-		notifier:           notifier,
-		recordResumeTokens: updateResumeTokens,
+		logger:        logger,
+		lock:          lock,
+		notifier:      notifier,
+		subscriber:    subscriber,
+		streamResumer: streamResumer,
+		tokenStreams:  tokenStreams,
 	}
 }
 
-func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, listenerCount int, beforeRecordingTokens func(ctx context.Context) (string, error), afterRecordingTokens func(ctx context.Context, afterEventID string) (string, error)) error {
+func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, beforeRecordingTokens func(ctx context.Context) (string, error), afterRecordingTokens func(ctx context.Context, afterEventID string) (string, error)) error {
 	logger := r.logger.WithTags(log.Tags{
 		"method":     "NotifierLockRebuilder.Rebuild",
 		"projection": projection,
@@ -73,7 +84,7 @@ func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, 
 		}()
 
 		logger.Info("Signalling to STOP projection listener")
-		err = r.notifier.CancelProjection(ctx, projection, listenerCount)
+		err = r.notifier.CancelProjection(ctx, projection, len(r.tokenStreams))
 		if err != nil {
 			logger.WithError(err).Error("Error while freezing projection")
 			return
@@ -96,5 +107,19 @@ func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, 
 		}
 	}()
 
+	return nil
+}
+
+func (r *NotifierLockRebuilder) recordResumeTokens(ctx context.Context) error {
+	for _, ts := range r.tokenStreams {
+		token, err := r.subscriber.GetResumeToken(ctx, ts.Topic)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+		err = r.streamResumer.SetStreamResumeToken(ctx, ts.String(), token)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+	}
 	return nil
 }

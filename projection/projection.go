@@ -85,7 +85,39 @@ func ProjectionWorkersAndRebuilder(
 	topic string,
 	partitions uint32,
 	handler EventHandlerFunc,
-) ([]worker.Worker, Rebuilder) {
+) ([]worker.Worker, *NotifierLockRebuilder) {
+	workers, tokenStreams, unlockWaiter := ProjectionWorkers(
+		logger,
+		"balance",
+		lockerFactory,
+		notifier,
+		subscriber,
+		topic,
+		partitions,
+		handler,
+	)
+	rebuilder := NewNotifierLockRestarter(
+		logger,
+		unlockWaiter,
+		notifier,
+		subscriber,
+		streamResumer,
+		tokenStreams,
+	)
+
+	return workers, rebuilder
+}
+
+func ProjectionWorkers(
+	logger log.Logger,
+	name string,
+	lockerFactory LockerFactory,
+	notifier Notifier,
+	subscriber Subscriber,
+	topic string,
+	partitions uint32,
+	handler EventHandlerFunc,
+) ([]worker.Worker, []StreamResume, lock.Locker) {
 	tokenStreams := []StreamResume{}
 	unlockWaiter := lockerFactory(name + "-freeze")
 	workers := make([]worker.Worker, partitions)
@@ -113,24 +145,5 @@ func ProjectionWorkersAndRebuilder(
 		)
 	}
 
-	rebuilder := NewNotifierLockRestarter(
-		logger,
-		unlockWaiter,
-		notifier,
-		func(ctx context.Context) error {
-			for _, ts := range tokenStreams {
-				token, err := subscriber.GetResumeToken(ctx, ts.Topic)
-				if err != nil {
-					return faults.Wrap(err)
-				}
-				err = streamResumer.SetStreamResumeToken(ctx, ts.String(), token)
-				if err != nil {
-					return faults.Wrap(err)
-				}
-			}
-			return nil
-		},
-	)
-
-	return workers, rebuilder
+	return workers, tokenStreams, unlockWaiter
 }
