@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "host replication pglogrepl 127.0.0.1/32 md5" >> "$PGDATA/pg_hba.conf"
+echo "host replication $POSTGRES_DB 127.0.0.1/32 md5" >> "$PGDATA/pg_hba.conf"
 set -e
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
     CREATE USER $PG_REP_USER WITH REPLICATION PASSWORD '$PG_REP_PASSWORD';

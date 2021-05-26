@@ -13,11 +13,11 @@ require (
 	github.com/google/uuid v1.1.2
 	github.com/hashicorp/consul/api v1.8.0
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
-	github.com/jackc/pgconn v1.6.5-0.20200823013804-5db484908cf7
-	github.com/jackc/pglogrepl v0.0.0-20210109153808-a78a685a0bff
-	github.com/jackc/pgproto3/v2 v2.0.4
-	github.com/jackc/pgx v3.2.0+incompatible
-	github.com/jackc/pgx/v4 v4.8.1
+	github.com/jackc/pgconn v1.8.1
+	github.com/jackc/pglogrepl v0.0.0-20210514235833-4afe73f2b337
+	github.com/jackc/pgproto3/v2 v2.0.7
+	github.com/jackc/pgx v3.6.2+incompatible
+	github.com/jackc/pgx/v4 v4.11.0
 	github.com/jmoiron/sqlx v1.2.0
 	github.com/kyleconroy/pgoutput v0.1.0
 	github.com/lib/pq v1.7.0
@@ -33,7 +33,6 @@ require (
 	github.com/stretchr/testify v1.6.1
 	github.com/testcontainers/testcontainers-go v0.9.0
 	go.mongodb.org/mongo-driver v1.1.0
-	golang.org/x/net v0.0.0-20201202161906-c7110b5ffcbb // indirect
 	google.golang.org/grpc v1.27.1
 	google.golang.org/protobuf v1.25.0
 	gotest.tools v0.0.0-20181223230014-1083505acf35

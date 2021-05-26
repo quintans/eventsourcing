@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -123,7 +122,6 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	b.MaxElapsedTime = 10 * time.Second
 
 	return backoff.Retry(func() error {
-		fmt.Printf("===> %s, looping event stream\n", time.Now())
 		for eventsStream.Next(ctx) {
 			var data ChangeEvent
 			if err := eventsStream.Decode(&data); err != nil {
@@ -131,7 +129,6 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 			}
 			eventDoc := data.FullDocument
 
-			fmt.Printf("===> %s\n", eventDoc.ID)
 			lastIdx := len(eventDoc.Details) - 1
 			for k, d := range eventDoc.Details {
 				if k == lastIdx {
@@ -161,7 +158,6 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 					Metadata:         eventDoc.Metadata,
 					CreatedAt:        eventDoc.CreatedAt,
 				}
-				fmt.Printf("    ===> %s: %s\n", event.ID, string(event.Body))
 				err = sinker.Sink(ctx, event)
 				if err != nil {
 					return backoff.Permanent(err)
@@ -171,7 +167,6 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 			b.Reset()
 		}
 		err := eventsStream.Err()
-		fmt.Printf("===> %s: looping event stream Err: %v\n", time.Now(), err)
 		if errors.Is(err, context.Canceled) {
 			return backoff.Permanent(err)
 		}

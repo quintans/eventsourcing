@@ -36,27 +36,28 @@ func TestListener(t *testing.T) {
 	s := test.NewMockSink(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := feeding(ctx, dbConfig, s)
-	time.Sleep(time.Second)
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
+	err = es.Save(ctx, acc)
+	require.NoError(t, err)
 	acc.Withdraw(20)
-	acc.Deposit(5)
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
-	time.Sleep(20 * time.Second)
+	time.Sleep(time.Second)
 	events := s.GetEvents()
 	require.Equal(t, 3, len(events), "event size")
 	assert.Equal(t, "AccountCreated", events[0].Kind.String())
 	assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
-	assert.Equal(t, "MoneyWithdraw", events[2].Kind.String())
-	assert.Equal(t, "MoneyDeposited", events[3].Kind.String())
+	assert.Equal(t, "MoneyWithdrawn", events[2].Kind.String())
 
 	cancel()
 	require.NoError(t, <-errCh, "Error feeding #1")
 
+	// resume from the last position, by using the same sinker.
+	// I haven't found a way to read all logs from the beginning
 	ctx, cancel = context.WithCancel(context.Background())
 	errCh = feeding(ctx, dbConfig, s)
 
@@ -71,15 +72,13 @@ func TestListener(t *testing.T) {
 	assert.Equal(t, 5, len(events), "event size")
 
 	cancel()
-	require.NoError(t, <-errCh, "Error feeding #2")
+	require.NoError(t, <-errCh, "Error feeding #3")
 }
 
 func feeding(ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) chan error {
 	errCh := make(chan error, 1)
-	done := make(chan struct{})
 	listener := postgresql.NewFeed(dbConfig.ReplicationUrl())
 	go func() {
-		close(done)
 		err := listener.Feed(ctx, sinker)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			errCh <- err
@@ -87,6 +86,6 @@ func feeding(ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) cha
 			errCh <- nil
 		}
 	}()
-	<-done
+	time.Sleep(time.Second)
 	return errCh
 }

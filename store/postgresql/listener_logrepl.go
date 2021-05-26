@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/google/uuid"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgproto3/v2"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 )
@@ -67,11 +69,11 @@ func NewFeed(connString string, options ...FeedLogreplOption) FeedLogrepl {
 // Feed listens to replication logs and pushes them to sinker
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
 func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
-	var lastResumeToken pglogrepl.LSN
+	var lastResumeToken pglogrepl.LSN // from the last position
 	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, f.partitionsLow, f.partitionsHi, func(resumeToken []byte) error {
 		xLogPos, err := pglogrepl.ParseLSN(string(resumeToken))
 		if err != nil {
-			return faults.Errorf("IdentifySystem failed: %w", err)
+			return faults.Errorf("ParseLSN failed: %w", err)
 		}
 		if xLogPos > lastResumeToken {
 			lastResumeToken = xLogPos
@@ -86,9 +88,7 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 	if err != nil {
 		return faults.Errorf("failed to connect to PostgreSQL server: %w", err)
 	}
-	defer func() {
-		conn.Close(context.Background())
-	}()
+	defer conn.Close(context.Background())
 
 	_, err = pglogrepl.CreateReplicationSlot(ctx, conn, f.slotName, outputPlugin, pglogrepl.CreateReplicationSlotOptions{Temporary: true})
 	if err != nil {
@@ -153,17 +153,15 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 						return faults.Errorf("ParseXLogData failed: %w", backoff.Permanent(err))
 					}
 
-					fmt.Println("XLogData ===>", "WALStart", xld.WALStart, "ServerWALEnd", xld.ServerWALEnd, "ServerTime:", xld.ServerTime, "WALData", string(xld.WALData))
-
 					event, err := f.parse(set, xld.WALData)
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
+					clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
+
 					if event == nil {
 						continue
 					}
-
-					clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
 					event.ResumeToken = []byte(clientXLogPos.String())
 					err = sinker.Sink(context.Background(), *event)
 					if err != nil {
@@ -185,8 +183,6 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsou
 		return nil, faults.Errorf("error parsing %s: %w", string(WALData), err)
 	}
 
-	fmt.Printf("\n===> %T %+v\n", m, m)
-
 	switch v := m.(type) {
 	case pgoutput.Relation:
 		set.Add(v)
@@ -196,42 +192,64 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsou
 			return nil, faults.Errorf("failed to get relation set values: %w", err)
 		}
 
-		var hash, version int32
-		var metadata string
-		body := []byte{}
-
-		e := eventsourcing.Event{}
-
+		var aggregateIDHash int32
 		err = extract(values, map[string]interface{}{
-			"aggregate_id_hash": &hash,
+			"aggregate_id_hash": &aggregateIDHash,
 		})
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
 		if f.partitions > 0 {
 			// check if the event is to be forwarded to the sinker
-			part := common.WhichPartition(uint32(hash), f.partitions)
+			part := common.WhichPartition(uint32(aggregateIDHash), f.partitions)
 			if part < f.partitionsLow || part > f.partitionsHi {
 				// we exit the loop because all rows are for the same aggregate
 				return nil, nil
 			}
 		}
 
-		e.AggregateIDHash = uint32(hash)
-
+		var id string
+		var aggregateID string
+		var aggregateVersion int32
+		var aggregateType string
+		var kind string
+		body := []byte{}
+		var idempotencyKey string
+		var metadata string
+		var createdAt time.Time
 		err = extract(values, map[string]interface{}{
-			"id":                &e.ID,
-			"aggregate_id":      &e.AggregateID,
-			"aggregate_version": &version,
-			"aggregate_type":    &e.AggregateType,
-			"kind":              &e.Kind,
+			"id":                &id,
+			"aggregate_id":      &aggregateID,
+			"aggregate_version": &aggregateVersion,
+			"aggregate_type":    &aggregateType,
+			"kind":              &kind,
 			"body":              &body,
-			"idempotency_key":   &e.IdempotencyKey,
+			"idempotency_key":   &idempotencyKey,
 			"metadata":          &metadata,
-			"created_at":        &e.CreatedAt,
+			"created_at":        &createdAt,
 		})
 		if err != nil {
 			return nil, faults.Wrap(err)
+		}
+
+		eid, err := eventid.Parse(id)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		aid, err := uuid.Parse(aggregateID)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		e := eventsourcing.Event{
+			ID:               eid,
+			AggregateID:      aid,
+			AggregateIDHash:  uint32(aggregateIDHash),
+			AggregateVersion: uint32(aggregateVersion),
+			AggregateType:    eventsourcing.AggregateType(aggregateType),
+			Kind:             eventsourcing.EventKind(kind),
+			Body:             body,
+			IdempotencyKey:   idempotencyKey,
+			CreatedAt:        createdAt,
 		}
 
 		if metadata != "" {
@@ -241,9 +259,6 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsou
 				return nil, faults.Errorf("failed to unmarshal metadata %s: %s", metadata, err)
 			}
 		}
-
-		e.AggregateVersion = uint32(version)
-		e.Body = body
 
 		return &e, nil
 	}
