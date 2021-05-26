@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -25,29 +26,29 @@ const (
 
 // Event is the event data stored in the database
 type Event struct {
-	ID               string        `bson:"_id,omitempty"`
-	AggregateID      string        `bson:"aggregate_id,omitempty"`
-	AggregateIDHash  uint32        `bson:"aggregate_id_hash,omitempty"`
-	AggregateVersion uint32        `bson:"aggregate_version,omitempty"`
-	AggregateType    string        `bson:"aggregate_type,omitempty"`
-	Details          []EventDetail `bson:"details,omitempty"`
-	IdempotencyKey   string        `bson:"idempotency_key,omitempty"`
-	Metadata         bson.M        `bson:"metadata,omitempty"`
-	CreatedAt        time.Time     `bson:"created_at,omitempty"`
+	ID               string                      `bson:"_id,omitempty"`
+	AggregateID      string                      `bson:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32                      `bson:"aggregate_id_hash,omitempty"`
+	AggregateVersion uint32                      `bson:"aggregate_version,omitempty"`
+	AggregateType    eventsourcing.AggregateType `bson:"aggregate_type,omitempty"`
+	Details          []EventDetail               `bson:"details,omitempty"`
+	IdempotencyKey   string                      `bson:"idempotency_key,omitempty"`
+	Metadata         bson.M                      `bson:"metadata,omitempty"`
+	CreatedAt        time.Time                   `bson:"created_at,omitempty"`
 }
 
 type EventDetail struct {
-	Kind string `bson:"kind,omitempty"`
-	Body []byte `bson:"body,omitempty"`
+	Kind eventsourcing.EventKind `bson:"kind,omitempty"`
+	Body []byte                  `bson:"body,omitempty"`
 }
 
 type Snapshot struct {
-	ID               string    `bson:"_id,omitempty"`
-	AggregateID      string    `bson:"aggregate_id,omitempty"`
-	AggregateVersion uint32    `bson:"aggregate_version,omitempty"`
-	AggregateType    string    `bson:"aggregate_type,omitempty"`
-	Body             []byte    `bson:"body,omitempty"`
-	CreatedAt        time.Time `bson:"created_at,omitempty"`
+	ID               string                      `bson:"_id,omitempty"`
+	AggregateID      string                      `bson:"aggregate_id,omitempty"`
+	AggregateVersion uint32                      `bson:"aggregate_version,omitempty"`
+	AggregateType    eventsourcing.AggregateType `bson:"aggregate_type,omitempty"`
+	Body             []byte                      `bson:"body,omitempty"`
+	CreatedAt        time.Time                   `bson:"created_at,omitempty"`
 }
 
 var _ eventsourcing.EsRepository = (*EsRepository)(nil)
@@ -122,9 +123,9 @@ func (r *EsRepository) snapshotCollection() *mongo.Collection {
 	return r.collection(r.snapshotsCollectionName)
 }
 
-func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (string, uint32, error) {
+func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
 	if len(eRec.Details) == 0 {
-		return "", 0, faults.New("No events to be saved")
+		return eventid.Zero, 0, faults.New("No events to be saved")
 	}
 	details := make([]EventDetail, 0, len(eRec.Details))
 	for _, e := range eRec.Details {
@@ -135,10 +136,10 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	}
 
 	version := eRec.Version + 1
-	id := eventid.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
+	id := eventid.New(eRec.CreatedAt, eRec.AggregateID, version)
 	doc := Event{
-		ID:               id,
-		AggregateID:      eRec.AggregateID,
+		ID:               id.String(),
+		AggregateID:      eRec.AggregateID.String(),
 		AggregateType:    eRec.AggregateType,
 		Details:          details,
 		AggregateVersion: version,
@@ -159,8 +160,8 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 			projector := r.projectorFactory(mCtx)
 			for _, d := range doc.Details {
 				evt := eventsourcing.Event{
-					ID:               doc.ID,
-					AggregateID:      doc.AggregateID,
+					ID:               id,
+					AggregateID:      eRec.AggregateID,
 					AggregateIDHash:  doc.AggregateIDHash,
 					AggregateVersion: doc.AggregateVersion,
 					AggregateType:    doc.AggregateType,
@@ -180,9 +181,9 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	}
 	if err != nil {
 		if isMongoDup(err) {
-			return "", 0, eventsourcing.ErrConcurrentModification
+			return eventid.Zero, 0, eventsourcing.ErrConcurrentModification
 		}
-		return "", 0, faults.Errorf("Unable to insert event: %w", err)
+		return eventid.Zero, 0, faults.Errorf("Unable to insert event: %w", err)
 	}
 
 	return id, version, nil
@@ -215,7 +216,7 @@ func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionCo
 	return nil
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventsourcing.Snapshot, error) {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (eventsourcing.Snapshot, error) {
 	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
@@ -223,13 +224,17 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 		if err == mongo.ErrNoDocuments {
 			return eventsourcing.Snapshot{}, nil
 		}
-		return eventsourcing.Snapshot{}, faults.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return eventsourcing.Snapshot{}, faults.Errorf("unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+	}
+	id, err := eventid.Parse(snap.ID)
+	if err != nil {
+		return eventsourcing.Snapshot{}, faults.Errorf("unable to parse snapshot ID '%s': %w", snap.ID, err)
 	}
 	return eventsourcing.Snapshot{
-		ID:               snap.ID,
-		AggregateID:      snap.AggregateID,
+		ID:               id,
+		AggregateID:      aggregateID,
 		AggregateVersion: snap.AggregateVersion,
-		AggregateType:    snap.AggregateType,
+		AggregateType:    eventsourcing.AggregateType(snap.AggregateType),
 		Body:             snap.Body,
 		CreatedAt:        snap.CreatedAt,
 	}, nil
@@ -237,8 +242,8 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 
 func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.Snapshot) error {
 	snap := Snapshot{
-		ID:               snapshot.ID,
-		AggregateID:      snapshot.AggregateID,
+		ID:               snapshot.ID.String(),
+		AggregateID:      snapshot.AggregateID.String(),
 		AggregateVersion: snapshot.AggregateVersion,
 		AggregateType:    snapshot.AggregateType,
 		Body:             snapshot.Body,
@@ -249,9 +254,9 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.
 	return faults.Wrap(err)
 }
 
-func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventsourcing.Event, error) {
+func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID uuid.UUID, snapVersion int) ([]eventsourcing.Event, error) {
 	filter := bson.D{
-		{"aggregate_id", bson.D{{"$eq", aggregateID}}},
+		{"aggregate_id", bson.D{{"$eq", aggregateID.String()}}},
 	}
 	if snapVersion > -1 {
 		filter = append(filter, bson.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
@@ -260,7 +265,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	opts := options.Find()
 	opts.SetSort(bson.D{{"aggregate_version", 1}})
 
-	events, _, _, err := r.queryEvents(ctx, filter, opts, "", 0)
+	events, _, err := r.queryEvents(ctx, filter, opts, eventid.Zero)
 	if err != nil {
 		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
@@ -268,8 +273,8 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	return events, nil
 }
 
-func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType, idempotencyKey string) (bool, error) {
-	filter := bson.D{{"aggregate_type", aggregateType}, {"idempotency_key", idempotencyKey}}
+func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType eventsourcing.AggregateType, idempotencyKey string) (bool, error) {
+	filter := bson.D{{"aggregate_type", aggregateType.String()}, {"idempotency_key", idempotencyKey}}
 	opts := options.FindOne().SetProjection(bson.D{{"_id", 1}})
 	evt := Event{}
 	if err := r.eventsCollection().FindOne(ctx, filter, opts).Decode(&evt); err != nil {
@@ -287,7 +292,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 
 	// for events
 	filter := bson.D{
-		{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
+		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
 		{"details.kind", bson.D{{"$eq", request.EventKind}}},
 	}
 	cursor, err := r.eventsCollection().Find(ctx, filter)
@@ -300,7 +305,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	}
 	for _, evt := range events {
 		for k, d := range evt.Details {
-			body, err := forget(d.Kind, d.Body)
+			body, err := forget(d.Kind.String(), d.Body)
 			if err != nil {
 				return err
 			}
@@ -320,7 +325,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 
 	// for snapshots
 	filter = bson.D{
-		{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
+		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
 	}
 	cursor, err = r.snapshotCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
@@ -332,7 +337,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	}
 
 	for _, s := range snaps {
-		body, err := forget(s.AggregateType, s.Body)
+		body, err := forget(s.AggregateType.String(), s.Body)
 		if err != nil {
 			return err
 		}
@@ -352,7 +357,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	return nil
 }
 
-func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (string, error) {
+func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error) {
 	flt := bson.D{}
 
 	if trailingLag != time.Duration(0) {
@@ -367,25 +372,26 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 	evt := Event{}
 	if err := r.eventsCollection().FindOne(ctx, flt, opts).Decode(&evt); err != nil {
 		if err == mongo.ErrNoDocuments {
-			return "", nil
+			return eventid.Zero, nil
 		}
-		return "", faults.Errorf("Unable to get the last event ID: %w", err)
+		return eventid.Zero, faults.Errorf("Unable to get the last event ID: %w", err)
 	}
 
-	return evt.ID, nil
+	eID, err := eventid.Parse(evt.ID)
+	if err != nil {
+		return eventid.Zero, err
+	}
+
+	return eID, nil
 }
 
-func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
-	eventID, count, err := common.SplitMessageID(afterMessageID)
-	if err != nil {
-		return nil, err
-	}
-
+func (r *EsRepository) GetEvents(ctx context.Context, afterEventID eventid.EventID, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
+	lastMessageID := afterEventID
 	var records []eventsourcing.Event
 	for len(records) < batchSize {
 		// since we have to consider the count, the query starts with the eventID
 		flt := bson.D{
-			{"_id", bson.D{{"$gte", eventID}}},
+			{"_id", bson.D{{"$gte", lastMessageID.String()}}},
 		}
 
 		if trailingLag != time.Duration(0) {
@@ -401,16 +407,15 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterMessageID string, bat
 			opts.SetBatchSize(-1)
 		}
 
-		rows, lastEventID, lastCount, err := r.queryEvents(ctx, flt, opts, eventID, count)
+		rows, eID, err := r.queryEvents(ctx, flt, opts, lastMessageID)
 		if err != nil {
-			return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", eventID, filter, err)
+			return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", lastMessageID, filter, err)
 		}
 		if len(rows) == 0 {
 			return records, nil
 		}
 
-		eventID = lastEventID
-		count = lastCount
+		lastMessageID = eID
 		records = rows
 	}
 
@@ -477,33 +482,40 @@ func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint3
 	}
 }
 
-func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID string, afterCount uint8) ([]eventsourcing.Event, string, uint8, error) {
+func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID eventid.EventID) ([]eventsourcing.Event, eventid.EventID, error) {
 	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return []eventsourcing.Event{}, "", 0, nil
+			return []eventsourcing.Event{}, eventid.Zero, nil
 		}
-		return nil, "", 0, faults.Wrap(err)
+		return nil, eventid.Zero, faults.Wrap(err)
 	}
 
 	evts := []Event{}
 	if err = cursor.All(ctx, &evts); err != nil {
-		return nil, "", 0, faults.Wrap(err)
+		return nil, eventid.Zero, faults.Wrap(err)
 	}
 
 	events := []eventsourcing.Event{}
-	after := int(afterCount)
-	var lastEventID string
-	var lastCount uint8
+	after := int(afterEventID.Count())
+	afterEventIDStr := afterEventID.String()
+	var lastEventID eventid.EventID
 	for _, v := range evts {
 		for k, d := range v.Details {
 			// only collect events that are greater than afterEventID-afterCount
-			if v.ID > afterEventID || k > after {
-				lastEventID = v.ID
-				lastCount = uint8(k)
+			if v.ID > afterEventIDStr || k > after {
+				eventID, err := eventid.Parse(v.ID)
+				if err != nil {
+					return nil, eventid.Zero, faults.Errorf("unable to parse message ID '%s': %w", v.ID, err)
+				}
+				lastEventID = eventID.WithCount(uint8(k))
+				aggregateID, err := uuid.Parse(v.AggregateID)
+				if err != nil {
+					return nil, eventid.Zero, faults.Errorf("unable to parse aggregate ID '%s': %w", v.AggregateID, err)
+				}
 				events = append(events, eventsourcing.Event{
-					ID:               common.NewMessageID(lastEventID, lastCount),
-					AggregateID:      v.AggregateID,
+					ID:               lastEventID,
+					AggregateID:      aggregateID,
 					AggregateIDHash:  v.AggregateIDHash,
 					AggregateVersion: v.AggregateVersion,
 					AggregateType:    v.AggregateType,
@@ -517,5 +529,5 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 		}
 	}
 
-	return events, lastEventID, lastCount, nil
+	return events, lastEventID, nil
 }

@@ -4,9 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/store"
 )
 
 const (
@@ -14,12 +16,12 @@ const (
 )
 
 type Replayer interface {
-	Replay(ctx context.Context, handler EventHandlerFunc, afterEventID string, filters ...store.FilterOption) (string, error)
+	Replay(ctx context.Context, handler EventHandlerFunc, afterEventID eventid.EventID, filters ...store.FilterOption) (string, error)
 }
 
 type Repository interface {
-	GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (string, error)
-	GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error)
+	GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error)
+	GetEvents(ctx context.Context, afterMessageID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error)
 }
 
 type Start int
@@ -82,16 +84,16 @@ func New(repository Repository, options ...Option) Player {
 }
 
 type StartOption struct {
-	startFrom    Start
-	afterEventID string
+	startFrom  Start
+	afterMsgID eventid.EventID
 }
 
 func (so StartOption) StartFrom() Start {
 	return so.startFrom
 }
 
-func (so StartOption) AfterEventID() string {
-	return so.afterEventID
+func (so StartOption) AfterMsgID() eventid.EventID {
+	return so.afterMsgID
 }
 
 func StartEnd() StartOption {
@@ -106,22 +108,22 @@ func StartBeginning() StartOption {
 	}
 }
 
-func StartAt(afterEventID string) StartOption {
+func StartAt(after eventid.EventID) StartOption {
 	return StartOption{
-		startFrom:    SEQUENCE,
-		afterEventID: afterEventID,
+		startFrom:  SEQUENCE,
+		afterMsgID: after,
 	}
 }
 
-func (p Player) ReplayUntil(ctx context.Context, handler EventHandlerFunc, untilEventID string, filters ...store.FilterOption) (string, error) {
-	return p.ReplayFromUntil(ctx, handler, "", untilEventID, filters...)
+func (p Player) ReplayUntil(ctx context.Context, handler EventHandlerFunc, untilEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
+	return p.ReplayFromUntil(ctx, handler, eventid.Zero, untilEventID, filters...)
 }
 
-func (p Player) Replay(ctx context.Context, handler EventHandlerFunc, afterEventID string, filters ...store.FilterOption) (string, error) {
-	return p.ReplayFromUntil(ctx, handler, afterEventID, "", filters...)
+func (p Player) Replay(ctx context.Context, handler EventHandlerFunc, afterEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
+	return p.ReplayFromUntil(ctx, handler, afterEventID, eventid.Zero, filters...)
 }
 
-func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandlerFunc, afterEventID, untilEventID string, filters ...store.FilterOption) (string, error) {
+func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandlerFunc, afterEventID, untilEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
 	filter := store.Filter{}
 	for _, f := range filters {
 		f(&filter)
@@ -130,17 +132,18 @@ func (p Player) ReplayFromUntil(ctx context.Context, handler EventHandlerFunc, a
 	for loop {
 		events, err := p.store.GetEvents(ctx, afterEventID, p.batchSize, p.trailingLag, filter)
 		if err != nil {
-			return "", err
+			return eventid.Zero, err
 		}
 		for _, evt := range events {
 			if p.customFilter == nil || p.customFilter(evt) {
 				err := handler(ctx, evt)
 				if err != nil {
-					return "", faults.Wrap(err)
+					return eventid.Zero, faults.Wrap(err)
 				}
 			}
 			afterEventID = evt.ID
-			if evt.ID >= untilEventID {
+
+			if !untilEventID.IsZero() && evt.ID.Compare(untilEventID) >= 0 {
 				return evt.ID, nil
 			}
 		}

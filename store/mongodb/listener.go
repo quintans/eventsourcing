@@ -3,9 +3,12 @@ package mongodb
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/google/uuid"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -13,7 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
@@ -120,6 +123,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	b.MaxElapsedTime = 10 * time.Second
 
 	return backoff.Retry(func() error {
+		fmt.Printf("===> %s, looping event stream\n", time.Now())
 		for eventsStream.Next(ctx) {
 			var data ChangeEvent
 			if err := eventsStream.Decode(&data); err != nil {
@@ -127,17 +131,27 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 			}
 			eventDoc := data.FullDocument
 
+			fmt.Printf("===> %s\n", eventDoc.ID)
+			lastIdx := len(eventDoc.Details) - 1
 			for k, d := range eventDoc.Details {
-				if k == len(eventDoc.Details)-1 {
+				if k == lastIdx {
 					// we update the resume token on the last event of the transaction
 					lastResumeToken = []byte(eventsStream.ResumeToken())
 				}
+				id, err := eventid.Parse(eventDoc.ID)
+				if err != nil {
+					return faults.Wrap(backoff.Permanent(err))
+				}
+				aggregateID, err := uuid.Parse(eventDoc.AggregateID)
+				if err != nil {
+					return faults.Errorf("unable to parse aggregate ID '%s': %w", eventDoc.AggregateID, err)
+				}
 				event := eventsourcing.Event{
-					ID: common.NewMessageID(eventDoc.ID, uint8(k)),
+					ID: id.WithCount(uint8(k)),
 					// the resume token should be from the last fully completed sinked doc, because it may fail midway.
 					// We should use the last eventID to filter out the ones that were successfully sent.
 					ResumeToken:      lastResumeToken,
-					AggregateID:      eventDoc.AggregateID,
+					AggregateID:      aggregateID,
 					AggregateIDHash:  eventDoc.AggregateIDHash,
 					AggregateVersion: eventDoc.AggregateVersion,
 					AggregateType:    eventDoc.AggregateType,
@@ -147,6 +161,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 					Metadata:         eventDoc.Metadata,
 					CreatedAt:        eventDoc.CreatedAt,
 				}
+				fmt.Printf("    ===> %s: %s\n", event.ID, string(event.Body))
 				err = sinker.Sink(ctx, event)
 				if err != nil {
 					return backoff.Permanent(err)
@@ -155,6 +170,11 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 
 			b.Reset()
 		}
-		return eventsStream.Err()
+		err := eventsStream.Err()
+		fmt.Printf("===> %s: looping event stream Err: %v\n", time.Now(), err)
+		if errors.Is(err, context.Canceled) {
+			return backoff.Permanent(err)
+		}
+		return err
 	}, b)
 }

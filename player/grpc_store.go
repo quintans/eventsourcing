@@ -7,27 +7,32 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
-	"github.com/quintans/eventsourcing"
-	pb "github.com/quintans/eventsourcing/api/proto"
-	"github.com/quintans/eventsourcing/store"
+	"github.com/google/uuid"
 	"github.com/quintans/faults"
 	"google.golang.org/grpc"
+
+	"github.com/quintans/eventsourcing"
+	pb "github.com/quintans/eventsourcing/api/proto"
+	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/store"
 )
 
 type GrpcRepository struct {
 	address string
 }
 
-func NewGrpcRepository(address string) Repository {
+var _ Repository = (*GrpcRepository)(nil)
+
+func NewGrpcRepository(address string) GrpcRepository {
 	return GrpcRepository{
 		address: address,
 	}
 }
 
-func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (string, error) {
+func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
-		return "", err
+		return eventid.Zero, err
 	}
 	defer conn.Close()
 
@@ -39,12 +44,18 @@ func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Dur
 		Filter:      pbFilter,
 	})
 	if err != nil {
-		return "", faults.Errorf("could not get last event id: %w", err)
+		return eventid.Zero, faults.Errorf("could not get last event id: %w", err)
 	}
-	return r.EventId, nil
+
+	eID, err := eventid.Parse(r.EventId)
+	if err != nil {
+		return eventid.Zero, faults.Errorf("could not parse event ID '%s': %w", r.EventId, err)
+	}
+
+	return eID, nil
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -56,7 +67,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	r, err := cli.GetEvents(ctx, &pb.GetEventsRequest{
-		AfterEventId: afterEventID,
+		AfterEventId: afterEventID.String(),
 		Limit:        int32(limit),
 		TrailingLag:  trailingLag.Milliseconds(),
 		Filter:       pbFilter,
@@ -76,13 +87,22 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 		if err != nil {
 			return nil, faults.Errorf("Unable unmarshal metadata to map: %w", err)
 		}
+
+		eID, err := eventid.Parse(v.Id)
+		if err != nil {
+			return nil, faults.Errorf("unable to parse message ID '%s': %w", v.Id, err)
+		}
+		aggregateID, err := uuid.Parse(v.AggregateId)
+		if err != nil {
+			return nil, faults.Errorf("unable to parse aggregate ID '%s': %w", v.AggregateId, err)
+		}
 		events[k] = eventsourcing.Event{
-			ID:               v.Id,
-			AggregateID:      v.AggregateId,
+			ID:               eID,
+			AggregateID:      aggregateID,
 			AggregateIDHash:  v.AggregateIdHash,
 			AggregateVersion: v.AggregateVersion,
-			AggregateType:    v.AggregateType,
-			Kind:             v.Kind,
+			AggregateType:    eventsourcing.AggregateType(v.AggregateType),
+			Kind:             eventsourcing.EventKind(v.Kind),
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         metadata,
@@ -95,7 +115,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID string, limi
 func filterToPbFilter(filter store.Filter) *pb.Filter {
 	types := make([]string, len(filter.AggregateTypes))
 	for k, v := range filter.AggregateTypes {
-		types[k] = v
+		types[k] = v.String()
 	}
 	metadata := []*pb.Metadata{}
 	for key, v := range filter.Metadata {

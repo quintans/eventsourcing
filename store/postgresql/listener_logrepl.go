@@ -64,6 +64,8 @@ func NewFeed(connString string, options ...FeedLogreplOption) FeedLogrepl {
 	return f
 }
 
+// Feed listens to replication logs and pushes them to sinker
+// https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
 func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var lastResumeToken pglogrepl.LSN
 	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, f.partitionsLow, f.partitionsHi, func(resumeToken []byte) error {
@@ -151,7 +153,7 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 						return faults.Errorf("ParseXLogData failed: %w", backoff.Permanent(err))
 					}
 
-					clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
+					fmt.Println("XLogData ===>", "WALStart", xld.WALStart, "ServerWALEnd", xld.ServerWALEnd, "ServerTime:", xld.ServerTime, "WALData", string(xld.WALData))
 
 					event, err := f.parse(set, xld.WALData)
 					if err != nil {
@@ -161,6 +163,7 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 						continue
 					}
 
+					clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
 					event.ResumeToken = []byte(clientXLogPos.String())
 					err = sinker.Sink(context.Background(), *event)
 					if err != nil {
@@ -181,6 +184,8 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsou
 	if err != nil {
 		return nil, faults.Errorf("error parsing %s: %w", string(WALData), err)
 	}
+
+	fmt.Printf("\n===> %T %+v\n", m, m)
 
 	switch v := m.(type) {
 	case pgoutput.Relation:

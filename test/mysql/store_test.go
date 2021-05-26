@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	aggregateType = "Account"
+	aggregateType eventsourcing.AggregateType = "Account"
 )
 
 var logger = log.NewLogrus(logrus.StandardLogger())
@@ -51,7 +51,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -68,21 +68,21 @@ func TestSaveAndGet(t *testing.T) {
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
 	count := 0
-	err = db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = ?", id)
+	err = db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = ?", id.String())
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
 	evts := []mysql.Event{}
-	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id)
+	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id.String())
 	require.NoError(t, err)
 	require.Equal(t, 4, len(evts))
-	assert.Equal(t, "AccountCreated", evts[0].Kind)
-	assert.Equal(t, "MoneyDeposited", evts[1].Kind)
-	assert.Equal(t, "MoneyDeposited", evts[2].Kind)
-	assert.Equal(t, "MoneyDeposited", evts[3].Kind)
+	assert.Equal(t, "AccountCreated", evts[0].Kind.String())
+	assert.Equal(t, "MoneyDeposited", evts[1].Kind.String())
+	assert.Equal(t, "MoneyDeposited", evts[2].Kind.String())
+	assert.Equal(t, "MoneyDeposited", evts[3].Kind.String())
 	assert.Equal(t, "idempotency-key", string(evts[3].IdempotencyKey))
 	assert.Equal(t, aggregateType, evts[0].AggregateType)
-	assert.Equal(t, id, evts[0].AggregateID)
+	assert.Equal(t, id.String(), evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
 
 	a, err := es.GetByID(ctx, id)
@@ -113,7 +113,7 @@ func TestPollListener(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -173,7 +173,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -228,7 +228,7 @@ func TestListenerWithLabels(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -248,6 +248,7 @@ func TestListenerWithLabels(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
+	errCh := make(chan error, 1)
 	go func() {
 		err := p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 			if e.AggregateID == id {
@@ -260,14 +261,12 @@ func TestListenerWithLabels(t *testing.T) {
 			}
 			return nil
 		})
-		if err != nil {
-			t.Fatalf("unable to poll: %v", err)
-		}
+		errCh <- err
 	}()
 
 	time.Sleep(time.Second)
 	cancel()
-	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, <-errCh, "unable to poll")
 
 	mu.Lock()
 	assert.Equal(t, 3, counter)
@@ -288,7 +287,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
@@ -307,7 +306,7 @@ func TestForget(t *testing.T) {
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
 	evts := []encoding.Json{}
-	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id)
+	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -318,7 +317,7 @@ func TestForget(t *testing.T) {
 	}
 
 	bodies := []encoding.Json{}
-	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id)
+	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
@@ -348,7 +347,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 
 	evts = []encoding.Json{}
-	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id)
+	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -359,7 +358,7 @@ func TestForget(t *testing.T) {
 	}
 
 	bodies = []encoding.Json{}
-	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id)
+	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {

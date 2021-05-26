@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/quintans/faults"
 
@@ -23,16 +24,16 @@ import (
 )
 
 type FeedEvent struct {
-	ID               string        `json:"id,omitempty"`
-	AggregateID      string        `json:"aggregate_id,omitempty"`
-	AggregateIDHash  uint32        `json:"aggregate_id_hash,omitempty"`
-	AggregateVersion uint32        `json:"aggregate_version,omitempty"`
-	AggregateType    string        `json:"aggregate_type,omitempty"`
-	Kind             string        `json:"kind,omitempty"`
-	Body             encoding.Json `json:"body,omitempty"`
-	IdempotencyKey   string        `json:"idempotency_key,omitempty"`
-	Metadata         encoding.Json `json:"metadata,omitempty"`
-	CreatedAt        PgTime        `json:"created_at,omitempty"`
+	ID               eventid.EventID             `json:"id,omitempty"`
+	AggregateID      string                      `json:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32                      `json:"aggregate_id_hash,omitempty"`
+	AggregateVersion uint32                      `json:"aggregate_version,omitempty"`
+	AggregateType    eventsourcing.AggregateType `json:"aggregate_type,omitempty"`
+	Kind             eventsourcing.EventKind     `json:"kind,omitempty"`
+	Body             encoding.Json               `json:"body,omitempty"`
+	IdempotencyKey   string                      `json:"idempotency_key,omitempty"`
+	Metadata         encoding.Json               `json:"metadata,omitempty"`
+	CreatedAt        PgTime                      `json:"created_at,omitempty"`
 }
 
 type PgTime time.Time
@@ -60,7 +61,7 @@ type Feed struct {
 	dbURL          string
 	offset         time.Duration
 	channel        string
-	aggregateTypes []string
+	aggregateTypes []eventsourcing.AggregateType
 	metadata       store.Metadata
 	partitions     uint32
 	partitionsLow  uint32
@@ -141,7 +142,10 @@ func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = 10 * time.Second
 
-	lastID := string(afterEventID)
+	lastID, err := eventid.Parse(string(afterEventID))
+	if err != nil {
+		return err
+	}
 	return backoff.Retry(func() error {
 		var err error
 		lastID, err = p.forward(ctx, pool, lastID, sinker, b)
@@ -152,7 +156,7 @@ func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}, b)
 }
 
-func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID string, sinker sink.Sinker, b backoff.BackOff) (string, error) {
+func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID eventid.EventID, sinker sink.Sinker, b backoff.BackOff) (eventid.EventID, error) {
 	lastID := afterEventID
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -167,10 +171,7 @@ func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID stri
 	}
 
 	// replay events applying a safety margin, in case we missed events
-	lastID, err = eventid.DelayEventID(lastID, p.offset)
-	if err != nil {
-		return lastID, faults.Errorf("Error offsetting event ID: %w", backoff.Permanent(err))
-	}
+	lastID = lastID.OffsetTime(-p.offset)
 
 	p.logger.Infof("Replaying events from %s", lastID)
 	filters := []store.FilterOption{
@@ -202,7 +203,7 @@ func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID stri
 	return p.listen(ctx, conn, lastID, sinker, b)
 }
 
-func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string, sinker sink.Sinker, b backoff.BackOff) (lastID string, err error) {
+func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventid.EventID, sinker sink.Sinker, b backoff.BackOff) (lastID eventid.EventID, err error) {
 	defer conn.Release()
 
 	p.logger.Infof("Listening for PostgreSQL notifications on channel %s starting at %s", p.channel, thresholdID)
@@ -221,13 +222,18 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		pgEvent := FeedEvent{}
 		err = json.Unmarshal([]byte(msg.Payload), &pgEvent)
 		if err != nil {
-			return "", faults.Errorf("Error unmarshalling Postgresql Event: %w", backoff.Permanent(err))
+			return eventid.Zero, faults.Errorf("error unmarshalling Postgresql Event: %w", backoff.Permanent(err))
 		}
 		lastID = pgEvent.ID
 
-		if pgEvent.ID <= thresholdID {
+		if pgEvent.ID.Compare(thresholdID) <= 0 {
 			// ignore events already handled
 			continue
+		}
+
+		aggregateID, err := uuid.Parse(pgEvent.AggregateID)
+		if err != nil {
+			return eventid.Zero, faults.Errorf("unable to parse aggregate ID '%s': %w", pgEvent.AggregateID, backoff.Permanent(err))
 		}
 
 		// check if the event is to be forwarded to the sinker
@@ -239,12 +245,12 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 		metadata := map[string]interface{}{}
 		err = json.Unmarshal(pgEvent.Metadata, &metadata)
 		if err != nil {
-			return "", faults.Errorf("Unable unmarshal metadata to map: %w", backoff.Permanent(err))
+			return eventid.Zero, faults.Errorf("Unable unmarshal metadata to map: %w", backoff.Permanent(err))
 		}
 		event := eventsourcing.Event{
 			ID:               pgEvent.ID,
-			ResumeToken:      []byte(pgEvent.ID),
-			AggregateID:      pgEvent.AggregateID,
+			ResumeToken:      []byte(pgEvent.ID.String()),
+			AggregateID:      aggregateID,
 			AggregateIDHash:  pgEvent.AggregateIDHash,
 			AggregateVersion: pgEvent.AggregateVersion,
 			AggregateType:    pgEvent.AggregateType,
@@ -257,7 +263,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID string
 
 		err = sinker.Sink(ctx, event)
 		if err != nil {
-			return "", faults.Errorf("Error handling event %+v: %w", event, backoff.Permanent(err))
+			return eventid.Zero, faults.Errorf("Error handling event %+v: %w", event, backoff.Permanent(err))
 		}
 
 		b.Reset()

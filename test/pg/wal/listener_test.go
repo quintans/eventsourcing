@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gotest.tools/assert"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/sink"
@@ -35,32 +35,32 @@ func TestListener(t *testing.T) {
 
 	s := test.NewMockSink(1)
 	ctx, cancel := context.WithCancel(context.Background())
-	feeding(t, ctx, dbConfig, s)
-	time.Sleep(200 * time.Millisecond)
+	errCh := feeding(ctx, dbConfig, s)
+	time.Sleep(time.Second)
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
-	acc.Deposit(20)
+	acc.Withdraw(20)
+	acc.Deposit(5)
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
-	time.Sleep(time.Second)
+	time.Sleep(20 * time.Second)
 	events := s.GetEvents()
-	assert.Equal(t, 3, len(events), "event size")
-	assert.Equal(t, "AccountCreated", events[0].Kind)
-	assert.Equal(t, "MoneyDeposited", events[1].Kind)
-	assert.Equal(t, "MoneyDeposited", events[2].Kind)
+	require.Equal(t, 3, len(events), "event size")
+	assert.Equal(t, "AccountCreated", events[0].Kind.String())
+	assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
+	assert.Equal(t, "MoneyWithdraw", events[2].Kind.String())
+	assert.Equal(t, "MoneyDeposited", events[3].Kind.String())
 
-	time.Sleep(time.Second)
 	cancel()
-	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, <-errCh, "Error feeding #1")
 
 	ctx, cancel = context.WithCancel(context.Background())
-	feeding(t, ctx, dbConfig, s)
-	time.Sleep(200 * time.Millisecond)
+	errCh = feeding(ctx, dbConfig, s)
 
-	id = uuid.New().String()
+	id = uuid.New()
 	acc = test.CreateAccount("Quintans", id, 100)
 	acc.Deposit(30)
 	err = es.Save(ctx, acc)
@@ -71,19 +71,22 @@ func TestListener(t *testing.T) {
 	assert.Equal(t, 5, len(events), "event size")
 
 	cancel()
-	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, <-errCh, "Error feeding #2")
 }
 
-func feeding(t *testing.T, ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) {
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) chan error {
+	errCh := make(chan error, 1)
 	done := make(chan struct{})
 	listener := postgresql.NewFeed(dbConfig.ReplicationUrl())
 	go func() {
 		close(done)
 		err := listener.Feed(ctx, sinker)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatalf("Error feeding #1: %v", err)
+			errCh <- err
+		} else {
+			errCh <- nil
 		}
 	}()
-	// wait for the goroutine to run
 	<-done
+	return errCh
 }

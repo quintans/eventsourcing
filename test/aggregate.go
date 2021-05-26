@@ -1,6 +1,7 @@
 package test
 
 import (
+	"github.com/google/uuid"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -14,13 +15,42 @@ const (
 	FROZEN Status = "FROZEN"
 )
 
+type MyUUID uuid.UUID
+
+// MarshalJSON returns m as a base64 encoding of m.
+func (m MyUUID) MarshalJSON() ([]byte, error) {
+	u := uuid.UUID(m)
+	if u == uuid.Nil {
+		return []byte{}, nil
+	}
+	encoded := `"` + u.String() + `"`
+	return []byte(encoded), nil
+}
+
+// UnmarshalJSON sets *m to a decoded base64.
+func (m *MyUUID) UnmarshalJSON(data []byte) error {
+	if m == nil {
+		return faults.New("test.MyUUID: UnmarshalJSON on nil pointer")
+	}
+	// strip quotes
+	data = data[1 : len(data)-1]
+
+	decoded, err := uuid.Parse(string(data))
+	if err != nil {
+		return faults.Errorf("test.MyUUID: decode error: %w", err)
+	}
+
+	*m = MyUUID(decoded)
+	return nil
+}
+
 type AccountCreated struct {
-	ID    string `json:"id,omitempty"`
+	ID    MyUUID `json:"id,omitempty"`
 	Money int64  `json:"money,omitempty"`
 	Owner string `json:"owner,omitempty"`
 }
 
-func (_ AccountCreated) GetType() string {
+func (e AccountCreated) GetType() string {
 	return "AccountCreated"
 }
 
@@ -28,7 +58,7 @@ type MoneyWithdrawn struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func (_ MoneyWithdrawn) GetType() string {
+func (e MoneyWithdrawn) GetType() string {
 	return "MoneyWithdrawn"
 }
 
@@ -36,7 +66,7 @@ type MoneyDeposited struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func (_ MoneyDeposited) GetType() string {
+func (e MoneyDeposited) GetType() string {
 	return "MoneyDeposited"
 }
 
@@ -44,7 +74,7 @@ type OwnerUpdated struct {
 	Owner string `json:"owner,omitempty"`
 }
 
-func (_ OwnerUpdated) GetType() string {
+func (e OwnerUpdated) GetType() string {
 	return "OwnerUpdated"
 }
 
@@ -53,10 +83,9 @@ type AggregateFactory struct {
 }
 
 func (f AggregateFactory) New(kind string) (eventsourcing.Typer, error) {
-	var e eventsourcing.Typer
 	switch kind {
 	case "Account":
-		e = NewAccount()
+		return NewAccount(), nil
 	default:
 		evt, err := f.EventFactory.New(kind)
 		if err != nil {
@@ -64,10 +93,6 @@ func (f AggregateFactory) New(kind string) (eventsourcing.Typer, error) {
 		}
 		return evt, nil
 	}
-	if e == nil {
-		return nil, faults.Errorf("Unknown aggregate kind: %s", kind)
-	}
-	return e, nil
 }
 
 type EventFactory struct{}
@@ -90,7 +115,7 @@ func (EventFactory) New(kind string) (eventsourcing.Typer, error) {
 	return e, nil
 }
 
-func CreateAccount(owner string, id string, money int64) *Account {
+func CreateAccount(owner string, id uuid.UUID, money int64) *Account {
 	a := &Account{
 		Status:  OPEN,
 		Balance: money,
@@ -99,7 +124,7 @@ func CreateAccount(owner string, id string, money int64) *Account {
 	a.RootAggregate = eventsourcing.NewRootAggregate(a)
 	a.RootAggregate.ID = id
 	a.ApplyChange(AccountCreated{
-		ID:    id,
+		ID:    MyUUID(id),
 		Money: money,
 		Owner: owner,
 	})
@@ -153,7 +178,7 @@ func (a *Account) HandleEvent(event eventsourcing.Eventer) {
 }
 
 func (a *Account) HandleAccountCreated(event AccountCreated) {
-	a.ID = event.ID
+	a.ID = uuid.UUID(event.ID)
 	a.Balance = event.Money
 	// this reflects that we are handling domain events and NOT property events
 	a.Status = OPEN

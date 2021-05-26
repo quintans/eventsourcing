@@ -89,36 +89,38 @@ func TestMongoListenere(t *testing.T) {
 			mockSink := test.NewMockSink(partitions)
 
 			ctx, cancel := context.WithCancel(context.Background())
-			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
-			time.Sleep(200 * time.Millisecond)
+			errs := feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
 
 			es := eventsourcing.NewEventStore(repository, 3, test.AggregateFactory{})
 
-			id := uuid.New().String()
+			id := uuid.New()
 			acc := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			acc.Deposit(20)
 			err = es.Save(ctx, acc)
 			require.NoError(t, err)
 
-			time.Sleep(time.Second)
-
+			time.Sleep(500 * time.Millisecond)
 			events := mockSink.GetEvents()
+
 			require.Equal(t, 3, len(events), "event size")
-			assert.Equal(t, "AccountCreated", events[0].Kind)
-			assert.Equal(t, "MoneyDeposited", events[1].Kind)
-			assert.Equal(t, "MoneyDeposited", events[2].Kind)
+			assert.Equal(t, "AccountCreated", events[0].Kind.String())
+			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
+			assert.Equal(t, "MoneyDeposited", events[2].Kind.String())
 
 			// cancel current listeners
 			cancel()
-			time.Sleep(time.Second)
+			for i := 0; i < len(tt.partitionSlots); i++ {
+				require.NoError(t, <-errs, "Error feeding #1")
+			}
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
-			time.Sleep(200 * time.Millisecond)
+			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
 
+			time.Sleep(time.Second)
 			events = mockSink.GetEvents()
+
 			assert.Equal(t, 3, len(events), "event size")
 
 			acc.Withdraw(5)
@@ -126,28 +128,33 @@ func TestMongoListenere(t *testing.T) {
 			err = es.Save(ctx, acc)
 			require.NoError(t, err)
 
-			time.Sleep(time.Second)
-
+			time.Sleep(500 * time.Millisecond)
 			events = mockSink.GetEvents()
+
 			require.Equal(t, 5, len(events), "event size")
-			require.Equal(t, "MoneyWithdrawn", events[3].Kind)
+			assert.Equal(t, "MoneyWithdrawn", events[3].Kind.String())
 
 			cancel()
-			time.Sleep(time.Second)
+			for i := 0; i < len(tt.partitionSlots); i++ {
+				require.NoError(t, <-errs, "Error feeding #2")
+			}
 
 			// listening ALL from the beginning
 			mockSink = test.NewMockSink(partitions)
 
 			// connecting
 			ctx, cancel = context.WithCancel(context.Background())
-			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
-			time.Sleep(200 * time.Millisecond)
+			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
 
+			time.Sleep(500 * time.Millisecond)
 			events = mockSink.GetEvents()
+
 			require.Equal(t, 5, len(events), "event size")
 
 			cancel()
-			time.Sleep(time.Second)
+			for i := 0; i < len(tt.partitionSlots); i++ {
+				require.NoError(t, <-errs, "Error feeding #3")
+			}
 
 			lastMessages := mockSink.LastMessages()
 			// listening messages from a specific message
@@ -156,16 +163,18 @@ func TestMongoListenere(t *testing.T) {
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			feeding(ctx, t, dbConfig, partitions, tt.partitionSlots, mockSink)
-			time.Sleep(200 * time.Millisecond)
+			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
 
+			time.Sleep(500 * time.Millisecond)
 			events = mockSink.GetEvents()
 			// when reconnecting the resume token may refer to one or more events (one document - many events)
 			// but it is filtered by the event id
 			require.Equal(t, 0, len(events), "event size")
 
 			cancel()
-			time.Sleep(time.Second)
+			for i := 0; i < len(tt.partitionSlots); i++ {
+				require.NoError(t, <-errs, "Error feeding #4")
+			}
 		})
 	}
 }
@@ -180,7 +189,8 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, t *testing.T, dbConfig tmg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) {
+func feeding(ctx context.Context, dbConfig tmg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) chan error {
+	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)
@@ -189,10 +199,13 @@ func feeding(ctx context.Context, t *testing.T, dbConfig tmg.DBConfig, partition
 			wg.Done()
 			err := listener.Feed(ctx, sinker)
 			if err != nil && !errors.Is(err, context.Canceled) {
-				t.Fatalf("Error feeding #1: %v", err)
+				errCh <- err
+			} else {
+				errCh <- nil
 			}
 		}()
 	}
 	// wait for all goroutines to run
 	wg.Wait()
+	return errCh
 }

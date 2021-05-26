@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
+	"github.com/quintans/eventsourcing/eventid"
 )
 
 type Codec interface {
@@ -24,17 +26,17 @@ type Decoder interface {
 }
 
 type Event struct {
-	ID               string                 `json:"id,omitempty"`
-	ResumeToken      encoding.Base64        `json:"resume_token,omitempty"`
-	AggregateID      string                 `json:"aggregate_id,omitempty"`
-	AggregateIDHash  uint32                 `json:"aggregate_id_hash,omitempty"`
-	AggregateVersion uint32                 `json:"aggregate_version,omitempty"`
-	AggregateType    string                 `json:"aggregate_type,omitempty"`
-	Kind             string                 `json:"kind,omitempty"`
-	Body             encoding.Base64        `json:"body,omitempty"`
-	IdempotencyKey   string                 `json:"idempotency_key,omitempty"`
-	Metadata         map[string]interface{} `json:"metadata,omitempty"`
-	CreatedAt        time.Time              `json:"created_at,omitempty"`
+	ID               eventid.EventID             `json:"id,omitempty"`
+	ResumeToken      encoding.Base64             `json:"resume_token,omitempty"`
+	AggregateID      string                      `json:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32                      `json:"aggregate_id_hash,omitempty"`
+	AggregateVersion uint32                      `json:"aggregate_version,omitempty"`
+	AggregateType    eventsourcing.AggregateType `json:"aggregate_type,omitempty"`
+	Kind             eventsourcing.EventKind     `json:"kind,omitempty"`
+	Body             encoding.Base64             `json:"body,omitempty"`
+	IdempotencyKey   string                      `json:"idempotency_key,omitempty"`
+	Metadata         map[string]interface{}      `json:"metadata,omitempty"`
+	CreatedAt        time.Time                   `json:"created_at,omitempty"`
 }
 
 type JsonCodec struct{}
@@ -43,7 +45,7 @@ func (JsonCodec) Encode(e eventsourcing.Event) ([]byte, error) {
 	event := Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
-		AggregateID:      e.AggregateID,
+		AggregateID:      e.AggregateID.String(),
 		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateType:    e.AggregateType,
@@ -66,11 +68,14 @@ func (JsonCodec) Decode(data []byte) (eventsourcing.Event, error) {
 	if err != nil {
 		return eventsourcing.Event{}, faults.Wrap(err)
 	}
-
+	aggregateID, err := uuid.Parse(e.AggregateID)
+	if err != nil {
+		return eventsourcing.Event{}, faults.Errorf("unable to parse aggregate ID '%s': %w", e.AggregateID, err)
+	}
 	event := eventsourcing.Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
-		AggregateID:      e.AggregateID,
+		AggregateID:      aggregateID,
 		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateType:    e.AggregateType,

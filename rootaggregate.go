@@ -2,11 +2,25 @@ package eventsourcing
 
 import (
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type EventMetadata struct {
 	AggregateVersion uint32
 	CreatedAt        time.Time
+}
+
+type AggregateType string
+
+func (a AggregateType) String() string {
+	return string(a)
+}
+
+type EventKind string
+
+func (e EventKind) String() string {
+	return string(e)
 }
 
 type Typer interface {
@@ -29,16 +43,16 @@ func NewRootAggregate(aggregate EventHandler) RootAggregate {
 }
 
 type RootAggregate struct {
-	ID            string `json:"id,omitempty"`
-	Version       uint32 `json:"version,omitempty"`
-	EventsCounter uint32 `json:"events_counter,omitempty"`
+	ID            uuid.UUID `json:"id,omitempty"`
+	Version       uint32    `json:"version,omitempty"`
+	EventsCounter uint32    `json:"events_counter,omitempty"`
 
 	events       []Eventer
 	eventHandler EventHandler
 	updatedAt    time.Time
 }
 
-func (a RootAggregate) GetID() string {
+func (a RootAggregate) GetID() uuid.UUID {
 	return a.ID
 }
 
@@ -78,7 +92,7 @@ func (a *RootAggregate) ApplyChange(event Eventer) {
 }
 
 func (a RootAggregate) IsZero() bool {
-	return a.ID == ""
+	return a.ID == uuid.Nil
 }
 
 func (a RootAggregate) UpdatedAt() time.Time {

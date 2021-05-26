@@ -75,7 +75,7 @@ func TestMarshall(t *testing.T) {
 	for _, tt := range tc {
 		t.Run(tt.name, func(t *testing.T) {
 			b := tt.binary()
-			s := Marshal(b)
+			s := MarshalBase32(b)
 			assert.Equal(t, tt.expected, s)
 		})
 	}
@@ -115,7 +115,7 @@ func TestUnmarshall(t *testing.T) {
 	}
 	for _, tt := range tc {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := Unmarshal(tt.encoded)
+			s, err := UnmarshalBase32(tt.encoded)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, s)
 		})

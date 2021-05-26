@@ -27,6 +27,13 @@ var (
 	logger = log.NewLogrus(logrus.StandardLogger())
 )
 
+const (
+	AggregateAccount    eventsourcing.AggregateType = "Account"
+	EventAccountCreated eventsourcing.EventKind     = "AccountCreated"
+	EventMoneyDeposited eventsourcing.EventKind     = "MoneyDeposited"
+	EventMoneyWithdrawn eventsourcing.EventKind     = "MoneyWithdrawn"
+)
+
 // creates a independent connection
 func connect(dbConfig DBConfig) (*mongo.Database, error) {
 	connString := fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", dbConfig.Host, dbConfig.Port, dbConfig.Database)
@@ -52,10 +59,10 @@ func TestSaveAndGet(t *testing.T) {
 
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
-	acc.Deposit(20)
+	acc.Withdraw(5)
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
@@ -65,35 +72,16 @@ func TestSaveAndGet(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(time.Second)
 
-	db, err := connect(dbConfig)
-	require.NoError(t, err)
-
-	count, err := db.Collection(CollSnapshots).CountDocuments(ctx, bson.M{
-		"aggregate_id": bson.D{
-			{"$eq", id},
-		},
-	})
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
-
-	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
-		"aggregate_id": bson.D{
-			{"$eq", id},
-		},
-	}, opts)
-	require.NoError(t, err)
-	evts := []mongodb.Event{}
-	err = cursor.All(ctx, &evts)
+	evts, err := getEvents(ctx, dbConfig, id)
 	require.NoError(t, err)
 
 	require.Equal(t, 2, len(evts))
 	evt := evts[0]
-	assert.Equal(t, "AccountCreated", evt.Details[0].Kind)
-	assert.Equal(t, "MoneyDeposited", evt.Details[1].Kind)
-	assert.Equal(t, "MoneyDeposited", evt.Details[2].Kind)
-	assert.Equal(t, "Account", evts[0].AggregateType)
-	assert.Equal(t, id, evt.AggregateID)
+	assert.Equal(t, EventAccountCreated, evt.Details[0].Kind)
+	assert.Equal(t, EventMoneyDeposited, evt.Details[1].Kind)
+	assert.Equal(t, EventMoneyWithdrawn, evt.Details[2].Kind)
+	assert.Equal(t, AggregateAccount, evts[0].AggregateType)
+	assert.Equal(t, id.String(), evt.AggregateID)
 	assert.Equal(t, uint32(1), evt.AggregateVersion)
 	assert.Equal(t, "idempotency-key", evts[1].IdempotencyKey)
 
@@ -102,17 +90,40 @@ func TestSaveAndGet(t *testing.T) {
 	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID)
 	assert.Equal(t, uint32(2), acc2.Version)
-	assert.Equal(t, int64(135), acc2.Balance)
+	assert.Equal(t, int64(110), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 	assert.Equal(t, uint32(4), acc2.GetEventsCounter())
 
-	found, err := es.HasIdempotencyKey(ctx, acc.ID, "idempotency-key")
+	found, err := es.HasIdempotencyKey(ctx, AggregateAccount, "idempotency-key")
 	require.NoError(t, err)
 	require.True(t, found)
 
 	acc.Deposit(5)
 	err = es.Save(ctx, acc, eventsourcing.WithIdempotencyKey("idempotency-key"))
 	require.Error(t, err)
+}
+
+func getEvents(ctx context.Context, dbConfig DBConfig, id uuid.UUID) ([]mongodb.Event, error) {
+	db, err := connect(dbConfig)
+	if err != nil {
+		return nil, err
+	}
+	opts := options.Find().SetSort(bson.D{{"_id", 1}})
+	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id.String()},
+		},
+	}, opts)
+	if err != nil {
+		return nil, err
+	}
+	evts := []mongodb.Event{}
+	err = cursor.All(ctx, &evts)
+	if err != nil {
+		return nil, err
+	}
+
+	return evts, nil
 }
 
 func TestPollListener(t *testing.T) {
@@ -126,7 +137,7 @@ func TestPollListener(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Withdraw(5)
@@ -188,7 +199,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -204,7 +215,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	p := poller.New(logger, repository, poller.WithAggregateTypes("Account"))
+	p := poller.New(logger, repository, poller.WithAggregateTypes(AggregateAccount))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
@@ -245,7 +256,7 @@ func TestListenerWithLabels(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -303,7 +314,7 @@ func TestForget(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, 3, test.AggregateFactory{})
 
-	id := uuid.New().String()
+	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
@@ -320,9 +331,10 @@ func TestForget(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	db, err := connect(dbConfig)
+	require.NoError(t, err)
 	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
-			{"$eq", id},
+			{"$eq", id.String()},
 		},
 		"details.kind": bson.D{
 			{"$eq", "OwnerUpdated"},
@@ -348,7 +360,7 @@ func TestForget(t *testing.T) {
 
 	cursor, err = db.Collection(CollSnapshots).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
-			{"$eq", id},
+			{"$eq", id.String()},
 		},
 	})
 	require.NoError(t, err)
@@ -384,7 +396,7 @@ func TestForget(t *testing.T) {
 
 	cursor, err = db.Collection(CollEvents).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
-			{"$eq", id},
+			{"$eq", id.String()},
 		},
 		"details.kind": bson.D{
 			{"$eq", "OwnerUpdated"},
@@ -410,7 +422,7 @@ func TestForget(t *testing.T) {
 
 	cursor, err = db.Collection(CollSnapshots).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
-			{"$eq", id},
+			{"$eq", id.String()},
 		},
 	})
 	require.NoError(t, err)
