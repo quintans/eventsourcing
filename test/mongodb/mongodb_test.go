@@ -89,10 +89,10 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(2), acc2.Version)
+	assert.Equal(t, uint32(2), acc2.GetVersion())
+	assert.Equal(t, uint32(1), acc2.GetEventsCounter())
 	assert.Equal(t, int64(110), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
-	assert.Equal(t, uint32(4), acc2.GetEventsCounter())
 
 	found, err := es.HasIdempotencyKey(ctx, AggregateAccount, "idempotency-key")
 	require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestPollListener(t *testing.T) {
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(2), acc2.Version)
+	assert.Equal(t, uint32(2), acc2.GetVersion())
 	assert.Equal(t, int64(110), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
@@ -240,7 +240,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	}
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(2), acc2.Version)
+	assert.Equal(t, uint32(2), acc2.GetVersion())
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
@@ -298,7 +298,7 @@ func TestListenerWithLabels(t *testing.T) {
 	}
 	assert.Equal(t, 3, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(1), acc2.Version)
+	assert.Equal(t, uint32(1), acc2.GetVersion())
 	assert.Equal(t, int64(130), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }

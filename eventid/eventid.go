@@ -1,51 +1,50 @@
 package eventid
 
 import (
-	"bytes"
 	"database/sql/driver"
 	"errors"
+	"io"
+	"math/rand"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/quintans/faults"
+
+	"github.com/oklog/ulid/v2"
 
 	"github.com/quintans/eventsourcing/encoding"
 )
 
 const (
-	EncodingSize        = 26
-	EncodedStringSize   = 40
-	EncodedStringSizeV2 = 42
-
-	TimestampSize = 6
-	UuidSize      = 16
-	VersionSize   = 3
-	CountSize     = 1
-
-	versionPos = TimestampSize + UuidSize
-	countPos   = TimestampSize + UuidSize + VersionSize
+	encodedStringSize   = 26
+	encodedStringSizeV2 = 28
 )
 
 var (
-	ErrInvalidStringSize = errors.New("string size should be 40 or 42")
+	ErrInvalidStringSize = errors.New("string size should be 26 or 28")
 	Zero                 EventID
 )
 
-type EventID [EncodingSize]byte
-
-func New(instant time.Time, aggregateID uuid.UUID, version uint32) EventID {
-	return NewV2(instant, aggregateID, version, 0)
+type EventID struct {
+	u     ulid.ULID
+	count uint8
 }
 
-func NewV2(instant time.Time, aggregateID uuid.UUID, version uint32, count uint8) EventID {
-	var eid EventID
+func EntropyFactory(t time.Time) *ulid.MonotonicEntropy {
+	return ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
+}
 
-	eid.setTime(instant)
-	eid.setAggregateID(aggregateID)
-	eid.setVersion(version)
-	eid.setCount(count)
+func New(t time.Time, entropy io.Reader) (EventID, error) {
+	id, err := ulid.New(ulid.Timestamp(t), entropy)
+	if err != nil {
+		return Zero, err
+	}
+	return EventID{u: id}, nil
+}
 
-	return eid
+func TimeOnly(t time.Time) EventID {
+	var id ulid.ULID
+	id.SetTime(ulid.Timestamp(t))
+	return EventID{u: id}
 }
 
 func (e EventID) String() string {
@@ -53,10 +52,11 @@ func (e EventID) String() string {
 		return ""
 	}
 
-	if e[countPos] == 0 {
-		return encoding.MarshalBase32(e[:countPos])
+	s := e.u.String()
+	if e.count == 0 {
+		return s
 	}
-	return encoding.MarshalBase32(e[:])
+	return s + encoding.MarshalBase32([]byte{e.count})
 }
 
 func (e EventID) IsZero() bool {
@@ -68,100 +68,73 @@ func Parse(encoded string) (EventID, error) {
 		return Zero, nil
 	}
 
-	if len(encoded) != EncodedStringSize && len(encoded) != EncodedStringSizeV2 {
+	if len(encoded) != encodedStringSize && len(encoded) != encodedStringSizeV2 {
 		return EventID{}, faults.Errorf("unable to parse event ID '%s': %w", encoded, ErrInvalidStringSize)
 	}
-	a, err := encoding.UnmarshalBase32(encoded)
+
+	var count uint8
+	if len(encoded) == encodedStringSizeV2 {
+		enc := encoded[encodedStringSize:]
+		a, err := encoding.UnmarshalBase32(enc)
+		if err != nil {
+			return EventID{}, err
+		}
+		count = a[0]
+		encoded = encoded[:encodedStringSize]
+	}
+	u, err := ulid.Parse(encoded)
 	if err != nil {
 		return EventID{}, err
 	}
 
-	// aggregate uuid - check if is parsable
-	_, err = uuid.FromBytes(a[TimestampSize:versionPos])
-	if err != nil {
-		return EventID{}, faults.Errorf("unable to parse aggregate ID component from '%s': %w", encoded, err)
-	}
-
-	var eid EventID
-	copy(eid[:], a)
-
-	return eid, nil
+	return EventID{u, count}, nil
 }
 
-func (e EventID) Time() time.Time {
-	b := make([]byte, 8)
-	copy(b[2:], e[:TimestampSize])
-	ts := encoding.Btoi64(b)
-	return Time(ts)
-}
-
-func (e *EventID) setTime(instant time.Time) {
-	ts := Timestamp(instant)
-	bts := encoding.I64tob(ts) // 8 bytes
-	// using only 6 bytes will give us 12293 years
-	copy(e[:], bts[2:])
-}
-
-func (e EventID) AggregateID() uuid.UUID {
-	// ignoring error because it was already successfully parsed
-	id, _ := uuid.FromBytes(e[TimestampSize:versionPos])
-
-	return id
-}
-
-func (e *EventID) setAggregateID(aggregateID uuid.UUID) {
-	bid, _ := aggregateID.MarshalBinary() // 16 bytes
-	copy(e[TimestampSize:], bid)
-}
-
-func (e EventID) Version() uint32 {
-	b := make([]byte, 4)
-	copy(b[1:], e[TimestampSize+UuidSize:])
-	return encoding.Btoi32(b)
-}
-
-func (e *EventID) setVersion(version uint32) {
-	bver := encoding.I32tob(version)           // 4 bytes
-	copy(e[TimestampSize+UuidSize:], bver[1:]) // 3 bytes
+func (e EventID) SetCount(c uint8) EventID {
+	return EventID{e.u, c}
 }
 
 func (e EventID) Count() uint8 {
-	return e[countPos]
-}
-
-func (e *EventID) setCount(count uint8) {
-	e[countPos] = count // 1 byte
-}
-
-func (e EventID) WithCount(count uint8) EventID {
-	e[countPos] = count // 1 byte
-	return e
+	return e.count
 }
 
 func (e EventID) OffsetTime(offset time.Duration) EventID {
-	var other EventID
-	copy(other[:], e[:])
-	t := e.Time()
+	ut := e.u.Time()
+	t := ulid.Time(ut)
 	t = t.Add(offset)
-	return other
+	other := ulid.ULID{}
+	other.SetTime(ulid.Timestamp(t))
+	other.SetEntropy(e.u.Entropy())
+	return EventID{other, e.count}
 }
 
 // Compare returns an integer comparing id and other lexicographically.
 // The result will be 0 if e==other, -1 if e < other, and +1 if e > other.
 func (e EventID) Compare(other EventID) int {
-	return bytes.Compare(e[:], other[:])
+	c := e.u.Compare(other.u)
+	if c != 0 {
+		return c
+	}
+
+	if e.count == other.count {
+		return 0
+	} else if e.count < other.count {
+		return -1
+	} else {
+		return 1
+	}
 }
 
 // MarshalJSON returns m as string.
-func (m EventID) MarshalJSON() ([]byte, error) {
-	encoded := `"` + m.String() + `"`
+func (e EventID) MarshalJSON() ([]byte, error) {
+	encoded := `"` + e.String() + `"`
 	return []byte(encoded), nil
 }
 
 // UnmarshalJSON sets *m to a decoded base64.
-func (m *EventID) UnmarshalJSON(data []byte) error {
-	if m == nil {
-		return faults.New("common.Base64: UnmarshalJSON on nil pointer")
+func (e *EventID) UnmarshalJSON(data []byte) error {
+	if e == nil {
+		return faults.New("eventid.UnmarshalJSON: UnmarshalJSON on nil pointer")
 	}
 	// strip quotes
 	data = data[1 : len(data)-1]
@@ -171,13 +144,13 @@ func (m *EventID) UnmarshalJSON(data []byte) error {
 		return faults.Errorf("decode error: %w", err)
 	}
 
-	*m = decoded
+	*e = decoded
 	return nil
 }
 
-func (m *EventID) Scan(value interface{}) error {
+func (e *EventID) Scan(value interface{}) error {
 	if value == nil {
-		*m = Zero
+		*e = Zero
 		return nil
 	}
 
@@ -187,31 +160,17 @@ func (m *EventID) Scan(value interface{}) error {
 		if err != nil {
 			return err
 		}
-		*m = eID
+		*e = eID
 	case []byte:
 		eID, err := Parse(string(s))
 		if err != nil {
 			return err
 		}
-		*m = eID
+		*e = eID
 	}
 	return nil
 }
 
-func (m EventID) Value() (driver.Value, error) {
-	return m.String(), nil
-}
-
-// Timestamp converts a time.Time to Unix milliseconds.
-func Timestamp(t time.Time) uint64 {
-	return uint64(t.Unix())*1000 +
-		uint64(t.Nanosecond()/int(time.Millisecond))
-}
-
-// Time converts Unix milliseconds in the format
-// returned by the Timestamp function to a time.Time.
-func Time(ms uint64) time.Time {
-	s := int64(ms / 1e3)
-	ns := int64((ms % 1e3) * 1e6)
-	return time.Unix(s, ns)
+func (e EventID) Value() (driver.Value, error) {
+	return e.String(), nil
 }

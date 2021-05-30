@@ -15,39 +15,10 @@ const (
 	FROZEN Status = "FROZEN"
 )
 
-type MyUUID uuid.UUID
-
-// MarshalJSON returns m as a base64 encoding of m.
-func (m MyUUID) MarshalJSON() ([]byte, error) {
-	u := uuid.UUID(m)
-	if u == uuid.Nil {
-		return []byte{}, nil
-	}
-	encoded := `"` + u.String() + `"`
-	return []byte(encoded), nil
-}
-
-// UnmarshalJSON sets *m to a decoded base64.
-func (m *MyUUID) UnmarshalJSON(data []byte) error {
-	if m == nil {
-		return faults.New("test.MyUUID: UnmarshalJSON on nil pointer")
-	}
-	// strip quotes
-	data = data[1 : len(data)-1]
-
-	decoded, err := uuid.Parse(string(data))
-	if err != nil {
-		return faults.Errorf("test.MyUUID: decode error: %w", err)
-	}
-
-	*m = MyUUID(decoded)
-	return nil
-}
-
 type AccountCreated struct {
-	ID    MyUUID `json:"id,omitempty"`
-	Money int64  `json:"money,omitempty"`
-	Owner string `json:"owner,omitempty"`
+	ID    uuid.UUID `json:"id,omitempty"`
+	Money int64     `json:"money,omitempty"`
+	Owner string    `json:"owner,omitempty"`
 }
 
 func (e AccountCreated) GetType() string {
@@ -122,9 +93,9 @@ func CreateAccount(owner string, id uuid.UUID, money int64) *Account {
 		Owner:   owner,
 	}
 	a.RootAggregate = eventsourcing.NewRootAggregate(a)
-	a.RootAggregate.ID = id
+	a.ID = id
 	a.ApplyChange(AccountCreated{
-		ID:    MyUUID(id),
+		ID:    id,
 		Money: money,
 		Owner: owner,
 	})
@@ -139,9 +110,14 @@ func NewAccount() *Account {
 
 type Account struct {
 	eventsourcing.RootAggregate
-	Status  Status `json:"status,omitempty"`
-	Balance int64  `json:"balance,omitempty"`
-	Owner   string `json:"owner,omitempty"`
+	ID      uuid.UUID `json:"id"`
+	Status  Status    `json:"status,omitempty"`
+	Balance int64     `json:"balance,omitempty"`
+	Owner   string    `json:"owner,omitempty"`
+}
+
+func (a Account) GetID() uuid.UUID {
+	return a.ID
 }
 
 func (a Account) GetType() string {

@@ -121,9 +121,13 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 		if r.projectorFactory != nil {
 			projector = r.projectorFactory(tx)
 		}
+		entropy := eventid.EntropyFactory(eRec.CreatedAt)
 		for _, e := range eRec.Details {
+			id, err = eventid.New(eRec.CreatedAt, entropy)
+			if err != nil {
+				return faults.Wrap(err)
+			}
 			version++
-			id = eventid.New(eRec.CreatedAt, eRec.AggregateID, version)
 			hash := common.Hash(eRec.AggregateID)
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash)

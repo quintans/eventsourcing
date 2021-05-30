@@ -144,7 +144,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 					return faults.Errorf("unable to parse aggregate ID '%s': %w", eventDoc.AggregateID, err)
 				}
 				event := eventsourcing.Event{
-					ID: id.WithCount(uint8(k)),
+					ID: id.SetCount(uint8(k)),
 					// the resume token should be from the last fully completed sinked doc, because it may fail midway.
 					// We should use the last eventID to filter out the ones that were successfully sent.
 					ResumeToken:      lastResumeToken,

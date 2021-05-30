@@ -5,6 +5,7 @@ import (
 
 	"github.com/quintans/faults"
 
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 )
@@ -24,7 +25,7 @@ type Notification struct {
 // Any running projection needs to stop until restartFn returns.
 // restartFn() is responsible for cleaning the projection
 type Rebuilder interface {
-	Rebuild(ctx context.Context, projection string, beforeRecordingTokens func(ctx context.Context) (string, error), afterRecordingTokens func(ctx context.Context, afterEventID string) (string, error)) error
+	Rebuild(ctx context.Context, projection string, beforeRecordingTokens func(ctx context.Context) (eventid.EventID, error), afterRecordingTokens func(ctx context.Context, afterEventID eventid.EventID) (eventid.EventID, error)) error
 }
 
 type ResumeTokenUpdater interface {
@@ -58,7 +59,7 @@ func NewNotifierLockRestarter(
 	}
 }
 
-func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, beforeRecordingTokens func(ctx context.Context) (string, error), afterRecordingTokens func(ctx context.Context, afterEventID string) (string, error)) error {
+func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, beforeRecordingTokens func(ctx context.Context) (eventid.EventID, error), afterRecordingTokens func(ctx context.Context, afterEventID eventid.EventID) (eventid.EventID, error)) error {
 	logger := r.logger.WithTags(log.Tags{
 		"method":     "NotifierLockRebuilder.Rebuild",
 		"projection": projection,

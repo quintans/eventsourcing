@@ -135,8 +135,13 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 		})
 	}
 
+	entropy := eventid.EntropyFactory(eRec.CreatedAt)
+	id, err := eventid.New(eRec.CreatedAt, entropy)
+	if err != nil {
+		return eventid.Zero, 0, faults.Wrap(err)
+	}
+
 	version := eRec.Version + 1
-	id := eventid.New(eRec.CreatedAt, eRec.AggregateID, version)
 	doc := Event{
 		ID:               id.String(),
 		AggregateID:      eRec.AggregateID.String(),
@@ -149,7 +154,6 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 		AggregateIDHash:  common.Hash(eRec.AggregateID),
 	}
 
-	var err error
 	if r.projectorFactory != nil {
 		r.withTx(ctx, func(mCtx mongo.SessionContext) (interface{}, error) {
 			res, err := r.eventsCollection().InsertOne(mCtx, doc)
@@ -220,7 +224,7 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (
 	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
-	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID}}, opts).Decode(&snap); err != nil {
+	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID.String()}}, opts).Decode(&snap); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return eventsourcing.Snapshot{}, nil
 		}
@@ -508,7 +512,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 				if err != nil {
 					return nil, eventid.Zero, faults.Errorf("unable to parse message ID '%s': %w", v.ID, err)
 				}
-				lastEventID = eventID.WithCount(uint8(k))
+				lastEventID = eventID.SetCount(uint8(k))
 				aggregateID, err := uuid.Parse(v.AggregateID)
 				if err != nil {
 					return nil, eventid.Zero, faults.Errorf("unable to parse aggregate ID '%s': %w", v.AggregateID, err)

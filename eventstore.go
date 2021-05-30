@@ -205,6 +205,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID uuid.UUID) (Aggreg
 			return nil, err
 		}
 		aggregate = a.(Aggregater)
+		aggregate.SetVersion(snap.AggregateVersion)
 	}
 
 	var events []Event
@@ -218,6 +219,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID uuid.UUID) (Aggreg
 	}
 
 	for _, v := range events {
+		// if the aggregate was not instantiated because the snap was not found
 		if aggregate == nil {
 			a, err := es.RehydrateAggregate(v.AggregateType, nil)
 			if err != nil {
@@ -300,31 +302,26 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	}
 	aggregate.SetVersion(lastVersion)
 
-	newCounter := aggregate.GetEventsCounter()
-	oldCounter := newCounter - uint32(eventsLen)
-	if newCounter > es.snapshotThreshold-1 {
-		// TODO this could be done asynchronously. Beware that aggregate holds a reference and not a copy.
-		mod := oldCounter % es.snapshotThreshold
-		delta := newCounter - (oldCounter - mod)
-		if delta >= es.snapshotThreshold {
-			body, err := es.codec.Encode(aggregate)
-			if err != nil {
-				return faults.Errorf("Failed to create serialize snapshot: %w", err)
-			}
+	eventsCounter := aggregate.GetEventsCounter()
+	if eventsCounter >= es.snapshotThreshold {
+		body, err := es.codec.Encode(aggregate)
+		if err != nil {
+			return faults.Errorf("Failed to create serialize snapshot: %w", err)
+		}
 
-			snap := Snapshot{
-				ID:               id,
-				AggregateID:      aggregate.GetID(),
-				AggregateVersion: aggregate.GetVersion(),
-				AggregateType:    AggregateType(aggregate.GetType()),
-				Body:             body,
-				CreatedAt:        time.Now().UTC(),
-			}
+		snap := Snapshot{
+			ID:               id,
+			AggregateID:      aggregate.GetID(),
+			AggregateVersion: aggregate.GetVersion(),
+			AggregateType:    AggregateType(aggregate.GetType()),
+			Body:             body,
+			CreatedAt:        time.Now().UTC(),
+		}
 
-			err = es.store.SaveSnapshot(ctx, snap)
-			if err != nil {
-				return err
-			}
+		// TODO this could be done asynchronously.
+		err = es.store.SaveSnapshot(ctx, snap)
+		if err != nil {
+			return err
 		}
 	}
 

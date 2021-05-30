@@ -26,6 +26,7 @@ require (
 	github.com/nats-io/nats-streaming-server v0.18.0 // indirect
 	github.com/nats-io/nats.go v1.10.0
 	github.com/nats-io/stan.go v0.7.0
+	github.com/oklog/ulid/v2 v2.0.2
 	github.com/pingcap/check v0.0.0-20200212061837-5e12011dc712 // indirect
 	github.com/quintans/faults v1.2.2
 	github.com/siddontang/go-mysql v0.0.0-20190312052122-c6ab05a85eb8
