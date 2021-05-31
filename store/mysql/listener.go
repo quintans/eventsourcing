@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/google/uuid"
 	"github.com/quintans/faults"
 	"github.com/siddontang/go-mysql/canal"
 	"github.com/siddontang/go-mysql/mysql"
@@ -253,14 +252,9 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		if err != nil {
 			return faults.Wrap(err)
 		}
-		aggID := r.getAsString("aggregate_id")
-		aggregateID, err := uuid.Parse(aggID)
-		if err != nil {
-			return faults.Errorf("unable to parse aggregate ID '%s': %w", aggID, err)
-		}
 		h.events = append(h.events, eventsourcing.Event{
 			ID:               id,
-			AggregateID:      aggregateID,
+			AggregateID:      r.getAsString("aggregate_id"),
 			AggregateIDHash:  hash,
 			AggregateVersion: r.getAsUint32("aggregate_version"),
 			AggregateType:    eventsourcing.AggregateType(r.getAsString("aggregate_type")),

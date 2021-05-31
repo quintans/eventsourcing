@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/common"
@@ -41,7 +40,7 @@ type Decoder interface {
 
 type Aggregater interface {
 	Typer
-	GetID() uuid.UUID
+	GetID() string
 	GetVersion() uint32
 	SetVersion(uint32)
 	// GetEventsCounter used to determine snapshots threshold
@@ -56,7 +55,7 @@ type Aggregater interface {
 type Event struct {
 	ID               eventid.EventID
 	ResumeToken      encoding.Base64
-	AggregateID      uuid.UUID
+	AggregateID      string
 	AggregateIDHash  uint32
 	AggregateVersion uint32
 	AggregateType    AggregateType
@@ -73,7 +72,7 @@ func (e Event) IsZero() bool {
 
 type Snapshot struct {
 	ID               eventid.EventID
-	AggregateID      uuid.UUID
+	AggregateID      string
 	AggregateVersion uint32
 	AggregateType    AggregateType
 	Body             []byte
@@ -82,15 +81,15 @@ type Snapshot struct {
 
 type EsRepository interface {
 	SaveEvent(ctx context.Context, eRec EventRecord) (id eventid.EventID, version uint32, err error)
-	GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (Snapshot, error)
+	GetSnapshot(ctx context.Context, aggregateID string) (Snapshot, error)
 	SaveSnapshot(ctx context.Context, snapshot Snapshot) error
-	GetAggregateEvents(ctx context.Context, aggregateID uuid.UUID, snapVersion int) ([]Event, error)
+	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
 	HasIdempotencyKey(ctx context.Context, aggregateType AggregateType, idempotencyKey string) (bool, error)
 	Forget(ctx context.Context, request ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error
 }
 
 type EventRecord struct {
-	AggregateID    uuid.UUID
+	AggregateID    string
 	Version        uint32
 	AggregateType  AggregateType
 	IdempotencyKey string
@@ -125,7 +124,7 @@ func WithMetadata(metadata map[string]interface{}) SaveOption {
 }
 
 type EventStorer interface {
-	GetByID(ctx context.Context, aggregateID uuid.UUID) (Aggregater, error)
+	GetByID(ctx context.Context, aggregateID string) (Aggregater, error)
 	Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) error
 	HasIdempotencyKey(ctx context.Context, aggregateType AggregateType, idempotencyKey string) (bool, error)
 	// Forget erases the values of the specified fields
@@ -174,7 +173,7 @@ func NewEventStore(repo EsRepository, snapshotThreshold uint32, factory Factory,
 // Exec loads the aggregate from the event store and handles it to the handler function, saving the returning Aggregater in the event store.
 // If no aggregate is found for the provided ID the error ErrUnknownAggregateID is returned.
 // If the handler function returns nil for the Aggregater or an error, the save action is ignored.
-func (es EventStore) Exec(ctx context.Context, id uuid.UUID, do func(Aggregater) (Aggregater, error), options ...SaveOption) error {
+func (es EventStore) Exec(ctx context.Context, id string, do func(Aggregater) (Aggregater, error), options ...SaveOption) error {
 	a, err := es.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -193,7 +192,7 @@ func (es EventStore) Exec(ctx context.Context, id uuid.UUID, do func(Aggregater)
 	return es.Save(ctx, a, options...)
 }
 
-func (es EventStore) GetByID(ctx context.Context, aggregateID uuid.UUID) (Aggregater, error) {
+func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregater, error) {
 	snap, err := es.store.GetSnapshot(ctx, aggregateID)
 	if err != nil {
 		return nil, err
@@ -209,7 +208,7 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID uuid.UUID) (Aggreg
 	}
 
 	var events []Event
-	if snap.AggregateID == uuid.Nil {
+	if snap.AggregateID == "" {
 		events, err = es.store.GetAggregateEvents(ctx, aggregateID, -1)
 	} else {
 		events, err = es.store.GetAggregateEvents(ctx, aggregateID, int(snap.AggregateVersion))
@@ -334,7 +333,7 @@ func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateType Aggreg
 }
 
 type ForgetRequest struct {
-	AggregateID uuid.UUID
+	AggregateID string
 	EventKind   EventKind
 }
 

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/google/uuid"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -139,16 +138,12 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 				if err != nil {
 					return faults.Wrap(backoff.Permanent(err))
 				}
-				aggregateID, err := uuid.Parse(eventDoc.AggregateID)
-				if err != nil {
-					return faults.Errorf("unable to parse aggregate ID '%s': %w", eventDoc.AggregateID, err)
-				}
 				event := eventsourcing.Event{
 					ID: id.SetCount(uint8(k)),
 					// the resume token should be from the last fully completed sinked doc, because it may fail midway.
 					// We should use the last eventID to filter out the ones that were successfully sent.
 					ResumeToken:      lastResumeToken,
-					AggregateID:      aggregateID,
+					AggregateID:      eventDoc.AggregateID,
 					AggregateIDHash:  eventDoc.AggregateIDHash,
 					AggregateVersion: eventDoc.AggregateVersion,
 					AggregateType:    eventDoc.AggregateType,

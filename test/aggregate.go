@@ -116,8 +116,8 @@ type Account struct {
 	Owner   string    `json:"owner,omitempty"`
 }
 
-func (a Account) GetID() uuid.UUID {
-	return a.ID
+func (a Account) GetID() string {
+	return a.ID.String()
 }
 
 func (a Account) GetType() string {
@@ -154,7 +154,7 @@ func (a *Account) HandleEvent(event eventsourcing.Eventer) {
 }
 
 func (a *Account) HandleAccountCreated(event AccountCreated) {
-	a.ID = uuid.UUID(event.ID)
+	a.ID = event.ID
 	a.Balance = event.Money
 	// this reflects that we are handling domain events and NOT property events
 	a.Status = OPEN

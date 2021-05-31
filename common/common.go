@@ -3,13 +3,6 @@ package common
 import (
 	"hash/fnv"
 	"reflect"
-
-	"github.com/google/uuid"
-)
-
-const (
-	// MinEventID is the lowest event ID
-	MinEventID = ""
 )
 
 // Dereference returns the underlying struct dereference
@@ -22,10 +15,10 @@ func Dereference(i interface{}) interface{} {
 	return v.Interface()
 }
 
-// Hash returns the hash code for u
-func Hash(u uuid.UUID) uint32 {
+// Hash returns the hash code for s
+func Hash(s string) uint32 {
 	h := fnv.New32a()
-	h.Write(u[:])
+	h.Write([]byte(s))
 	return h.Sum32()
 }
 

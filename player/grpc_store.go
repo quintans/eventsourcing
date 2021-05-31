@@ -7,7 +7,6 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
-	"github.com/google/uuid"
 	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 
@@ -92,13 +91,9 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 		if err != nil {
 			return nil, faults.Errorf("unable to parse message ID '%s': %w", v.Id, err)
 		}
-		aggregateID, err := uuid.Parse(v.AggregateId)
-		if err != nil {
-			return nil, faults.Errorf("unable to parse aggregate ID '%s': %w", v.AggregateId, err)
-		}
 		events[k] = eventsourcing.Event{
 			ID:               eID,
-			AggregateID:      aggregateID,
+			AggregateID:      v.AggregateId,
 			AggregateIDHash:  v.AggregateIdHash,
 			AggregateVersion: v.AggregateVersion,
 			AggregateType:    eventsourcing.AggregateType(v.AggregateType),

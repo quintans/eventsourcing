@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -45,7 +44,7 @@ func (JsonCodec) Encode(e eventsourcing.Event) ([]byte, error) {
 	event := Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
-		AggregateID:      e.AggregateID.String(),
+		AggregateID:      e.AggregateID,
 		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateType:    e.AggregateType,
@@ -68,14 +67,10 @@ func (JsonCodec) Decode(data []byte) (eventsourcing.Event, error) {
 	if err != nil {
 		return eventsourcing.Event{}, faults.Wrap(err)
 	}
-	aggregateID, err := uuid.Parse(e.AggregateID)
-	if err != nil {
-		return eventsourcing.Event{}, faults.Errorf("unable to parse aggregate ID '%s': %w", e.AggregateID, err)
-	}
 	event := eventsourcing.Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
-		AggregateID:      aggregateID,
+		AggregateID:      e.AggregateID,
 		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateType:    e.AggregateType,

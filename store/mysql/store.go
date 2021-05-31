@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/quintans/faults"
 
@@ -132,7 +131,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id.String(), eRec.AggregateID.String(), version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, metadata, eRec.CreatedAt, int32ring(hash))
+				id.String(), eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, metadata, eRec.CreatedAt, int32ring(hash))
 
 			if err != nil {
 				if isDup(err) {
@@ -182,7 +181,7 @@ func isDup(err error) bool {
 	return ok && me.Number == uniqueViolation
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (eventsourcing.Snapshot, error) {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventsourcing.Snapshot, error) {
 	snap := Snapshot{}
 	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = ? ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err == sql.ErrNoRows {
@@ -207,7 +206,7 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (
 func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.Snapshot) error {
 	s := Snapshot{
 		ID:               snapshot.ID.String(),
-		AggregateID:      snapshot.AggregateID.String(),
+		AggregateID:      snapshot.AggregateID,
 		AggregateVersion: snapshot.AggregateVersion,
 		AggregateType:    snapshot.AggregateType,
 		Body:             snapshot.Body,
@@ -220,7 +219,7 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.
 	return faults.Wrap(err)
 }
 
-func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID uuid.UUID, snapVersion int) ([]eventsourcing.Event, error) {
+func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventsourcing.Event, error) {
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = ?")
 	args := []interface{}{aggregateID}
@@ -272,9 +271,9 @@ func (r *EsRepository) Forget(ctx context.Context, req eventsourcing.ForgetReque
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
-	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = ? AND kind = ?", req.AggregateID.String(), req.EventKind)
+	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = ? AND kind = ?", req.AggregateID, req.EventKind)
 	if err != nil {
-		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", req.AggregateID.String(), req.EventKind, err)
+		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", req.AggregateID, req.EventKind, err)
 	}
 
 	for _, evt := range events {
@@ -290,11 +289,11 @@ func (r *EsRepository) Forget(ctx context.Context, req eventsourcing.ForgetReque
 
 	// forget snapshots
 	snaps := []Snapshot{}
-	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = ?", req.AggregateID.String()); err != nil {
+	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = ?", req.AggregateID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
 		}
-		return faults.Errorf("Unable to get snapshot for aggregate '%s': %w", req.AggregateID.String(), err)
+		return faults.Errorf("Unable to get snapshot for aggregate '%s': %w", req.AggregateID, err)
 	}
 
 	for _, snap := range snaps {
@@ -436,15 +435,9 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 		if err != nil {
 			return nil, faults.Errorf("unable to parse event ID '%s': %w", event.ID, err)
 		}
-
-		aggregateID, err := uuid.Parse(event.AggregateID)
-		if err != nil {
-			return nil, faults.Errorf("unable to parse aggregate ID '%s': %w", event.AggregateID, err)
-		}
-
 		events = append(events, eventsourcing.Event{
 			ID:               id,
-			AggregateID:      aggregateID,
+			AggregateID:      event.AggregateID,
 			AggregateIDHash:  uint32(event.AggregateIDHash),
 			AggregateVersion: event.AggregateVersion,
 			AggregateType:    event.AggregateType,

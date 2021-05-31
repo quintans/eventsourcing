@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/google/uuid"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgproto3/v2"
@@ -236,13 +235,9 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsou
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		aid, err := uuid.Parse(aggregateID)
-		if err != nil {
-			return nil, faults.Wrap(err)
-		}
 		e := eventsourcing.Event{
 			ID:               eid,
-			AggregateID:      aid,
+			AggregateID:      aggregateID,
 			AggregateIDHash:  uint32(aggregateIDHash),
 			AggregateVersion: uint32(aggregateVersion),
 			AggregateType:    eventsourcing.AggregateType(aggregateType),

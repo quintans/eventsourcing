@@ -85,7 +85,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, id.String(), evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
 
-	a, err := es.GetByID(ctx, id)
+	a, err := es.GetByID(ctx, id.String())
 	require.NoError(t, err)
 	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID)
@@ -143,7 +143,7 @@ func TestPollListener(t *testing.T) {
 		cancel()
 	}()
 	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
-		if e.AggregateID == id {
+		if e.AggregateID == id.String() {
 			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
@@ -192,7 +192,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
-		if e.AggregateID == id {
+		if e.AggregateID == id.String() {
 			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 				return err
 			}
@@ -251,7 +251,7 @@ func TestListenerWithLabels(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		err := p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
-			if e.AggregateID == id {
+			if e.AggregateID == id.String() {
 				if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
 					return err
 				}
@@ -329,7 +329,7 @@ func TestForget(t *testing.T) {
 
 	err = es.Forget(ctx,
 		eventsourcing.ForgetRequest{
-			AggregateID: id,
+			AggregateID: id.String(),
 			EventKind:   "OwnerUpdated",
 		},
 		func(i interface{}) interface{} {

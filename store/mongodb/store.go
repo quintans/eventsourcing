@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -144,7 +143,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	version := eRec.Version + 1
 	doc := Event{
 		ID:               id.String(),
-		AggregateID:      eRec.AggregateID.String(),
+		AggregateID:      eRec.AggregateID,
 		AggregateType:    eRec.AggregateType,
 		Details:          details,
 		AggregateVersion: version,
@@ -220,11 +219,11 @@ func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionCo
 	return nil
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (eventsourcing.Snapshot, error) {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventsourcing.Snapshot, error) {
 	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
-	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID.String()}}, opts).Decode(&snap); err != nil {
+	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID}}, opts).Decode(&snap); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return eventsourcing.Snapshot{}, nil
 		}
@@ -247,7 +246,7 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (
 func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.Snapshot) error {
 	snap := Snapshot{
 		ID:               snapshot.ID.String(),
-		AggregateID:      snapshot.AggregateID.String(),
+		AggregateID:      snapshot.AggregateID,
 		AggregateVersion: snapshot.AggregateVersion,
 		AggregateType:    snapshot.AggregateType,
 		Body:             snapshot.Body,
@@ -258,9 +257,9 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.
 	return faults.Wrap(err)
 }
 
-func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID uuid.UUID, snapVersion int) ([]eventsourcing.Event, error) {
+func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventsourcing.Event, error) {
 	filter := bson.D{
-		{"aggregate_id", bson.D{{"$eq", aggregateID.String()}}},
+		{"aggregate_id", bson.D{{"$eq", aggregateID}}},
 	}
 	if snapVersion > -1 {
 		filter = append(filter, bson.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
@@ -296,7 +295,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 
 	// for events
 	filter := bson.D{
-		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
+		{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
 		{"details.kind", bson.D{{"$eq", request.EventKind}}},
 	}
 	cursor, err := r.eventsCollection().Find(ctx, filter)
@@ -329,7 +328,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 
 	// for snapshots
 	filter = bson.D{
-		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
+		{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
 	}
 	cursor, err = r.snapshotCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
@@ -513,13 +512,9 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 					return nil, eventid.Zero, faults.Errorf("unable to parse message ID '%s': %w", v.ID, err)
 				}
 				lastEventID = eventID.SetCount(uint8(k))
-				aggregateID, err := uuid.Parse(v.AggregateID)
-				if err != nil {
-					return nil, eventid.Zero, faults.Errorf("unable to parse aggregate ID '%s': %w", v.AggregateID, err)
-				}
 				events = append(events, eventsourcing.Event{
 					ID:               lastEventID,
-					AggregateID:      aggregateID,
+					AggregateID:      v.AggregateID,
 					AggregateIDHash:  v.AggregateIDHash,
 					AggregateVersion: v.AggregateVersion,
 					AggregateType:    v.AggregateType,

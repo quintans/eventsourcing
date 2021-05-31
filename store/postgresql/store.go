@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 	"github.com/quintans/faults"
@@ -132,7 +131,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-				id.String(), eRec.AggregateID.String(), version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, metadata, eRec.CreatedAt, int32ring(hash))
+				id.String(), eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, metadata, eRec.CreatedAt, int32ring(hash))
 
 			if err != nil {
 				if isDup(err) {
@@ -182,9 +181,9 @@ func isDup(err error) bool {
 	return ok && pgerr.Code == pgUniqueViolation
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (eventsourcing.Snapshot, error) {
+func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventsourcing.Snapshot, error) {
 	snap := Snapshot{}
-	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID.String()); err != nil {
+	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID); err != nil {
 		if err == sql.ErrNoRows {
 			return eventsourcing.Snapshot{}, nil
 		}
@@ -204,7 +203,7 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID uuid.UUID) (
 func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.Snapshot) error {
 	s := Snapshot{
 		ID:               snapshot.ID,
-		AggregateID:      snapshot.AggregateID.String(),
+		AggregateID:      snapshot.AggregateID,
 		AggregateVersion: snapshot.AggregateVersion,
 		AggregateType:    snapshot.AggregateType,
 		Body:             snapshot.Body,
@@ -217,10 +216,10 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.
 	return faults.Wrap(err)
 }
 
-func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID uuid.UUID, snapVersion int) ([]eventsourcing.Event, error) {
+func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventsourcing.Event, error) {
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = $1")
-	args := []interface{}{aggregateID.String()}
+	args := []interface{}{aggregateID}
 	if snapVersion > -1 {
 		query.WriteString(" AND e.aggregate_version > $2")
 		args = append(args, snapVersion)
@@ -269,9 +268,9 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
-	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", request.AggregateID.String(), request.EventKind)
+	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", request.AggregateID, request.EventKind)
 	if err != nil {
-		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID.String(), request.EventKind, err)
+		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
 
 	for _, evt := range events {
@@ -287,11 +286,11 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 
 	// forget snapshots
 	snaps := []Snapshot{}
-	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1", request.AggregateID.String()); err != nil {
+	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1", request.AggregateID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
 		}
-		return faults.Errorf("Unable to get snapshot for aggregate '%s': %w", request.AggregateID.String(), err)
+		return faults.Errorf("Unable to get snapshot for aggregate '%s': %w", request.AggregateID, err)
 	}
 
 	for _, snap := range snaps {
@@ -421,10 +420,6 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 		if err != nil {
 			return nil, faults.Errorf("Unable to scan to struct: %w", err)
 		}
-		aggregateID, err := uuid.Parse(pg.AggregateID)
-		if err != nil {
-			return nil, faults.Errorf("unable to parse aggregate ID '%s': %w", pg.AggregateID, err)
-		}
 		metadata := map[string]interface{}{}
 		err = json.Unmarshal(pg.Metadata, &metadata)
 		if err != nil {
@@ -433,7 +428,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 
 		events = append(events, eventsourcing.Event{
 			ID:               pg.ID,
-			AggregateID:      aggregateID,
+			AggregateID:      pg.AggregateID,
 			AggregateIDHash:  uint32(pg.AggregateIDHash),
 			AggregateVersion: pg.AggregateVersion,
 			AggregateType:    pg.AggregateType,

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/quintans/faults"
 
@@ -231,11 +230,6 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 			continue
 		}
 
-		aggregateID, err := uuid.Parse(pgEvent.AggregateID)
-		if err != nil {
-			return eventid.Zero, faults.Errorf("unable to parse aggregate ID '%s': %w", pgEvent.AggregateID, backoff.Permanent(err))
-		}
-
 		// check if the event is to be forwarded to the sinker
 		part := common.WhichPartition(pgEvent.AggregateIDHash, p.partitions)
 		if part < p.partitionsLow || part > p.partitionsHi {
@@ -250,7 +244,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 		event := eventsourcing.Event{
 			ID:               pgEvent.ID,
 			ResumeToken:      []byte(pgEvent.ID.String()),
-			AggregateID:      aggregateID,
+			AggregateID:      pgEvent.AggregateID,
 			AggregateIDHash:  pgEvent.AggregateIDHash,
 			AggregateVersion: pgEvent.AggregateVersion,
 			AggregateType:    pgEvent.AggregateType,
