@@ -9,6 +9,7 @@ import (
 
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
+	"github.com/quintans/eventsourcing/eventid"
 )
 
 var (
@@ -52,13 +53,13 @@ type Aggregater interface {
 
 // Event represents the event data
 type Event struct {
-	ID               string
+	ID               eventid.EventID
 	ResumeToken      encoding.Base64
 	AggregateID      string
 	AggregateIDHash  uint32
 	AggregateVersion uint32
-	AggregateType    string
-	Kind             string
+	AggregateType    AggregateType
+	Kind             EventKind
 	Body             encoding.Base64
 	IdempotencyKey   string
 	Metadata         map[string]interface{}
@@ -66,31 +67,31 @@ type Event struct {
 }
 
 func (e Event) IsZero() bool {
-	return e.ID == ""
+	return e.ID.IsZero()
 }
 
 type Snapshot struct {
-	ID               string
+	ID               eventid.EventID
 	AggregateID      string
 	AggregateVersion uint32
-	AggregateType    string
+	AggregateType    AggregateType
 	Body             []byte
 	CreatedAt        time.Time
 }
 
 type EsRepository interface {
-	SaveEvent(ctx context.Context, eRec EventRecord) (id string, version uint32, err error)
+	SaveEvent(ctx context.Context, eRec EventRecord) (id eventid.EventID, version uint32, err error)
 	GetSnapshot(ctx context.Context, aggregateID string) (Snapshot, error)
 	SaveSnapshot(ctx context.Context, snapshot Snapshot) error
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
-	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
+	HasIdempotencyKey(ctx context.Context, aggregateType AggregateType, idempotencyKey string) (bool, error)
 	Forget(ctx context.Context, request ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error
 }
 
 type EventRecord struct {
 	AggregateID    string
 	Version        uint32
-	AggregateType  string
+	AggregateType  AggregateType
 	IdempotencyKey string
 	Labels         map[string]interface{}
 	CreatedAt      time.Time
@@ -98,7 +99,7 @@ type EventRecord struct {
 }
 
 type EventRecordDetail struct {
-	Kind string
+	Kind EventKind
 	Body []byte
 }
 
@@ -125,7 +126,7 @@ func WithMetadata(metadata map[string]interface{}) SaveOption {
 type EventStorer interface {
 	GetByID(ctx context.Context, aggregateID string) (Aggregater, error)
 	Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) error
-	HasIdempotencyKey(ctx context.Context, aggregateID, idempotencyKey string) (bool, error)
+	HasIdempotencyKey(ctx context.Context, aggregateType AggregateType, idempotencyKey string) (bool, error)
 	// Forget erases the values of the specified fields
 	Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error
 }
@@ -203,19 +204,21 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 			return nil, err
 		}
 		aggregate = a.(Aggregater)
+		aggregate.SetVersion(snap.AggregateVersion)
 	}
 
 	var events []Event
-	if snap.AggregateID != "" {
-		events, err = es.store.GetAggregateEvents(ctx, aggregateID, int(snap.AggregateVersion))
-	} else {
+	if snap.AggregateID == "" {
 		events, err = es.store.GetAggregateEvents(ctx, aggregateID, -1)
+	} else {
+		events, err = es.store.GetAggregateEvents(ctx, aggregateID, int(snap.AggregateVersion))
 	}
 	if err != nil {
 		return nil, err
 	}
 
 	for _, v := range events {
+		// if the aggregate was not instantiated because the snap was not found
 		if aggregate == nil {
 			a, err := es.RehydrateAggregate(v.AggregateType, nil)
 			if err != nil {
@@ -237,11 +240,11 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 	return aggregate, nil
 }
 
-func (es EventStore) RehydrateAggregate(kind string, body []byte) (Typer, error) {
-	return RehydrateAggregate(es.factory, es.codec, es.upcaster, kind, body)
+func (es EventStore) RehydrateAggregate(aggregateType AggregateType, body []byte) (Typer, error) {
+	return RehydrateAggregate(es.factory, es.codec, es.upcaster, aggregateType, body)
 }
 
-func (es EventStore) RehydrateEvent(kind string, body []byte) (Typer, error) {
+func (es EventStore) RehydrateEvent(kind EventKind, body []byte) (Typer, error) {
 	return RehydrateEvent(es.factory, es.codec, es.upcaster, kind, body)
 }
 
@@ -277,7 +280,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 			return err
 		}
 		details[i] = EventRecordDetail{
-			Kind: e.GetType(),
+			Kind: EventKind(e.GetType()),
 			Body: body,
 		}
 	}
@@ -285,7 +288,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	rec := EventRecord{
 		AggregateID:    aggregate.GetID(),
 		Version:        aggregate.GetVersion(),
-		AggregateType:  tName,
+		AggregateType:  AggregateType(tName),
 		IdempotencyKey: opts.IdempotencyKey,
 		Labels:         opts.Labels,
 		CreatedAt:      now,
@@ -298,31 +301,26 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	}
 	aggregate.SetVersion(lastVersion)
 
-	newCounter := aggregate.GetEventsCounter()
-	oldCounter := newCounter - uint32(eventsLen)
-	if newCounter > es.snapshotThreshold-1 {
-		// TODO this could be done asynchronously. Beware that aggregate holds a reference and not a copy.
-		mod := oldCounter % es.snapshotThreshold
-		delta := newCounter - (oldCounter - mod)
-		if delta >= es.snapshotThreshold {
-			body, err := es.codec.Encode(aggregate)
-			if err != nil {
-				return faults.Errorf("Failed to create serialize snapshot: %w", err)
-			}
+	eventsCounter := aggregate.GetEventsCounter()
+	if eventsCounter >= es.snapshotThreshold {
+		body, err := es.codec.Encode(aggregate)
+		if err != nil {
+			return faults.Errorf("Failed to create serialize snapshot: %w", err)
+		}
 
-			snap := Snapshot{
-				ID:               id,
-				AggregateID:      aggregate.GetID(),
-				AggregateVersion: aggregate.GetVersion(),
-				AggregateType:    aggregate.GetType(),
-				Body:             body,
-				CreatedAt:        time.Now().UTC(),
-			}
+		snap := Snapshot{
+			ID:               id,
+			AggregateID:      aggregate.GetID(),
+			AggregateVersion: aggregate.GetVersion(),
+			AggregateType:    AggregateType(aggregate.GetType()),
+			Body:             body,
+			CreatedAt:        time.Now().UTC(),
+		}
 
-			err = es.store.SaveSnapshot(ctx, snap)
-			if err != nil {
-				return err
-			}
+		// TODO this could be done asynchronously.
+		err = es.store.SaveSnapshot(ctx, snap)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -330,13 +328,13 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	return nil
 }
 
-func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateType, idempotencyKey string) (bool, error) {
+func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateType AggregateType, idempotencyKey string) (bool, error) {
 	return es.store.HasIdempotencyKey(ctx, aggregateType, idempotencyKey)
 }
 
 type ForgetRequest struct {
 	AggregateID string
-	EventKind   string
+	EventKind   EventKind
 }
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {

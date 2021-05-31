@@ -3,6 +3,7 @@ package mongodb
 import (
 	"bytes"
 	"context"
+	"errors"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -13,7 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
@@ -127,13 +128,18 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 			}
 			eventDoc := data.FullDocument
 
+			lastIdx := len(eventDoc.Details) - 1
 			for k, d := range eventDoc.Details {
-				if k == len(eventDoc.Details)-1 {
+				if k == lastIdx {
 					// we update the resume token on the last event of the transaction
 					lastResumeToken = []byte(eventsStream.ResumeToken())
 				}
+				id, err := eventid.Parse(eventDoc.ID)
+				if err != nil {
+					return faults.Wrap(backoff.Permanent(err))
+				}
 				event := eventsourcing.Event{
-					ID: common.NewMessageID(eventDoc.ID, uint8(k)),
+					ID: id.SetCount(uint8(k)),
 					// the resume token should be from the last fully completed sinked doc, because it may fail midway.
 					// We should use the last eventID to filter out the ones that were successfully sent.
 					ResumeToken:      lastResumeToken,
@@ -155,6 +161,10 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 
 			b.Reset()
 		}
-		return eventsStream.Err()
+		err := eventsStream.Err()
+		if errors.Is(err, context.Canceled) {
+			return backoff.Permanent(err)
+		}
+		return err
 	}, b)
 }

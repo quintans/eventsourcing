@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/consul/api"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing/log"
 )
 
 var _ Memberlister = (*ConsulMemberList)(nil)
@@ -18,6 +20,8 @@ type ConsulMemberList struct {
 	name       string
 	expiration time.Duration
 	sID        string
+
+	workers []Worker
 }
 
 func NewConsulMemberList(address string, prefix string, expiration time.Duration) (*ConsulMemberList, error) {
@@ -99,4 +103,12 @@ func (c *ConsulMemberList) Register(ctx context.Context, workers []string) error
 	}
 
 	return nil
+}
+
+func (c *ConsulMemberList) AddWorkers(workers []Worker) {
+	c.workers = append(c.workers, workers...)
+}
+
+func (c *ConsulMemberList) BalanceWorkers(ctx context.Context, logger log.Logger) {
+	BalanceWorkers(ctx, logger, c, c.workers, c.expiration/2)
 }

@@ -47,7 +47,7 @@ func Btoi16(val []byte) uint16 {
 	return binary.BigEndian.Uint16(val)
 }
 
-func Marshal(a []byte) string {
+func MarshalBase32(a []byte) string {
 	bits := len(a) * ByteSize
 	encSize := bits / 5
 	if bits%5 != 0 {
@@ -66,7 +66,7 @@ func Marshal(a []byte) string {
 	return string(result)
 }
 
-func Unmarshal(encoded string) ([]byte, error) {
+func UnmarshalBase32(encoded string) ([]byte, error) {
 	decSize := (len(encoded) * 5) / ByteSize
 	// added one byte more to be the feeder
 	result := make([]byte, decSize+1)

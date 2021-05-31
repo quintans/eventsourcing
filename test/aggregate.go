@@ -1,6 +1,7 @@
 package test
 
 import (
+	"github.com/google/uuid"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -15,12 +16,12 @@ const (
 )
 
 type AccountCreated struct {
-	ID    string `json:"id,omitempty"`
-	Money int64  `json:"money,omitempty"`
-	Owner string `json:"owner,omitempty"`
+	ID    uuid.UUID `json:"id,omitempty"`
+	Money int64     `json:"money,omitempty"`
+	Owner string    `json:"owner,omitempty"`
 }
 
-func (_ AccountCreated) GetType() string {
+func (e AccountCreated) GetType() string {
 	return "AccountCreated"
 }
 
@@ -28,7 +29,7 @@ type MoneyWithdrawn struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func (_ MoneyWithdrawn) GetType() string {
+func (e MoneyWithdrawn) GetType() string {
 	return "MoneyWithdrawn"
 }
 
@@ -36,7 +37,7 @@ type MoneyDeposited struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func (_ MoneyDeposited) GetType() string {
+func (e MoneyDeposited) GetType() string {
 	return "MoneyDeposited"
 }
 
@@ -44,7 +45,7 @@ type OwnerUpdated struct {
 	Owner string `json:"owner,omitempty"`
 }
 
-func (_ OwnerUpdated) GetType() string {
+func (e OwnerUpdated) GetType() string {
 	return "OwnerUpdated"
 }
 
@@ -53,10 +54,9 @@ type AggregateFactory struct {
 }
 
 func (f AggregateFactory) New(kind string) (eventsourcing.Typer, error) {
-	var e eventsourcing.Typer
 	switch kind {
 	case "Account":
-		e = NewAccount()
+		return NewAccount(), nil
 	default:
 		evt, err := f.EventFactory.New(kind)
 		if err != nil {
@@ -64,10 +64,6 @@ func (f AggregateFactory) New(kind string) (eventsourcing.Typer, error) {
 		}
 		return evt, nil
 	}
-	if e == nil {
-		return nil, faults.Errorf("Unknown aggregate kind: %s", kind)
-	}
-	return e, nil
 }
 
 type EventFactory struct{}
@@ -90,14 +86,14 @@ func (EventFactory) New(kind string) (eventsourcing.Typer, error) {
 	return e, nil
 }
 
-func CreateAccount(owner string, id string, money int64) *Account {
+func CreateAccount(owner string, id uuid.UUID, money int64) *Account {
 	a := &Account{
 		Status:  OPEN,
 		Balance: money,
 		Owner:   owner,
 	}
 	a.RootAggregate = eventsourcing.NewRootAggregate(a)
-	a.RootAggregate.ID = id
+	a.ID = id
 	a.ApplyChange(AccountCreated{
 		ID:    id,
 		Money: money,
@@ -114,9 +110,14 @@ func NewAccount() *Account {
 
 type Account struct {
 	eventsourcing.RootAggregate
-	Status  Status `json:"status,omitempty"`
-	Balance int64  `json:"balance,omitempty"`
-	Owner   string `json:"owner,omitempty"`
+	ID      uuid.UUID `json:"id"`
+	Status  Status    `json:"status,omitempty"`
+	Balance int64     `json:"balance,omitempty"`
+	Owner   string    `json:"owner,omitempty"`
+}
+
+func (a Account) GetID() string {
+	return a.ID.String()
 }
 
 func (a Account) GetType() string {

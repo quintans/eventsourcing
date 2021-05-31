@@ -27,16 +27,16 @@ const (
 
 // Event is the event data stored in the database
 type Event struct {
-	ID               string    `db:"id"`
-	AggregateID      string    `db:"aggregate_id"`
-	AggregateIDHash  int32     `db:"aggregate_id_hash"`
-	AggregateVersion uint32    `db:"aggregate_version"`
-	AggregateType    string    `db:"aggregate_type"`
-	Kind             string    `db:"kind"`
-	Body             []byte    `db:"body"`
-	IdempotencyKey   NilString `db:"idempotency_key"`
-	Metadata         []byte    `db:"metadata"`
-	CreatedAt        time.Time `db:"created_at"`
+	ID               eventid.EventID             `db:"id"`
+	AggregateID      string                      `db:"aggregate_id"`
+	AggregateIDHash  int32                       `db:"aggregate_id_hash"`
+	AggregateVersion uint32                      `db:"aggregate_version"`
+	AggregateType    eventsourcing.AggregateType `db:"aggregate_type"`
+	Kind             eventsourcing.EventKind     `db:"kind"`
+	Body             []byte                      `db:"body"`
+	IdempotencyKey   NilString                   `db:"idempotency_key"`
+	Metadata         []byte                      `db:"metadata"`
+	CreatedAt        time.Time                   `db:"created_at"`
 }
 
 // NilString converts nil to empty string
@@ -59,12 +59,12 @@ func (ns *NilString) Scan(value interface{}) error {
 }
 
 type Snapshot struct {
-	ID               string    `db:"id,omitempty"`
-	AggregateID      string    `db:"aggregate_id,omitempty"`
-	AggregateVersion uint32    `db:"aggregate_version,omitempty"`
-	AggregateType    string    `db:"aggregate_type,omitempty"`
-	Body             []byte    `db:"body,omitempty"`
-	CreatedAt        time.Time `db:"created_at,omitempty"`
+	ID               eventid.EventID             `db:"id,omitempty"`
+	AggregateID      string                      `db:"aggregate_id,omitempty"`
+	AggregateVersion uint32                      `db:"aggregate_version,omitempty"`
+	AggregateType    eventsourcing.AggregateType `db:"aggregate_type,omitempty"`
+	Body             []byte                      `db:"body,omitempty"`
+	CreatedAt        time.Time                   `db:"created_at,omitempty"`
 }
 
 var _ eventsourcing.EsRepository = (*EsRepository)(nil)
@@ -102,10 +102,10 @@ func NewStore(connString string, options ...StoreOption) (*EsRepository, error) 
 	return r, nil
 }
 
-func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (string, uint32, error) {
+func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
 	metadata, err := json.Marshal(eRec.Labels)
 	if err != nil {
-		return "", 0, faults.Wrap(err)
+		return eventid.Zero, 0, faults.Wrap(err)
 	}
 
 	var idempotencyKey *string
@@ -114,20 +114,24 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	}
 
 	version := eRec.Version
-	var id string
+	var id eventid.EventID
 	err = r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
 		var projector store.Projector
 		if r.projectorFactory != nil {
 			projector = r.projectorFactory(tx)
 		}
+		entropy := eventid.EntropyFactory(eRec.CreatedAt)
 		for _, e := range eRec.Details {
+			id, err = eventid.New(eRec.CreatedAt, entropy)
+			if err != nil {
+				return faults.Wrap(err)
+			}
 			version++
-			id = eventid.NewEventID(eRec.CreatedAt, eRec.AggregateID, version)
 			hash := common.Hash(eRec.AggregateID)
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-				id, eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, metadata, eRec.CreatedAt, int32ring(hash))
+				id.String(), eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, metadata, eRec.CreatedAt, int32ring(hash))
 
 			if err != nil {
 				if isDup(err) {
@@ -155,7 +159,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 		return nil
 	})
 	if err != nil {
-		return "", 0, err
+		return eventid.Zero, 0, err
 	}
 
 	return id, version, nil
@@ -185,9 +189,10 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 		}
 		return eventsourcing.Snapshot{}, faults.Errorf("Unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
+
 	return eventsourcing.Snapshot{
 		ID:               snap.ID,
-		AggregateID:      snap.AggregateID,
+		AggregateID:      aggregateID,
 		AggregateVersion: snap.AggregateVersion,
 		AggregateType:    snap.AggregateType,
 		Body:             snap.Body,
@@ -250,7 +255,7 @@ func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql
 	return tx.Commit()
 }
 
-func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType, idempotencyKey string) (bool, error) {
+func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType eventsourcing.AggregateType, idempotencyKey string) (bool, error) {
 	var exists bool
 	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE aggregate_type=$1 AND idempotency_key=$2) AS "EXISTS"`, aggregateType, idempotencyKey)
 	if err != nil {
@@ -269,11 +274,11 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	}
 
 	for _, evt := range events {
-		body, err := forget(evt.Kind, evt.Body)
+		body, err := forget(evt.Kind.String(), evt.Body)
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, "UPDATE events SET body = $1 WHERE ID = $2", body, evt.ID)
+		_, err = r.db.ExecContext(ctx, "UPDATE events SET body = $1 WHERE ID = $2", body, evt.ID.String())
 		if err != nil {
 			return faults.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
 		}
@@ -289,7 +294,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	}
 
 	for _, snap := range snaps {
-		body, err := forget(snap.AggregateType, snap.Body)
+		body, err := forget(snap.AggregateType.String(), snap.Body)
 		if err != nil {
 			return err
 		}
@@ -302,7 +307,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	return nil
 }
 
-func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (string, error) {
+func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error) {
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events ")
 	args := []interface{}{}
@@ -313,21 +318,22 @@ func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Dura
 	}
 	args = buildFilter(filter, &query, args)
 	query.WriteString(" ORDER BY id DESC LIMIT 1")
-	var eventID string
+	var eventID eventid.EventID
 	if err := r.db.GetContext(ctx, &eventID, query.String(), args...); err != nil {
 		if err != sql.ErrNoRows {
-			return "", faults.Errorf("Unable to get the last event ID: %w", err)
+			return eventid.Zero, faults.Errorf("unable to get the last event ID: %w", err)
 		}
 	}
+
 	return eventID, nil
 }
 
-func (r *EsRepository) GetEvents(ctx context.Context, afterEventID string, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
+func (r *EsRepository) GetEvents(ctx context.Context, afterEventID eventid.EventID, batchSize int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
 	var records []eventsourcing.Event
 	for len(records) < batchSize {
 		var query bytes.Buffer
 		query.WriteString("SELECT * FROM events WHERE id > $1 ")
-		args := []interface{}{afterEventID}
+		args := []interface{}{afterEventID.String()}
 		if trailingLag != time.Duration(0) {
 			safetyMargin := time.Now().UTC().Add(-trailingLag)
 			args = append(args, safetyMargin)

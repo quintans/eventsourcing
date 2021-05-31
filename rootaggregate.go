@@ -9,6 +9,18 @@ type EventMetadata struct {
 	CreatedAt        time.Time
 }
 
+type AggregateType string
+
+func (a AggregateType) String() string {
+	return string(a)
+}
+
+type EventKind string
+
+func (e EventKind) String() string {
+	return string(e)
+}
+
 type Typer interface {
 	GetType() string
 }
@@ -29,29 +41,23 @@ func NewRootAggregate(aggregate EventHandler) RootAggregate {
 }
 
 type RootAggregate struct {
-	ID            string `json:"id,omitempty"`
-	Version       uint32 `json:"version,omitempty"`
-	EventsCounter uint32 `json:"events_counter,omitempty"`
-
-	events       []Eventer
-	eventHandler EventHandler
-	updatedAt    time.Time
-}
-
-func (a RootAggregate) GetID() string {
-	return a.ID
+	version       uint32
+	eventsCounter uint32
+	events        []Eventer
+	eventHandler  EventHandler
+	updatedAt     time.Time
 }
 
 func (a RootAggregate) GetVersion() uint32 {
-	return a.Version
+	return a.version
 }
 
 func (a *RootAggregate) SetVersion(version uint32) {
-	a.Version = version
+	a.version = version
 }
 
 func (a RootAggregate) GetEventsCounter() uint32 {
-	return a.EventsCounter
+	return a.eventsCounter
 }
 
 func (a RootAggregate) GetEvents() []Eventer {
@@ -59,26 +65,23 @@ func (a RootAggregate) GetEvents() []Eventer {
 }
 
 func (a *RootAggregate) ClearEvents() {
+	a.eventsCounter = 0
 	a.events = []Eventer{}
 }
 
 func (a *RootAggregate) ApplyChangeFromHistory(m EventMetadata, event Eventer) {
 	a.eventHandler.HandleEvent(event)
 
-	a.Version = m.AggregateVersion
+	a.version = m.AggregateVersion
 	a.updatedAt = m.CreatedAt
-	a.EventsCounter++
+	a.eventsCounter++
 }
 
 func (a *RootAggregate) ApplyChange(event Eventer) {
 	a.eventHandler.HandleEvent(event)
-	a.EventsCounter++
+	a.eventsCounter++
 
 	a.events = append(a.events, event)
-}
-
-func (a RootAggregate) IsZero() bool {
-	return a.ID == ""
 }
 
 func (a RootAggregate) UpdatedAt() time.Time {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
@@ -247,13 +248,17 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 				return nil
 			}
 		}
+		id, err := eventid.Parse(r.getAsString("id"))
+		if err != nil {
+			return faults.Wrap(err)
+		}
 		h.events = append(h.events, eventsourcing.Event{
-			ID:               r.getAsString("id"),
+			ID:               id,
 			AggregateID:      r.getAsString("aggregate_id"),
 			AggregateIDHash:  hash,
 			AggregateVersion: r.getAsUint32("aggregate_version"),
-			AggregateType:    r.getAsString("aggregate_type"),
-			Kind:             r.getAsString("kind"),
+			AggregateType:    eventsourcing.AggregateType(r.getAsString("aggregate_type")),
+			Kind:             eventsourcing.EventKind(r.getAsString("kind")),
 			Body:             r.getAsBytes("body"),
 			IdempotencyKey:   r.getAsString("idempotency_key"),
 			Metadata:         r.getAsMap("metadata"),

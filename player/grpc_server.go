@@ -8,10 +8,14 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	_ "github.com/lib/pq"
-	pb "github.com/quintans/eventsourcing/api/proto"
-	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
 	"google.golang.org/grpc"
+
+	"github.com/quintans/eventsourcing"
+
+	pb "github.com/quintans/eventsourcing/api/proto"
+	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/store"
 )
 
 type GrpcServer struct {
@@ -24,12 +28,16 @@ func (s *GrpcServer) GetLastEventID(ctx context.Context, r *pb.GetLastEventIDReq
 	if err != nil {
 		return nil, err
 	}
-	return &pb.GetLastEventIDReply{EventId: eID}, nil
+	return &pb.GetLastEventIDReply{EventId: eID.String()}, nil
 }
 
 func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb.GetEventsReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
-	events, err := s.store.GetEvents(ctx, r.GetAfterEventId(), int(r.GetLimit()), time.Duration(r.TrailingLag)*time.Millisecond, filter)
+	afterEventID, err := eventid.Parse(r.GetAfterEventId())
+	if err != nil {
+		return nil, faults.Errorf("unable to parse afterEventID '%s': %w", r.GetAfterEventId(), err)
+	}
+	events, err := s.store.GetEvents(ctx, afterEventID, int(r.GetLimit()), time.Duration(r.TrailingLag)*time.Millisecond, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +52,12 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			return nil, faults.Errorf("unable marshal metadata: %w", err)
 		}
 		pbEvents[k] = &pb.Event{
-			Id:               v.ID,
+			Id:               v.ID.String(),
 			AggregateId:      v.AggregateID,
 			AggregateIdHash:  v.AggregateIDHash,
 			AggregateVersion: v.AggregateVersion,
-			AggregateType:    v.AggregateType,
-			Kind:             v.Kind,
+			AggregateType:    v.AggregateType.String(),
+			Kind:             v.Kind.String(),
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         string(metadata),
@@ -60,9 +68,9 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 }
 
 func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
-	types := make([]string, len(pbFilter.AggregateTypes))
+	types := make([]eventsourcing.AggregateType, len(pbFilter.AggregateTypes))
 	for k, v := range pbFilter.AggregateTypes {
-		types[k] = v
+		types[k] = eventsourcing.AggregateType(v)
 	}
 	metadata := store.Metadata{}
 	for _, v := range pbFilter.Metadata {

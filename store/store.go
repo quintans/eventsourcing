@@ -3,7 +3,7 @@ package store
 import "github.com/quintans/eventsourcing"
 
 type Filter struct {
-	AggregateTypes []string
+	AggregateTypes []eventsourcing.AggregateType
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
 	Metadata     Metadata
@@ -24,7 +24,7 @@ func WithFilter(filter Filter) FilterOption {
 	}
 }
 
-func WithAggregateTypes(at ...string) FilterOption {
+func WithAggregateTypes(at ...eventsourcing.AggregateType) FilterOption {
 	return func(f *Filter) {
 		f.AggregateTypes = at
 	}
