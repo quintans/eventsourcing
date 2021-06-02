@@ -41,14 +41,15 @@ type Decoder interface {
 type Aggregater interface {
 	Typer
 	GetID() string
-	GetVersion() uint32
 	SetVersion(uint32)
+	GetVersion() uint32
 	// GetEventsCounter used to determine snapshots threshold
 	GetEventsCounter() uint32
 	GetEvents() []Eventer
 	ClearEvents()
-	ApplyChangeFromHistory(m EventMetadata, event Eventer)
-	UpdatedAt() time.Time
+	ApplyChangeFromHistory(event Eventer)
+	SetUpdatedAt(time.Time)
+	GetUpdatedAt() time.Time
 }
 
 // Event represents the event data
@@ -199,12 +200,12 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 	}
 	var aggregate Aggregater
 	if len(snap.Body) != 0 {
-		a, err := es.RehydrateAggregate(snap.AggregateType, snap.Body)
+		aggregate, err = es.RehydrateAggregate(snap.AggregateType, snap.Body)
 		if err != nil {
 			return nil, err
 		}
-		aggregate = a.(Aggregater)
 		aggregate.SetVersion(snap.AggregateVersion)
+		aggregate.SetUpdatedAt(snap.CreatedAt)
 	}
 
 	var events []Event
@@ -226,21 +227,27 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 			}
 			aggregate = a.(Aggregater)
 		}
-		m := EventMetadata{
-			AggregateVersion: v.AggregateVersion,
-			CreatedAt:        v.CreatedAt,
-		}
-		e, err := es.RehydrateEvent(v.Kind, v.Body)
-		if err != nil {
+		if err := es.ApplyChangeFromHistory(aggregate, v); err != nil {
 			return nil, err
 		}
-		aggregate.ApplyChangeFromHistory(m, e)
 	}
 
 	return aggregate, nil
 }
 
-func (es EventStore) RehydrateAggregate(aggregateType AggregateType, body []byte) (Typer, error) {
+func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e Event) error {
+	evt, err := es.RehydrateEvent(e.Kind, e.Body)
+	if err != nil {
+		return err
+	}
+	agg.ApplyChangeFromHistory(evt)
+	agg.SetVersion(e.AggregateVersion)
+	agg.SetUpdatedAt(e.CreatedAt)
+
+	return nil
+}
+
+func (es EventStore) RehydrateAggregate(aggregateType AggregateType, body []byte) (Aggregater, error) {
 	return RehydrateAggregate(es.factory, es.codec, es.upcaster, aggregateType, body)
 }
 
@@ -264,11 +271,13 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	now := time.Now().UTC()
 	// we only need millisecond precision
 	now = now.Truncate(time.Millisecond)
-	// due to clock skews, now can be less than the last aggregate update
-	// so we make sure that it will be att least the same.
-	// Version will break the tie when generating the ID
-	if now.Before(aggregate.UpdatedAt()) {
-		now = aggregate.UpdatedAt()
+	// due to clock skews, 'now' can be less or equal than the last aggregate update
+	// so we make sure that it will be at least 1ms after.
+	// In practice this guard may not be necessary,
+	// since the time passed between rehydrating and persisting the aggregate,
+	// will usually be greater than any clock skew.
+	if now.Before(aggregate.GetUpdatedAt()) || now.Equal(aggregate.GetUpdatedAt()) {
+		now = aggregate.GetUpdatedAt().Add(time.Millisecond)
 	}
 
 	tName := aggregate.GetType()

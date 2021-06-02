@@ -169,7 +169,7 @@ func TestPollListener(t *testing.T) {
 	}()
 	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
-			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			counter++
@@ -220,7 +220,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
-			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			counter++
@@ -278,7 +278,7 @@ func TestListenerWithLabels(t *testing.T) {
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
-			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			counter++

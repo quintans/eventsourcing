@@ -20,8 +20,12 @@ func (JSONCodec) Decode(data []byte, v interface{}) error {
 	return faults.Wrap(err)
 }
 
-func RehydrateAggregate(factory Factory, decoder Decoder, upcaster Upcaster, aggregateType AggregateType, body []byte) (Typer, error) {
-	return rehydrate(factory, decoder, upcaster, aggregateType.String(), body, false)
+func RehydrateAggregate(factory Factory, decoder Decoder, upcaster Upcaster, aggregateType AggregateType, body []byte) (Aggregater, error) {
+	a, err := rehydrate(factory, decoder, upcaster, aggregateType.String(), body, false)
+	if err != nil {
+		return nil, err
+	}
+	return a.(Aggregater), nil
 }
 
 func RehydrateEvent(factory Factory, decoder Decoder, upcaster Upcaster, kind EventKind, body []byte) (Typer, error) {

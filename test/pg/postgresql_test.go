@@ -136,7 +136,7 @@ func TestPollListener(t *testing.T) {
 	var mu sync.Mutex
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
-			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			mu.Lock()
@@ -188,7 +188,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	var mu sync.Mutex
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
-			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			mu.Lock()
@@ -241,7 +241,7 @@ func TestListenerWithLabels(t *testing.T) {
 	var mu sync.Mutex
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
-			if err := test.ApplyChangeFromHistory(es, acc2, e); err != nil {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			mu.Lock()

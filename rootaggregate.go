@@ -4,11 +4,6 @@ import (
 	"time"
 )
 
-type EventMetadata struct {
-	AggregateVersion uint32
-	CreatedAt        time.Time
-}
-
 type AggregateType string
 
 func (a AggregateType) String() string {
@@ -69,21 +64,21 @@ func (a *RootAggregate) ClearEvents() {
 	a.events = []Eventer{}
 }
 
-func (a *RootAggregate) ApplyChangeFromHistory(m EventMetadata, event Eventer) {
+func (a *RootAggregate) ApplyChangeFromHistory(event Eventer) {
 	a.eventHandler.HandleEvent(event)
-
-	a.version = m.AggregateVersion
-	a.updatedAt = m.CreatedAt
 	a.eventsCounter++
 }
 
 func (a *RootAggregate) ApplyChange(event Eventer) {
-	a.eventHandler.HandleEvent(event)
-	a.eventsCounter++
+	a.ApplyChangeFromHistory(event)
 
 	a.events = append(a.events, event)
 }
 
-func (a RootAggregate) UpdatedAt() time.Time {
+func (a *RootAggregate) SetUpdatedAt(t time.Time) {
+	a.updatedAt = t
+}
+
+func (a RootAggregate) GetUpdatedAt() time.Time {
 	return a.updatedAt
 }

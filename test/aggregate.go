@@ -171,17 +171,3 @@ func (a *Account) HandleMoneyWithdrawn(event MoneyWithdrawn) {
 func (a *Account) HandleOwnerUpdated(event OwnerUpdated) {
 	a.Owner = event.Owner
 }
-
-func ApplyChangeFromHistory(es eventsourcing.EventStore, agg eventsourcing.Aggregater, e eventsourcing.Event) error {
-	m := eventsourcing.EventMetadata{
-		AggregateVersion: e.AggregateVersion,
-		CreatedAt:        e.CreatedAt,
-	}
-	evt, err := es.RehydrateEvent(e.Kind, e.Body)
-	if err != nil {
-		return err
-	}
-	agg.ApplyChangeFromHistory(m, evt)
-
-	return nil
-}
