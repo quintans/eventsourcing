@@ -109,7 +109,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	}
 
 	var idempotencyKey *string
-	if eRec.IdempotencyKey != "" {
+	if eRec.IdempotencyKey != eventsourcing.EmptyIdempotencyKey {
 		idempotencyKey = &eRec.IdempotencyKey
 	}
 
@@ -255,9 +255,9 @@ func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql
 	return tx.Commit()
 }
 
-func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType eventsourcing.AggregateType, idempotencyKey string) (bool, error) {
+func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
 	var exists bool
-	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE aggregate_type=$1 AND idempotency_key=$2) AS "EXISTS"`, aggregateType, idempotencyKey)
+	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=$1) AS "EXISTS"`, idempotencyKey)
 	if err != nil {
 		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
 	}

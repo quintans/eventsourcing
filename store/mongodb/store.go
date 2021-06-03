@@ -276,8 +276,8 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	return events, nil
 }
 
-func (r *EsRepository) HasIdempotencyKey(ctx context.Context, aggregateType eventsourcing.AggregateType, idempotencyKey string) (bool, error) {
-	filter := bson.D{{"aggregate_type", aggregateType.String()}, {"idempotency_key", idempotencyKey}}
+func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
+	filter := bson.D{{"idempotency_key", idempotencyKey}}
 	opts := options.FindOne().SetProjection(bson.D{{"_id", 1}})
 	evt := Event{}
 	if err := r.eventsCollection().FindOne(ctx, filter, opts).Decode(&evt); err != nil {

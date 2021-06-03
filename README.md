@@ -94,14 +94,6 @@ acc2 := a.(*Account)
 After storing the events in a database we need to publish them into an event bus.
 This is done with a `store.Feeder` and a `sink.Sinker`
 
-```go
-sinker := // targets an event bus
-sinker.Init()
-
-feeder := // listen to a inserts to a database
-feeder.Feed(ctx, sinker)
-```
-
 In a distributed system where we can have multiple instance replicas of a service, we need to avoid duplication of events being forwarded to the message bus.
 To avoid duplication and **keep the order of events** we could have only one active instance using a distributed lock to elect the leader.
 But this would mean that we would have an idle instance and it is just a waste of resources.
@@ -110,33 +102,30 @@ To take advantage of all the replicas, we can partition the events and balance t
 **Example**: consider 2 forwarder instances and and we want to partition the events into 12 partitions.
 Each forwarder instance would be responsible 6 partitions.
 
-This is done with `store.Forwarder` that takes a *feed* and a *sink*. `store.Forwarder` implements `common.Tasker` so that it can be balanced among a set of workers. All workers are managed by `common.BalanceWorkers`
+The code would look similar to the following:
 
 ```go
-sinker := sink.NewNatsSink(cfg.ConfigNats.Topic, partitions, "test-cluster", "pusher-id", stan.NatsURL(cfg.ConfigNats.NatsAddress))
-defer sinker.Close()
-
-dbURL := fmt.Sprintf("mongodb://%s:%s@%s:%d?connect=direct", cfg.EsUser, cfg.EsPassword, cfg.EsHost, cfg.EsPort)
-pool, _ := lock.NewConsulLockPool(cfg.ConsulAddress)
-
-lockMonitors := make([]common.LockWorker, len(partitionSlots))
-for i, v := range partitionSlots {
-    listener, _ := mongodb.NewFeed(dbURL, cfg.EsName, mongodb.WithPartitions(feedPartitions, v.From, v.To))
-
-    lockMonitors[i] = common.LockWorker{
-        Lock: pool.NewLock("forwarder-lock", cfg.LockExpiry),
-        Worker: common.NewRunWorker("MongoDB -> NATS feeder", store.NewForwarder(
-            listener,
-            sinker,
-        )),
-    }
+partitionSlots, _ := worker.ParseSlots("1-6,7-12")
+partitions := uint32(12)
+lockFact := func(lockName string) lock.Locker {
+    return lockPool.NewLock(lockName, cfg.LockExpiry)
+}
+feederFact := func(partitionLow, partitionHi uint32) store.Feeder {
+    return mongodb.NewFeed(logger, connStr, cfg.EsName, mongodb.WithPartitions(partitions, partitionLow, partitionHi))
 }
 
-memberlist := common.NewRedisMemberlist(cfg.ConsulAddress, "forwarder-member", cfg.LockExpiry)
-go common.BalanceWorkers(ctx, memberlist, lockMonitors, cfg.LockExpiry/2)
-```
+const name = "forwarder"
+clientID := name + "-" + uuid.New().String()
+sinker, _ := sink.NewNatsSink(logger, cfg.Topic, partitions, "test-cluster", clientID, stan.NatsURL(cfg.NatsURL))
+go func() {
+    <-ctx.Done()
+    sinker.Close()
+}()
 
-`common.RunWorker` also handles the restart from the last published in case of service crash or restart.
+// workers is used down bellow
+workers := projection.EventForwarderWorkers(ctx, logger, name, lockFact, feederFact, sinker, partitionSlots)
+
+```
 
 ### Projection
 
@@ -181,33 +170,10 @@ Boot Partitioned Projection
 All that is handled by the following pseudo code (it may change since development is ongoing)
 
 ```go
-esRepo := player.NewGrpcRepository(cfg.EsAddress)
-natsSub, _ := subscriber.NewNatsSubscriber(ctx, cfg.NatsAddress, "test-cluster", "balance", cfg.Topic, NotificationTopic)
-
-balancePartitions, err := common.ParseSlots(cfg.PartitionSlots)
-prjCtrl := // instantiate the controller
-
-workers := make([]common.LockWorker, len(balancePartitions))
-for i, v := range balancePartitions {
-    workers[i] = common.LockWorker{
-        Lock: pool.NewLock("balance-worker", cfg.LockExpiry),
-        Worker: common.NewRunWorker("Balance Projection", projection.NewProjectionPartition(
-            balanceRebuild,
-            prjCtrl,
-            natsSub,
-            projection.BootStage{
-                AggregateTypes: []string{event.AggregateType_Account},
-                Subscriber:     natsSub,
-                Repository:     esRepo,
-                PartitionLo:    v.From,
-                PartitionHi:    v.To,
-            },
-        )),
-    }
-}
-
-memberlist, _ := common.NewConsulMemberList(cfg.ConsulAddress, "balance-member", cfg.LockExpiry)
-go common.BalanceWorkers(ctx, memberlist, workers, cfg.LockExpiry/2)
+memberlist, _ := worker.NewConsulMemberList(cfg.ConsulURL, "forwarder-member", cfg.LockExpiry)
+// workers was defined in the previous example
+memberlist.AddWorkers(workers)
+go memberlist.BalanceWorkers(ctx, logger)
 ```
 
 All this balancing and projection rebuilds assumes that a projection is idempotent.
@@ -349,117 +315,132 @@ Snapshots is a technique used to improve the performance of the event store, whe
 
 ### Idempotency
 
-When saving an aggregate, we have the option to supply an idempotent key. Later, we can check the presence of the idempotency key, to see if we are repeating an action. This can be useful when used in process manager reactors.
+When saving an aggregate, we have the option to supply an idempotent key. This idempotency key needs to be unique in the whole event store. The event store needs to guarantee the uniqueness constraint.
+Later, we can check the presence of the idempotency key, to see if we are repeating an action. This can be useful when used in process manager reactors.
 
 In the following example I exemplify a money transfer with rollback actions, leveraging idempotent keys.
 
-Here, Withdraw and Deposit need to be idempotent, but setting the transfer state does not. The latter is idempotent action while the former is not. 
+Here, Withdraw and Deposit need to be idempotent, but setting the transfer state to complete does not. The latter is idempotent action while the former is not.
 
-> I don't see the need to use command handlers in the following examples
+Another interesting thing that the idempotency key allows us is to relate two different aggregates.
+In the pseudo code bellow, when we handle the `TransactionCreated` event, if the withdraw fails we set the transaction as failed.
+If the same event is delivered a second time and the withdraw is successful, we end up in an inconsistent state between the `Account` and the `Transaction` aggregates.
+
+Since only one of the operations must be successful, using the same idempotent key we guarantee consistency,
+because internally we check the presence of the key.
+If the events are delivered concurrently, we just have a concurrent error. 
+
+The goal of an idempotency key is not fail an operation but to allow us to skip an operation. 
 
 Some pseudo code:
 
 ```go
-func NewTransferReactor(es EventStore) {
-    // ...
-	l := NewPoller(es)
-	cancel, err := l.Handle(ctx, func(c context.Context, e Event) {
-        switch e.Kind {
-        case "TransferStarted":
-            OnTransferStarted(c, es, e)
-        case "MoneyWithdrawn":
-            OnMoneyWithdrawn(c, es, e)
-        case "MoneyDeposited":
-            OnMoneyDeposited(c, es, e)
-        case "TransferFailedToDeposit":
-            OnTransferFailedToDeposit(c, es, e)
-        }
-    })
-    // ...
+func (p Reactor) Handler(ctx context.Context, e eventsourcing.Event) error {
+	evt,  := eventsourcing.RehydrateEvent(p.factory, p.codec, nil, e.Kind, e.Body)
+
+	switch t := evt.(type) {
+	case event.TransactionCreated:
+		err = p.TransactionCreated(ctx, t)
+	case event.TransactionFailed:
+		err = p.txUC.TransactionFailed(ctx, aggID, t)
+	}
+	return err
 }
 
-func OnTransferStarted(ctx context.Context, es EventStore, e Event) {
-    event = NewTransferStarted(e)
-    transfer := NewTransfer()
-    es.GetByID(ctx, event.Transaction, &transfer)
-    if !transfer.IsRunning() {
-        return
-    }
-    
-    // event.Transaction is the idempotent key for the account withdrawal
-    exists, _ := es.HasIdempotencyKey(ctx, event.FromAccount, event.Transaction)
-    if !exists {
-        account := NewAccount()
-        es.GetByID(ctx, event.FromAccount, &account)
-        if ok := account.Withdraw(event.Amount, event.Transaction); !ok {
-            transfer.FailedWithdraw("Not Enough Funds")
-            es.Save(ctx, transfer, Options{})
-            return
-        }
-        es.Save(ctx, account, Options{
-            IdempotencyKey: event.Transaction,
-        })
-    }
+// TransactionCreated processes a transaction.
+// This demonstrates how we can use the idempotency key to guard against duplicated events.
+// Since all aggregates belong to the same service, there is no reason to split into several event handlers.
+func (uc Reactor) TransactionCreated(ctx context.Context, e event.TransactionCreated) error {
+	ok, err := uc.whitdraw(ctx, e.From, e.Money, e.ID)
+	if !ok || err != nil {
+		return err
+	}
+
+	ok, err = uc.deposit(ctx, e.To, e.Money, e.ID)
+	if !ok || err != nil {
+		return err
+	}
+
+	// complete transaction
+	return uc.txRepo.Exec(ctx, e.ID, func(t *entity.Transaction) (*entity.Transaction, error) {
+		t.Succeeded()
+		return t, nil
+	}, eventsourcing.EmptyIdempotencyKey)
 }
 
-func OnMoneyWithdrawn(ctx context.Context, es EventStore, e Event) {
-    event := NewMoneyWithdrawnEvent(e)
-    if event.Transaction == "" {
-        return
-    }
+func (uc Reactor) whitdraw(ctx context.Context, accID uuid.UUID, money int64, txID uuid.UUID) (bool, error) {
+	if accID == uuid.Nil {
+		return true, nil
+	}
 
-    transfer := NewTransfer()
-    es.GetByID(ctx, event.Transaction, &transfer)
-    if !transfer.IsRunning() {
-        return
-    }
-    
-    transfer.Debited()
-    es.Save(ctx, transfer, Options{})
+	var failed bool
+	idempotencyKey := txID.String() + "/withdraw"
+	err := uc.accRepo.Exec(ctx, accID, func(acc *entity.Account) (*entity.Account, error) {
+		err := acc.Withdraw(txID, money)
+		if err == nil {
+			return acc, nil
+		}
 
-    exists, _ = es.HasIdempotencyKey(ctx, transfer.ToAccount, transfer.Transaction)
-    if !exists {
-        account := NewAccount()
-        es.GetByID(ctx, transfer.ToAccount, &account)
-        if ok := account.Deposit(transfer.Amount, transfer.Transaction); !ok {
-            transfer.FailedDeposit("Some Reason")
-            es.Save(ctx, transfer, Options{})
-            return
-        }
-        es.Save(ctx, account, Options{
-            IdempotencyKey: transfer.Transaction,
-        })
-    }
+		failed = true
+		// transaction failed
+		errTx := uc.txRepo.Exec(ctx, txID, func(tx *entity.Transaction) (*entity.Transaction, error) {
+			tx.WithdrawFailed("From account: " + err.Error())
+			return tx, nil
+		}, idempotencyKey)
+
+		return nil, errTx
+	}, idempotencyKey)
+	if failed || err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
-func OnMoneyDeposited(ctx context.Context, es EventStore, e Event) {
-    event := NewMoneyDepositedEvent(e)
-    if event.Transaction == "" {
-        return
-    }
+func (uc Reactor) deposit(ctx context.Context, accID uuid.UUID, money int64, txID uuid.UUID) (bool, error) {
+	if accID == uuid.Nil {
+		return true, nil
+	}
 
-    transfer = NewTransfer()
-    es.GetByID(ctx, event.Transaction, &transfer)
+	var failed bool
+	idempotencyKey := txID.String() + "/deposit"
+	err := uc.accRepo.Exec(ctx, accID, func(acc *entity.Account) (*entity.Account, error) {
+		err := acc.Deposit(txID, money)
+		if err == nil {
+			return acc, nil
+		}
 
-    transfer.Credited()
-    es.Save(ctx, transfer, Options{
-        IdempotencyKey: event.Transaction,
-    })
+		failed = true
+		// transaction failed. Need to rollback withdraw
+		errTx := uc.txRepo.Exec(ctx, txID, func(tx *entity.Transaction) (*entity.Transaction, error) {
+			tx.DepositFailed("To account: " + err.Error())
+			return tx, nil
+		}, idempotencyKey)
+
+		return nil, errTx
+	}, idempotencyKey)
+	if failed || err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
-func OnTransferFailedToDeposit(ctx context.Context, es EventStore, e Event) {
-    event := NewTransferFailedToDepositEvent(e)
+func (uc Reactor) TransactionFailed(ctx context.Context, aggregateID uuid.UUID, e event.TransactionFailed) error {
+	if !e.Rollback {
+		return nil
+	}
 
-    idempotentKey := event.Transaction + "/refund"
-    exists, _ = es.HasIdempotencyKey(ctx, event.FromAccount, idempotentKey)
-    if !exists {
-        account := NewAccount()
-        es.GetByID(ctx, event.FromAccount, &account)
-        account.Refund(event.Amount, event.Transaction)
-        es.Save(ctx, account, Options{
-            IdempotencyKey: idempotentKey,
-        })
-    }
+	tx, err := uc.txRepo.Get(ctx, aggregateID)
+	if err != nil {
+		return err
+	}
+	err = uc.accRepo.Exec(ctx, tx.From, func(acc *entity.Account) (*entity.Account, error) {
+		err := acc.Deposit(tx.ID, tx.Money)
+		return acc, err
+	}, tx.ID.String()+"/rollback")
+
+	return err
 }
 ```
 

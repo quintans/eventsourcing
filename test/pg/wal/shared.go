@@ -102,7 +102,7 @@ func dbSchema(config tpg.DBConfig) error {
 		);`,
 		`CREATE INDEX evt_agg_id_idx ON events (aggregate_id);`,
 		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
-		`CREATE UNIQUE INDEX evt_agg_idempot_uk ON events (aggregate_type, idempotency_key);`,
+		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key);`,
 		`CREATE INDEX evt_metadata_idx ON events USING GIN (metadata jsonb_path_ops);`,
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,

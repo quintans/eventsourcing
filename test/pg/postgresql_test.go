@@ -96,7 +96,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 
-	found, err := es.HasIdempotencyKey(ctx, aggregateType, "idempotency-key")
+	found, err := es.HasIdempotencyKey(ctx, "idempotency-key")
 	require.NoError(t, err)
 	require.True(t, found)
 

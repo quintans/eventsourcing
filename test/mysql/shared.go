@@ -104,7 +104,7 @@ func dbSchema(dbURL string) error {
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)ENGINE=innodb;`,
 		`CREATE UNIQUE INDEX agg_id_ver_idx ON events(aggregate_id, aggregate_version);`,
-		`CREATE UNIQUE INDEX agg_idempot_idx ON events(aggregate_type, idempotency_key);`,
+		`CREATE UNIQUE INDEX idempot_idx ON events(idempotency_key);`,
 		`CREATE INDEX agg_id_idx ON events(aggregate_id);`,
 
 		`CREATE TABLE IF NOT EXISTS snapshots(

@@ -12,6 +12,10 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 )
 
+const (
+	EmptyIdempotencyKey = ""
+)
+
 var (
 	ErrConcurrentModification = errors.New("concurrent modification")
 	ErrUnknownAggregateID     = errors.New("unknown aggregate ID")
@@ -85,7 +89,7 @@ type EsRepository interface {
 	GetSnapshot(ctx context.Context, aggregateID string) (Snapshot, error)
 	SaveSnapshot(ctx context.Context, snapshot Snapshot) error
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
-	HasIdempotencyKey(ctx context.Context, aggregateType AggregateType, idempotencyKey string) (bool, error)
+	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
 	Forget(ctx context.Context, request ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error
 }
 
@@ -127,7 +131,7 @@ func WithMetadata(metadata map[string]interface{}) SaveOption {
 type EventStorer interface {
 	GetByID(ctx context.Context, aggregateID string) (Aggregater, error)
 	Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) error
-	HasIdempotencyKey(ctx context.Context, aggregateType AggregateType, idempotencyKey string) (bool, error)
+	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
 	// Forget erases the values of the specified fields
 	Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error
 }
@@ -337,8 +341,11 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	return nil
 }
 
-func (es EventStore) HasIdempotencyKey(ctx context.Context, aggregateType AggregateType, idempotencyKey string) (bool, error) {
-	return es.store.HasIdempotencyKey(ctx, aggregateType, idempotencyKey)
+func (es EventStore) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
+	if idempotencyKey == EmptyIdempotencyKey {
+		return false, nil
+	}
+	return es.store.HasIdempotencyKey(ctx, idempotencyKey)
 }
 
 type ForgetRequest struct {
