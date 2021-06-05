@@ -159,9 +159,9 @@ func (p Poller) forward(ctx context.Context, after eventid.EventID, handler play
 // eg: a message queue
 func (p Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var afterEventID []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, p.partitionsLow, p.partitionsHi, func(resumeToken []byte) error {
-		if bytes.Compare(resumeToken, afterEventID) > 0 {
-			afterEventID = resumeToken
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, p.partitionsLow, p.partitionsHi, func(message *eventsourcing.Event) error {
+		if bytes.Compare(message.ResumeToken, afterEventID) > 0 {
+			afterEventID = message.ResumeToken
 		}
 		return nil
 	})

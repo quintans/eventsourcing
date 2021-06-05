@@ -101,14 +101,14 @@ func NewFeed(logger log.Logger, config DBConfig, opts ...FeedOption) Feed {
 func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, m.partitionsLow, m.partitionsHi, func(resumeToken []byte) error {
-		p, err := parse(string(resumeToken))
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, m.partitionsLow, m.partitionsHi, func(message *eventsourcing.Event) error {
+		p, err := parse(string(message.ResumeToken))
 		if err != nil {
 			return faults.Wrap(err)
 		}
 		if p.Compare(lastResumePosition) > 0 {
 			lastResumePosition = p
-			lastResumeToken = resumeToken
+			lastResumeToken = message.ResumeToken
 		}
 		return nil
 	})

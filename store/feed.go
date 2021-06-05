@@ -5,6 +5,7 @@ import (
 
 	"github.com/quintans/faults"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 )
@@ -40,8 +41,8 @@ func (f *Forwarder) Run(ctx context.Context) error {
 
 func (f *Forwarder) Cancel() {}
 
-// ForEachResumeTokenInSinkPartitions retrieves the highest event ID and resume token found in the partition range
-func ForEachResumeTokenInSinkPartitions(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32, forEach func(resumeToken []byte) error) error {
+// ForEachResumeTokenInSinkPartitions retrieves the last message for all the partitions
+func ForEachResumeTokenInSinkPartitions(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32, forEach func(*eventsourcing.Event) error) error {
 	if partitionLow == 0 {
 		partitionHi = 0
 	}
@@ -53,9 +54,8 @@ func ForEachResumeTokenInSinkPartitions(ctx context.Context, sinker sink.Sinker,
 		if err != nil {
 			return faults.Errorf("Unable to get the last event ID in sink from partition %d: %w", i, err)
 		}
-		// highest
-		if message != nil && len(message.ResumeToken) > 0 {
-			err := forEach(message.ResumeToken)
+		if message != nil {
+			err := forEach(message)
 			if err != nil {
 				return faults.Wrap(err)
 			}

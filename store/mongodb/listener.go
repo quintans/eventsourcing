@@ -69,9 +69,9 @@ type ChangeEvent struct {
 
 func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var lastResumeToken []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, m.partitionsLow, m.partitionsHi, func(resumeToken []byte) error {
-		if bytes.Compare(resumeToken, lastResumeToken) > 0 {
-			lastResumeToken = resumeToken
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, m.partitionsLow, m.partitionsHi, func(message *eventsourcing.Event) error {
+		if bytes.Compare(message.ResumeToken, lastResumeToken) > 0 {
+			lastResumeToken = message.ResumeToken
 		}
 		return nil
 	})
