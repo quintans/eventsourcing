@@ -2,6 +2,8 @@ package mysql
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,27 +30,20 @@ import (
 const resumeTokenSep = ":"
 
 type Feed struct {
-	logger        log.Logger
-	config        DBConfig
-	eventsTable   string
-	partitions    uint32
-	partitionsLow uint32
-	partitionsHi  uint32
-	flavour       string
+	logger                log.Logger
+	config                DBConfig
+	eventsTable           string
+	partitions            uint32
+	partitionsLow         uint32
+	partitionsHi          uint32
+	flavour               string
+	backoffMaxElapsedTime time.Duration
 }
 
-type FeedOption func(*FeedOptions)
-
-type FeedOptions struct {
-	eventsTable   string
-	partitions    uint32
-	partitionsLow uint32
-	partitionsHi  uint32
-	flavour       string
-}
+type FeedOption func(*Feed)
 
 func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
-	return func(p *FeedOptions) {
+	return func(p *Feed) {
 		if partitions <= 1 {
 			return
 		}
@@ -59,14 +54,20 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 }
 
 func WithFeedEventsCollection(eventsCollection string) FeedOption {
-	return func(p *FeedOptions) {
+	return func(p *Feed) {
 		p.eventsTable = eventsCollection
 	}
 }
 
 func WithFlavour(flavour string) FeedOption {
-	return func(p *FeedOptions) {
+	return func(p *Feed) {
 		p.flavour = flavour
+	}
+}
+
+func WithBackoffMaxElapsedTime(duration time.Duration) FeedOption {
+	return func(p *Feed) {
+		p.backoffMaxElapsedTime = duration
 	}
 }
 
@@ -79,29 +80,24 @@ type DBConfig struct {
 }
 
 func NewFeed(logger log.Logger, config DBConfig, opts ...FeedOption) Feed {
-	options := FeedOptions{
-		eventsTable: "events",
-		flavour:     "mariadb",
+	feed := Feed{
+		logger:                logger,
+		config:                config,
+		eventsTable:           "events",
+		flavour:               "mariadb",
+		backoffMaxElapsedTime: 10 * time.Second,
 	}
 	for _, o := range opts {
-		o(&options)
+		o(&feed)
 	}
 
-	return Feed{
-		logger:        logger,
-		config:        config,
-		eventsTable:   options.eventsTable,
-		partitions:    options.partitions,
-		partitionsLow: options.partitionsLow,
-		partitionsHi:  options.partitionsHi,
-		flavour:       options.flavour,
-	}
+	return feed
 }
 
-func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
+func (f Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, m.partitionsLow, m.partitionsHi, func(message *eventsourcing.Event) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
 		p, err := parse(string(message.ResumeToken))
 		if err != nil {
 			return faults.Wrap(err)
@@ -116,28 +112,16 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		return err
 	}
 
-	cfg := canal.NewDefaultConfig()
-	cfg.Addr = fmt.Sprintf("%s:%d", m.config.Host, m.config.Port)
-	cfg.User = m.config.Username
-	cfg.Password = m.config.Password
-	cfg.HeartbeatPeriod = 200 * time.Millisecond
-	cfg.ReadTimeout = 300 * time.Millisecond
-	cfg.Flavor = m.flavour
-	cfg.Dump.ExecutionPath = ""
-	// cfg.Dump.Where = `"id='0'"`
-
-	cfg.IncludeTableRegex = []string{".*\\." + m.eventsTable}
-
-	c, err := canal.NewCanal(cfg)
+	c, err := f.newCanal()
 	if err != nil {
-		return faults.Wrap(err)
+		return err
 	}
 
 	var mu sync.Mutex
 	var canalClosed bool
 	go func() {
 		<-ctx.Done()
-		m.logger.Info("closing channel on context cancel...")
+		f.logger.Info("closing channel on context cancel...")
 		mu.Lock()
 		canalClosed = true
 		c.Close()
@@ -146,15 +130,15 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 
 	// TODO should be configurable
 	b := backoff.NewExponentialBackOff()
-	b.MaxElapsedTime = 10 * time.Second
+	b.MaxElapsedTime = f.backoffMaxElapsedTime
 
 	blh := &binlogHandler{
-		logger:          m.logger,
+		logger:          f.logger,
 		sinker:          sinker,
 		lastResumeToken: lastResumeToken,
-		partitions:      m.partitions,
-		partitionsLow:   m.partitionsLow,
-		partitionsHi:    m.partitionsHi,
+		partitions:      f.partitions,
+		partitionsLow:   f.partitionsLow,
+		partitionsHi:    f.partitionsHi,
 		backoff:         b,
 	}
 	c.SetEventHandler(blh)
@@ -162,10 +146,10 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	return backoff.Retry(func() error {
 		var err error
 		if lastResumePosition.Name == "" {
-			m.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning???", m.partitionsLow, m.partitionsHi)
+			f.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", f.partitionsLow, f.partitionsHi)
 			err = c.Run()
 		} else {
-			m.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", m.partitionsLow, m.partitionsHi, lastResumePosition)
+			f.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", f.partitionsLow, f.partitionsHi, lastResumePosition)
 			err = c.RunFrom(lastResumePosition)
 		}
 		if err != nil {
@@ -184,6 +168,27 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		}
 		return nil
 	}, b)
+}
+
+func (f Feed) newCanal() (*canal.Canal, error) {
+	cfg := canal.NewDefaultConfig()
+	buf := make([]byte, 4)
+	rand.Read(buf) // Always succeeds, no need to check error
+	cfg.ServerID = binary.LittleEndian.Uint32(buf)
+
+	cfg.Addr = fmt.Sprintf("%s:%d", f.config.Host, f.config.Port)
+	cfg.User = f.config.Username
+	cfg.Password = f.config.Password
+	cfg.HeartbeatPeriod = 200 * time.Millisecond
+	cfg.ReadTimeout = 300 * time.Millisecond
+	cfg.Flavor = f.flavour
+	cfg.Dump.ExecutionPath = ""
+	// cfg.Dump.Where = `"id='0'"`
+
+	cfg.IncludeTableRegex = []string{".*\\." + f.eventsTable}
+
+	c, err := canal.NewCanal(cfg)
+	return c, faults.Wrap(err)
 }
 
 func parse(lastResumeToken string) (mysql.Position, error) {
