@@ -23,7 +23,7 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-const outputPlugin = "pgoutput"
+const defaultSlotName = "events_pub"
 
 type FeedLogreplOption func(*FeedLogrepl)
 
@@ -44,18 +44,26 @@ func WithPublication(publicationName string) FeedLogreplOption {
 	}
 }
 
+func WithBackoffMaxElapsedTime(duration time.Duration) FeedLogreplOption {
+	return func(p *FeedLogrepl) {
+		p.backoffMaxElapsedTime = duration
+	}
+}
+
 type FeedLogrepl struct {
-	dburl         string
-	partitions    uint32
-	partitionsLow uint32
-	partitionsHi  uint32
-	slotName      string
+	dburl                 string
+	partitions            uint32
+	partitionsLow         uint32
+	partitionsHi          uint32
+	slotName              string
+	backoffMaxElapsedTime time.Duration
 }
 
 func NewFeed(connString string, options ...FeedLogreplOption) FeedLogrepl {
 	f := FeedLogrepl{
-		dburl:    connString,
-		slotName: "events_pub",
+		dburl:                 connString,
+		slotName:              defaultSlotName,
+		backoffMaxElapsedTime: 10 * time.Second,
 	}
 
 	for _, o := range options {
@@ -69,8 +77,8 @@ func NewFeed(connString string, options ...FeedLogreplOption) FeedLogrepl {
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
 func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, f.partitionsLow, f.partitionsHi, func(resumeToken []byte) error {
-		xLogPos, err := pglogrepl.ParseLSN(string(resumeToken))
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
+		xLogPos, err := pglogrepl.ParseLSN(string(message.ResumeToken))
 		if err != nil {
 			return faults.Errorf("ParseLSN failed: %w", err)
 		}
@@ -89,11 +97,6 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}
 	defer conn.Close(context.Background())
 
-	_, err = pglogrepl.CreateReplicationSlot(ctx, conn, f.slotName, outputPlugin, pglogrepl.CreateReplicationSlotOptions{Temporary: true})
-	if err != nil {
-		return faults.Errorf("CreateReplicationSlot failed: %w", err)
-	}
-
 	pluginArguments := []string{"proto_version '1'", fmt.Sprintf("publication_names '%s'", f.slotName)}
 	err = pglogrepl.StartReplication(ctx, conn, f.slotName, lastResumeToken, pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments})
 	if err != nil {
@@ -106,9 +109,8 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 
 	set := pgoutput.NewRelationSet()
 
-	// TODO should be configurable
 	b := backoff.NewExponentialBackOff()
-	b.MaxElapsedTime = 10 * time.Second
+	b.MaxElapsedTime = f.backoffMaxElapsedTime
 
 	return backoff.Retry(func() error {
 		for {
@@ -152,10 +154,11 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 						return faults.Errorf("ParseXLogData failed: %w", backoff.Permanent(err))
 					}
 
-					event, err := f.parse(set, xld.WALData)
+					event, err := f.parse(set, xld.WALData, xld.WALStart < lastResumeToken)
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
+
 					clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
 
 					if event == nil {
@@ -176,7 +179,7 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}, b)
 }
 
-func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsourcing.Event, error) {
+func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool) (*eventsourcing.Event, error) {
 	m, err := pgoutput.Parse(WALData)
 	if err != nil {
 		return nil, faults.Errorf("error parsing %s: %w", string(WALData), err)
@@ -186,6 +189,9 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte) (*eventsou
 	case pgoutput.Relation:
 		set.Add(v)
 	case pgoutput.Insert:
+		if skip {
+			return nil, nil
+		}
 		values, err := set.Values(v.RelationID, v.Row)
 		if err != nil {
 			return nil, faults.Errorf("failed to get relation set values: %w", err)

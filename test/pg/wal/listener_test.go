@@ -56,10 +56,7 @@ func TestListener(t *testing.T) {
 	cancel()
 	require.NoError(t, <-errCh, "Error feeding #1")
 
-	// resume from the last position, by using the same sinker.
-	// I haven't found a way to read all logs from the beginning
 	ctx, cancel = context.WithCancel(context.Background())
-	errCh = feeding(ctx, dbConfig, s)
 
 	id = uuid.New()
 	acc = test.CreateAccount("Quintans", id, 100)
@@ -67,12 +64,27 @@ func TestListener(t *testing.T) {
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
+	// resume from the last position, by using the same sinker and a new connection
+	errCh = feeding(ctx, dbConfig, s)
+
 	time.Sleep(time.Second)
 	events = s.GetEvents()
 	assert.Equal(t, 5, len(events), "event size")
 
 	cancel()
 	require.NoError(t, <-errCh, "Error feeding #3")
+
+	// resume from the begginning
+	s = test.NewMockSink(1)
+	ctx, cancel = context.WithCancel(context.Background())
+	errCh = feeding(ctx, dbConfig, s)
+
+	time.Sleep(time.Second)
+	events = s.GetEvents()
+	assert.Equal(t, 5, len(events), "event size")
+
+	cancel()
+	require.NoError(t, <-errCh, "Error feeding #4")
 }
 
 func feeding(ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) chan error {
