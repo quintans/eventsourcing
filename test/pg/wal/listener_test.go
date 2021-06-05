@@ -72,7 +72,7 @@ func TestListener(t *testing.T) {
 	assert.Equal(t, 5, len(events), "event size")
 
 	cancel()
-	require.NoError(t, <-errCh, "Error feeding #3")
+	require.NoError(t, <-errCh, "Error feeding #2")
 
 	// resume from the begginning
 	s = test.NewMockSink(1)
@@ -84,7 +84,7 @@ func TestListener(t *testing.T) {
 	assert.Equal(t, 5, len(events), "event size")
 
 	cancel()
-	require.NoError(t, <-errCh, "Error feeding #4")
+	require.NoError(t, <-errCh, "Error feeding #3")
 }
 
 func feeding(ctx context.Context, dbConfig tpg.DBConfig, sinker sink.Sinker) chan error {

@@ -32,8 +32,6 @@ func TestListener(t *testing.T) {
 
 	es := eventsourcing.NewEventStore(repository, 3, test.AggregateFactory{})
 
-	s := test.NewMockSink(0)
-	ctx, cancel := context.WithCancel(context.Background())
 	cfg := mysql.DBConfig{
 		Host:     dbConfig.Host,
 		Port:     dbConfig.Port,
@@ -41,6 +39,9 @@ func TestListener(t *testing.T) {
 		Username: dbConfig.Username,
 		Password: dbConfig.Password,
 	}
+
+	s := test.NewMockSink(0)
+	ctx, cancel := context.WithCancel(context.Background())
 	errCh := feeding(ctx, cfg, s)
 
 	id := uuid.New()
@@ -50,7 +51,7 @@ func TestListener(t *testing.T) {
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(time.Second)
 	events := s.GetEvents()
 	assert.Equal(t, 3, len(events), "event size")
 	assert.Equal(t, "AccountCreated", events[0].Kind.String())
@@ -61,7 +62,6 @@ func TestListener(t *testing.T) {
 	require.NoError(t, <-errCh, "Error feeding #1")
 
 	ctx, cancel = context.WithCancel(context.Background())
-	errCh = feeding(ctx, cfg, s)
 
 	id = uuid.New()
 	acc = test.CreateAccount("Quintans", id, 100)
@@ -70,12 +70,27 @@ func TestListener(t *testing.T) {
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 
-	time.Sleep(5 * time.Second)
+	// resume from the last position, by using the same sinker and a new connection
+	errCh = feeding(ctx, cfg, s)
+
+	time.Sleep(time.Second)
 	events = s.GetEvents()
 	assert.Equal(t, 5, len(events), "event size")
 
 	cancel()
 	require.NoError(t, <-errCh, "Error feeding #2")
+
+	// resume from the begginning
+	s = test.NewMockSink(0)
+	ctx, cancel = context.WithCancel(context.Background())
+	errCh = feeding(ctx, cfg, s)
+
+	time.Sleep(time.Second)
+	events = s.GetEvents()
+	assert.Equal(t, 5, len(events), "event size")
+
+	cancel()
+	require.NoError(t, <-errCh, "Error feeding #3")
 }
 
 func feeding(ctx context.Context, dbConfig mysql.DBConfig, sinker sink.Sinker) chan error {
