@@ -14,6 +14,7 @@ import (
 
 var _ Memberlister = (*ConsulMemberList)(nil)
 
+// NewConsulMemberList is a member of a list of servers managing distributed workers backed by consul.
 type ConsulMemberList struct {
 	client     *api.Client
 	prefix     string
@@ -24,7 +25,7 @@ type ConsulMemberList struct {
 	workers []Worker
 }
 
-func NewConsulMemberList(address string, prefix string, expiration time.Duration) (*ConsulMemberList, error) {
+func NewConsulMemberList(address string, family string, expiration time.Duration) (*ConsulMemberList, error) {
 	client, err := api.NewClient(&api.Config{Address: address})
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -41,8 +42,8 @@ func NewConsulMemberList(address string, prefix string, expiration time.Duration
 
 	return &ConsulMemberList{
 		client:     client,
-		prefix:     prefix,
-		name:       prefix + "-" + uuid.New().String(),
+		prefix:     family,
+		name:       family + "-" + uuid.New().String(),
 		expiration: expiration,
 		sID:        sID,
 	}, nil
@@ -52,6 +53,7 @@ func (c *ConsulMemberList) Name() string {
 	return c.name
 }
 
+// List lists all servers and the workers under each of them
 func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 	members := []MemberWorkers{}
 	options := &api.QueryOptions{}
@@ -77,6 +79,7 @@ func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 	return members, nil
 }
 
+// Register registers the workers under this member
 func (c *ConsulMemberList) Register(ctx context.Context, workers []string) error {
 	options := &api.WriteOptions{}
 	options = options.WithContext(ctx)
@@ -105,6 +108,7 @@ func (c *ConsulMemberList) Register(ctx context.Context, workers []string) error
 	return nil
 }
 
+// AddWorkers adds the workers than can be managed by this member
 func (c *ConsulMemberList) AddWorkers(workers []Worker) {
 	c.workers = append(c.workers, workers...)
 }

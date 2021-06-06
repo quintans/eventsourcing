@@ -556,8 +556,8 @@ github.com/prometheus/procfs v0.0.0-20190117184657-bf6a532e95b1/go.mod h1:c3At6R
 github.com/prometheus/procfs v0.0.2/go.mod h1:TjEm7ze935MbeOT/UhFTIMYKhuLP4wbCsTZCD3I8kEA=
 github.com/prometheus/procfs v0.0.8 h1:+fpWZdT24pJBiqJdAwYBjPSk+5YmQzYNPYzQsdzLkt8=
 github.com/prometheus/procfs v0.0.8/go.mod h1:7Qr8sr6344vo1JqZ6HhLceV9o3AJ1Ff+GxbHq6oeK9A=
-github.com/quintans/faults v1.2.2 h1:BoGiSNLg62TUL0iQYlCOXkvW0d4RYKyWwl29y+a4vx8=
-github.com/quintans/faults v1.2.2/go.mod h1:80oBnKF99u+YGV5OYiaFUZnc1/03LHm5H+8gOyqpZUw=
+github.com/quintans/faults v1.4.0 h1:P4utzFrKntIyinO5JcSodToQsR5oiVMWQ/tulfgl1yo=
+github.com/quintans/faults v1.4.0/go.mod h1:80oBnKF99u+YGV5OYiaFUZnc1/03LHm5H+8gOyqpZUw=
 github.com/rcrowley/go-metrics v0.0.0-20181016184325-3113b8401b8a/go.mod h1:bCqnVzQkZxMG4s8nGwiZ5l3QUCyqpo9Y+/ZMZ9VjZe4=
 github.com/remyoudompheng/bigfft v0.0.0-20190728182440-6a916e37a237/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/rogpeppe/fastuuid v0.0.0-20150106093220-6724a57986af/go.mod h1:XWv6SoW27p1b0cqNHllgS5HIMJraePCO15w5zCzIWYg=

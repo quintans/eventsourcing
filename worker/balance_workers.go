@@ -48,13 +48,14 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 	}
 
 	// if current member is not in the list, add it to the member count
-	membersCount := len(members)
 	present := false
 	for _, v := range members {
 		if v.Name == member.Name() {
 			present = true
+			break
 		}
 	}
+	membersCount := len(members)
 	if !present {
 		membersCount++
 	}
@@ -62,12 +63,14 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 	monitorsNo := len(workers)
 	workersToAcquire := monitorsNo / membersCount
 
-	// check if all nodes have the minimum workers. Only after that, remaining workers, at most one, be picked up.
-	hasMinWorkers := true
+	// check if all members have the minimum workers. Only after that, any additional can be picked up.
+	allHaveMinWorkers := true
 	workersInUse := map[string]bool{}
 	for _, m := range members {
-		if workersToAcquire > len(m.Workers) {
-			hasMinWorkers = false
+		// checking if others have min required workers running.
+		// This member might be included
+		if len(m.Workers) < workersToAcquire {
+			allHaveMinWorkers = false
 		}
 		// map only other members workers
 		if m.Name != member.Name() {
@@ -76,7 +79,7 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 			}
 		}
 	}
-	// mapping our current workers
+	// mapping my current workers
 	myRunningWorkers := map[string]bool{}
 	for _, v := range workers {
 		if v.IsRunning() {
@@ -84,8 +87,12 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 			myRunningWorkers[v.Name()] = true
 		}
 	}
+	// if my current running workers are less, then not all members have the min workers
+	if len(myRunningWorkers) < workersToAcquire {
+		allHaveMinWorkers = false
+	}
 
-	if hasMinWorkers && monitorsNo%membersCount != 0 {
+	if allHaveMinWorkers && monitorsNo%membersCount != 0 {
 		workersToAcquire++
 	}
 

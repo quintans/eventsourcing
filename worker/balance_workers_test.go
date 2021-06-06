@@ -39,7 +39,7 @@ func TestMembersList(t *testing.T) {
 	// node #3
 	w3, cancel3 := newBalancer(members)
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(time.Second)
 	count1 := countRunningWorkers(w1)
 	require.True(t, count1 >= 1 && count1 <= 2)
 	count2 := countRunningWorkers(w2)
@@ -82,13 +82,14 @@ func TestMembersList(t *testing.T) {
 	require.Equal(t, 2, count)
 
 	// after node#2 timeout, it will recover and rebalance
-	time.Sleep(4 * time.Second)
+	time.Sleep(time.Second)
 	count = countRunningWorkers(w2)
 	require.Equal(t, 2, count)
 	count = countRunningWorkers(w3)
 	require.Equal(t, 2, count)
 
 	cancel3()
+	cancel2()
 }
 
 func newBalancer(members *sync.Map) ([]worker.Worker, context.CancelFunc) {
@@ -199,9 +200,7 @@ func (w *InMemWorker) Start(ctx context.Context) bool {
 		}()
 	}
 	go func() {
-		select {
-		case <-ctx.Done():
-		}
+		<-ctx.Done()
 		w.Stop(ctx)
 	}()
 

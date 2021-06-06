@@ -28,7 +28,7 @@ require (
 	github.com/nats-io/stan.go v0.7.0
 	github.com/oklog/ulid/v2 v2.0.2
 	github.com/pingcap/check v0.0.0-20200212061837-5e12011dc712 // indirect
-	github.com/quintans/faults v1.2.2
+	github.com/quintans/faults v1.4.0
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.6.1
 	github.com/testcontainers/testcontainers-go v0.9.0
