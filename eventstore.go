@@ -152,6 +152,12 @@ func WithUpcaster(upcaster Upcaster) EsOptions {
 	}
 }
 
+func WithSnapshotThreshold(snapshotThreshold uint32) EsOptions {
+	return func(r *EventStore) {
+		r.snapshotThreshold = snapshotThreshold
+	}
+}
+
 // EventStore represents the event store
 type EventStore struct {
 	store             EsRepository
@@ -162,10 +168,10 @@ type EventStore struct {
 }
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, snapshotThreshold uint32, factory Factory, options ...EsOptions) EventStore {
+func NewEventStore(repo EsRepository, factory Factory, options ...EsOptions) EventStore {
 	es := EventStore{
 		store:             repo,
-		snapshotThreshold: snapshotThreshold,
+		snapshotThreshold: 100,
 		factory:           factory,
 		codec:             JSONCodec{},
 	}
