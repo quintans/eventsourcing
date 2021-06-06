@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -23,7 +24,10 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-const defaultSlotName = "events_pub"
+const (
+	defaultSlotName = "events_pub"
+	outputPlugin    = "pgoutput"
+)
 
 type FeedLogreplOption func(*FeedLogrepl)
 
@@ -40,7 +44,7 @@ func WithLogRepPartitions(partitions, partitionsLow, partitionsHi uint32) FeedLo
 
 func WithPublication(publicationName string) FeedLogreplOption {
 	return func(p *FeedLogrepl) {
-		p.slotName = publicationName
+		p.publicationName = publicationName
 	}
 }
 
@@ -55,14 +59,16 @@ type FeedLogrepl struct {
 	partitions            uint32
 	partitionsLow         uint32
 	partitionsHi          uint32
-	slotName              string
+	publicationName       string
+	slotIndex             int
 	backoffMaxElapsedTime time.Duration
 }
 
-func NewFeed(connString string, options ...FeedLogreplOption) FeedLogrepl {
+func NewFeed(connString string, slotIndex int, options ...FeedLogreplOption) FeedLogrepl {
 	f := FeedLogrepl{
 		dburl:                 connString,
-		slotName:              defaultSlotName,
+		publicationName:       defaultSlotName,
+		slotIndex:             slotIndex,
 		backoffMaxElapsedTime: 10 * time.Second,
 	}
 
@@ -97,9 +103,24 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}
 	defer conn.Close(context.Background())
 
-	pluginArguments := []string{"proto_version '1'", fmt.Sprintf("publication_names '%s'", f.slotName)}
-	err = pglogrepl.StartReplication(ctx, conn, f.slotName, lastResumeToken, pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments})
+	listSlots, err := f.listReplicationSlot(ctx, conn)
 	if err != nil {
+		faults.Errorf("listReplicationSlot failed: %w", err)
+	}
+	if err := f.dropSlotsInExcess(ctx, conn, listSlots); err != nil {
+		faults.Errorf("dropSlotsInExcess failed: %w", err)
+	}
+
+	slotName := f.publicationName + "_" + strconv.Itoa(f.slotIndex)
+	if !listSlots[slotName] {
+		_, err = pglogrepl.CreateReplicationSlot(ctx, conn, slotName, outputPlugin, pglogrepl.CreateReplicationSlotOptions{Temporary: false})
+		if err != nil {
+			faults.Errorf("CreateReplicationSlot failed: %w", err)
+		}
+	}
+
+	pluginArguments := []string{"proto_version '1'", fmt.Sprintf("publication_names '%s'", f.publicationName)}
+	if err := pglogrepl.StartReplication(ctx, conn, slotName, lastResumeToken, pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments}); err != nil {
 		return faults.Errorf("StartReplication failed: %w", err)
 	}
 
@@ -277,5 +298,53 @@ func extract(values map[string]pgtype.Value, targets map[string]interface{}) err
 			return faults.Errorf("failed to assign %s: %w", k, err)
 		}
 	}
+	return nil
+}
+
+func (f FeedLogrepl) listReplicationSlot(ctx context.Context, conn *pgconn.PgConn) (map[string]bool, error) {
+	sql := fmt.Sprintf("SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE '%s%%'", f.publicationName)
+	mrr := conn.Exec(ctx, sql)
+	results, err := mrr.ReadAll()
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
+
+	if len(results) != 1 {
+		return nil, faults.Errorf("expected 1 result set, got %d", len(results))
+	}
+
+	slots := map[string]bool{}
+	result := results[0]
+	if len(result.Rows) != 1 {
+		return slots, nil
+	}
+	for _, rows := range result.Rows {
+		row := rows[0]
+		if len(row) != 1 {
+			return nil, faults.Errorf("expected 1 result columns, got %d", len(row))
+		}
+		slots[string(row[0])] = true
+	}
+
+	return slots, nil
+}
+
+func (f FeedLogrepl) dropSlotsInExcess(ctx context.Context, conn *pgconn.PgConn, slots map[string]bool) error {
+	// we only do the clean up when the listener has index 0
+	if f.slotIndex != 1 {
+		return nil
+	}
+
+	idx := len(f.publicationName) + 1 // +1 to account for the _
+	for k := range slots {
+		i, err := strconv.Atoi(k[idx:])
+		if err != nil {
+			return err
+		}
+		if i > int(f.partitions) {
+			pglogrepl.DropReplicationSlot(ctx, conn, k, pglogrepl.DropReplicationSlotOptions{})
+		}
+	}
+
 	return nil
 }

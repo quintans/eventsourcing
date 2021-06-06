@@ -115,7 +115,6 @@ func dbSchema(config tpg.DBConfig) error {
 		);`,
 		`CREATE INDEX snap_agg_id_idx ON snapshots (aggregate_id);`,
 		`CREATE PUBLICATION events_pub FOR TABLE events WITH (publish = 'insert');`,
-		`CREATE_REPLICATION_SLOT events_pub LOGICAL pgoutput`,
 	}
 
 	for _, s := range sqls {
