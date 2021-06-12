@@ -61,14 +61,22 @@ type FeedLogrepl struct {
 	partitionsHi          uint32
 	publicationName       string
 	slotIndex             int
+	totalSlots            int
 	backoffMaxElapsedTime time.Duration
 }
 
-func NewFeed(connString string, slotIndex int, options ...FeedLogreplOption) FeedLogrepl {
+// NewFeed creates a new Postgresql 10+ logic replication feed.
+// slotIndex is the index of this feed in a group of feeds. Its value should be between 1 and totalSlots.
+// slotIndex=1 has a special maintenance behaviour of dropping any slot above totalSlots.
+func NewFeed(connString string, slotIndex, totalSlots int, options ...FeedLogreplOption) (FeedLogrepl, error) {
+	if slotIndex < 1 || slotIndex > totalSlots {
+		return FeedLogrepl{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
+	}
 	f := FeedLogrepl{
 		dburl:                 connString,
 		publicationName:       defaultSlotName,
 		slotIndex:             slotIndex,
+		totalSlots:            totalSlots,
 		backoffMaxElapsedTime: 10 * time.Second,
 	}
 
@@ -76,7 +84,7 @@ func NewFeed(connString string, slotIndex int, options ...FeedLogreplOption) Fee
 		o(&f)
 	}
 
-	return f
+	return f, nil
 }
 
 // Feed listens to replication logs and pushes them to sinker
@@ -341,7 +349,7 @@ func (f FeedLogrepl) dropSlotsInExcess(ctx context.Context, conn *pgconn.PgConn,
 		if err != nil {
 			return err
 		}
-		if i > int(f.partitions) {
+		if i > f.totalSlots {
 			pglogrepl.DropReplicationSlot(ctx, conn, k, pglogrepl.DropReplicationSlotOptions{})
 		}
 	}

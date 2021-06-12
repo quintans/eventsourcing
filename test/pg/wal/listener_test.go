@@ -85,7 +85,8 @@ func TestListener(t *testing.T) {
 			partitions := partitionSize(tt.partitionSlots)
 			s := test.NewMockSink(partitions)
 			ctx, cancel := context.WithCancel(context.Background())
-			errs := feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			errs, err := feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			require.NoError(t, err)
 
 			id := uuid.New()
 			acc := test.CreateAccount("Paulo", id, 100)
@@ -117,7 +118,8 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
 			events = s.GetEvents()
@@ -131,7 +133,8 @@ func TestListener(t *testing.T) {
 			// resume from the begginning
 			s = test.NewMockSink(partitions)
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
 			events = s.GetEvents()
@@ -155,12 +158,15 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) chan error {
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) (chan error, error) {
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for k, v := range slots {
 		wg.Add(1)
-		listener := postgresql.NewFeed(dbConfig.ReplicationUrl(), k+1, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
+		listener, err := postgresql.NewFeed(dbConfig.ReplicationUrl(), k+1, len(slots), postgresql.WithLogRepPartitions(partitions, v.low, v.high))
+		if err != nil {
+			return nil, err
+		}
 		go func() {
 			wg.Done()
 			err := listener.Feed(ctx, sinker)
@@ -174,5 +180,5 @@ func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slot
 	// wait for all goroutines to run
 	wg.Wait()
 	time.Sleep(5 * time.Second)
-	return errCh
+	return errCh, nil
 }
