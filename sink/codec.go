@@ -34,7 +34,7 @@ type Event struct {
 	Kind             eventsourcing.EventKind     `json:"kind,omitempty"`
 	Body             encoding.Base64             `json:"body,omitempty"`
 	IdempotencyKey   string                      `json:"idempotency_key,omitempty"`
-	Metadata         map[string]interface{}      `json:"metadata,omitempty"`
+	Metadata         encoding.Json               `json:"metadata,omitempty"`
 	CreatedAt        time.Time                   `json:"created_at,omitempty"`
 }
 

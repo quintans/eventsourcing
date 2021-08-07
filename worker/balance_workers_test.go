@@ -136,7 +136,7 @@ func NewInMemLocker(locks *sync.Map, name string) *InMemLocker {
 	}
 }
 
-func (l *InMemLocker) Lock(context.Context) (chan struct{}, error) {
+func (l *InMemLocker) Lock(context.Context) (<-chan struct{}, error) {
 	_, loaded := l.locks.LoadOrStore(l.name, true)
 	if !loaded {
 		l.done = make(chan struct{})

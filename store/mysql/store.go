@@ -71,17 +71,17 @@ var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
 type StoreOption func(*EsRepository)
 
-type ProjectorFactory func(*sql.Tx) store.Projector
+type Projector func(context.Context, *sql.Tx, eventsourcing.Event) error
 
-func ProjectorFactoryOption(fn ProjectorFactory) StoreOption {
+func ProjectorOption(fn Projector) StoreOption {
 	return func(r *EsRepository) {
-		r.projectorFactory = fn
+		r.projector = fn
 	}
 }
 
 type EsRepository struct {
-	db               *sqlx.DB
-	projectorFactory ProjectorFactory
+	db        *sqlx.DB
+	projector Projector
 }
 
 func NewStore(connString string, options ...StoreOption) (*EsRepository, error) {
@@ -116,10 +116,6 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	version := eRec.Version
 	var id eventid.EventID
 	err = r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
-		var projector store.Projector
-		if r.projectorFactory != nil {
-			projector = r.projectorFactory(tx)
-		}
 		entropy := eventid.EntropyFactory(eRec.CreatedAt)
 		for _, e := range eRec.Details {
 			id, err = eventid.New(eRec.CreatedAt, entropy)
@@ -132,6 +128,8 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 				`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				id.String(), eRec.AggregateID, version, eRec.AggregateType, e.Kind, e.Body, idempotencyKey, metadata, eRec.CreatedAt, int32ring(hash))
+			// for a batch of events, the idempotency key is only applied on the first record
+			idempotencyKey = nil
 
 			if err != nil {
 				if isDup(err) {
@@ -140,8 +138,8 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 				return faults.Errorf("Unable to insert event: %w", err)
 			}
 
-			if projector != nil {
-				evt := eventsourcing.Event{
+			if r.projector != nil {
+				err := r.projector(c, tx, eventsourcing.Event{
 					ID:               id,
 					AggregateID:      eRec.AggregateID,
 					AggregateIDHash:  hash,
@@ -149,10 +147,12 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 					AggregateType:    eRec.AggregateType,
 					Kind:             e.Kind,
 					Body:             e.Body,
-					Metadata:         eRec.Labels,
+					Metadata:         metadata,
 					CreatedAt:        eRec.CreatedAt,
+				})
+				if err != nil {
+					return err
 				}
-				projector.Project(evt)
 			}
 		}
 
@@ -425,11 +425,6 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 		if err != nil {
 			return nil, faults.Errorf("unable to scan to struct: %w", err)
 		}
-		metadata := map[string]interface{}{}
-		err = json.Unmarshal(event.Metadata, &metadata)
-		if err != nil {
-			return nil, faults.Errorf("unable to unmarshal metadata to map: %w", err)
-		}
 
 		id, err := eventid.Parse(event.ID)
 		if err != nil {
@@ -443,7 +438,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 			AggregateType:    event.AggregateType,
 			Kind:             event.Kind,
 			Body:             event.Body,
-			Metadata:         metadata,
+			Metadata:         event.Metadata,
 			CreatedAt:        event.CreatedAt,
 		})
 	}

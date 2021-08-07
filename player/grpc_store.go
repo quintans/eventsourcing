@@ -2,7 +2,6 @@ package player
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/golang/protobuf/ptypes"
@@ -81,10 +80,9 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 		if err != nil {
 			return nil, faults.Errorf("could convert timestamp to time: %w", err)
 		}
-		metadata := map[string]interface{}{}
-		err = json.Unmarshal([]byte(v.Metadata), &metadata)
-		if err != nil {
-			return nil, faults.Errorf("Unable unmarshal metadata to map: %w", err)
+		var metadata []byte
+		if v.Metadata != "" {
+			metadata = []byte(v.Metadata)
 		}
 
 		eID, err := eventid.Parse(v.Id)

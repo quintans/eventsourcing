@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/quintans/faults"
 )
 
 type ConsulLockPool struct {
@@ -51,18 +52,19 @@ func (l *ConsulLock) Lock(ctx context.Context) (chan struct{}, error) {
 	defer l.mu.Unlock()
 
 	if l.done != nil {
-		return nil, fmt.Errorf("this lock '%s' is already acquire. Unlock it first", l.lockName)
+		return nil, fmt.Errorf("this lock is already acquire: '%s'", l.lockName)
 	}
 
 	sEntry := &api.SessionEntry{
+		Name:     api.DefaultLockSessionName,
 		TTL:      l.expiry.String(),
-		Behavior: "delete",
+		Behavior: api.SessionBehaviorDelete,
 	}
 	options := &api.WriteOptions{}
 	options = options.WithContext(ctx)
 	sID, _, err := l.client.Session().Create(sEntry, options)
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	l.sID = sID
@@ -73,7 +75,7 @@ func (l *ConsulLock) Lock(ctx context.Context) (chan struct{}, error) {
 	}
 	acquired, _, err := l.client.KV().Acquire(acquireKv, options)
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 
 	if !acquired {
@@ -85,9 +87,12 @@ func (l *ConsulLock) Lock(ctx context.Context) (chan struct{}, error) {
 	l.done = make(chan struct{})
 	go func() {
 		// we use a new options because context may no longer be usable
-		err := l.client.Session().RenewPeriodic(sEntry.TTL, sID, &api.WriteOptions{}, l.done)
+		l.mu.Lock()
+		done := l.done
+		l.mu.Unlock()
+		err := l.client.Session().RenewPeriodic(sEntry.TTL, sID, &api.WriteOptions{}, done)
 		if err != nil {
-			l.Unlock(options.Context())
+			l.Unlock(context.Background())
 		}
 	}()
 
@@ -100,6 +105,17 @@ func (l *ConsulLock) Unlock(ctx context.Context) error {
 
 	if l.done == nil {
 		return nil
+	}
+
+	lockEnt := &api.KVPair{
+		Session: l.sID,
+		Key:     l.lockName,
+	}
+	options := &api.WriteOptions{}
+	options = options.WithContext(ctx)
+	_, _, err := l.client.KV().Release(lockEnt, options)
+	if err != nil {
+		return faults.Errorf("failed to release lock: %w", err)
 	}
 
 	close(l.done)
@@ -121,10 +137,10 @@ func (l *ConsulLock) WaitForUnlock(ctx context.Context) error {
 		for {
 			kv, _, err := l.client.KV().Get(l.lockName, opts)
 			if err != nil {
-				done <- err
+				done <- faults.Wrap(err)
 				return
 			}
-			if kv == nil {
+			if kv == nil || len(kv.Value) == 0 {
 				done <- nil
 				return
 			}

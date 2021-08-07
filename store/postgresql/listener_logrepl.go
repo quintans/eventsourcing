@@ -2,7 +2,6 @@ package postgresql
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -283,11 +282,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		}
 
 		if metadata != "" {
-			e.Metadata = map[string]interface{}{}
-			err = json.Unmarshal([]byte(metadata), &e.Metadata)
-			if err != nil {
-				return nil, faults.Errorf("failed to unmarshal metadata %s: %s", metadata, err)
-			}
+			e.Metadata = []byte(metadata)
 		}
 
 		return &e, nil

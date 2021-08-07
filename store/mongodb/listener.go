@@ -3,6 +3,7 @@ package mongodb
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -128,6 +129,14 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 			}
 			eventDoc := data.FullDocument
 
+			var metadata []byte
+			if len(eventDoc.Metadata) > 0 {
+				metadata, err = json.Marshal(eventDoc.Metadata)
+				if err != nil {
+					return faults.Errorf("unable to unmarshal metadata to map: %w", err)
+				}
+			}
+
 			lastIdx := len(eventDoc.Details) - 1
 			for k, d := range eventDoc.Details {
 				if k == lastIdx {
@@ -150,7 +159,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 					Kind:             d.Kind,
 					Body:             d.Body,
 					IdempotencyKey:   eventDoc.IdempotencyKey,
-					Metadata:         eventDoc.Metadata,
+					Metadata:         metadata,
 					CreatedAt:        eventDoc.CreatedAt,
 				}
 				err = sinker.Sink(ctx, event)

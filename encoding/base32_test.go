@@ -117,7 +117,7 @@ func TestUnmarshall(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s, err := UnmarshalBase32(tt.encoded)
 			require.NoError(t, err)
-			assert.Equal(t, tt.expected, s)
+			require.ElementsMatch(t, tt.expected, s)
 		})
 	}
 }

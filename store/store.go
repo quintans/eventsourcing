@@ -63,7 +63,3 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption
 		f.PartitionHi = partitionsHi
 	}
 }
-
-type Projector interface {
-	Project(eventsourcing.Event)
-}

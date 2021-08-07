@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -54,11 +55,11 @@ var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
 type StoreOption func(*EsRepository)
 
-type ProjectorFactory func(mongo.SessionContext) store.Projector
+type Projector func(mongo.SessionContext, eventsourcing.Event) error
 
-func WithProjectorFactory(fn ProjectorFactory) StoreOption {
+func WithProjector(fn Projector) StoreOption {
 	return func(r *EsRepository) {
-		r.projectorFactory = fn
+		r.projector = fn
 	}
 }
 
@@ -77,7 +78,7 @@ func WithSnapshotsCollection(snapshotsCollection string) StoreOption {
 type EsRepository struct {
 	dbName                  string
 	client                  *mongo.Client
-	projectorFactory        ProjectorFactory
+	projector               Projector
 	eventsCollectionName    string
 	snapshotsCollectionName string
 }
@@ -153,14 +154,20 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 		AggregateIDHash:  common.Hash(eRec.AggregateID),
 	}
 
-	if r.projectorFactory != nil {
+	if r.projector != nil {
+		var metadata []byte
+		if len(eRec.Labels) > 0 {
+			metadata, err = json.Marshal(eRec.Labels)
+			if err != nil {
+				return eventid.Zero, 0, faults.Errorf("unable to unmarshal metadata to map: %w", err)
+			}
+		}
 		r.withTx(ctx, func(mCtx mongo.SessionContext) (interface{}, error) {
 			res, err := r.eventsCollection().InsertOne(mCtx, doc)
 			if err != nil {
 				return nil, faults.Wrap(err)
 			}
 
-			projector := r.projectorFactory(mCtx)
 			for _, d := range doc.Details {
 				evt := eventsourcing.Event{
 					ID:               id,
@@ -171,10 +178,13 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 					IdempotencyKey:   doc.IdempotencyKey,
 					Kind:             d.Kind,
 					Body:             d.Body,
-					Metadata:         doc.Metadata,
+					Metadata:         metadata,
 					CreatedAt:        doc.CreatedAt,
 				}
-				projector.Project(evt)
+				err := r.projector(mCtx, evt)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			return res, nil
@@ -504,6 +514,14 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 	afterEventIDStr := afterEventID.String()
 	var lastEventID eventid.EventID
 	for _, v := range evts {
+		var metadata []byte
+		if len(v.Metadata) > 0 {
+			metadata, err = json.Marshal(v.Metadata)
+			if err != nil {
+				return nil, eventid.Zero, faults.Errorf("unable to unmarshal metadata to map: %w", err)
+			}
+		}
+
 		for k, d := range v.Details {
 			// only collect events that are greater than afterEventID-afterCount
 			if v.ID > afterEventIDStr || k > after {
@@ -521,7 +539,7 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 					Kind:             d.Kind,
 					Body:             d.Body,
 					IdempotencyKey:   v.IdempotencyKey,
-					Metadata:         v.Metadata,
+					Metadata:         metadata,
 					CreatedAt:        v.CreatedAt,
 				})
 			}

@@ -236,11 +236,6 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 			continue
 		}
 
-		metadata := map[string]interface{}{}
-		err = json.Unmarshal(pgEvent.Metadata, &metadata)
-		if err != nil {
-			return eventid.Zero, faults.Errorf("Unable unmarshal metadata to map: %w", backoff.Permanent(err))
-		}
 		event := eventsourcing.Event{
 			ID:               pgEvent.ID,
 			ResumeToken:      []byte(pgEvent.ID.String()),
@@ -251,7 +246,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 			Kind:             pgEvent.Kind,
 			Body:             []byte(pgEvent.Body),
 			IdempotencyKey:   pgEvent.IdempotencyKey,
-			Metadata:         metadata,
+			Metadata:         pgEvent.Metadata,
 			CreatedAt:        time.Time(pgEvent.CreatedAt),
 		}
 

@@ -30,7 +30,7 @@ require (
 	github.com/pingcap/check v0.0.0-20200212061837-5e12011dc712 // indirect
 	github.com/quintans/faults v1.4.0
 	github.com/sirupsen/logrus v1.4.2
-	github.com/stretchr/testify v1.6.1
+	github.com/stretchr/testify v1.7.0
 	github.com/testcontainers/testcontainers-go v0.9.0
 	go.mongodb.org/mongo-driver v1.1.0
 	google.golang.org/grpc v1.27.1
