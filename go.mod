@@ -8,7 +8,7 @@ require (
 	github.com/elastic/go-elasticsearch/v7 v7.10.0
 	github.com/go-mysql-org/go-mysql v1.2.1
 	github.com/go-redis/redis/v8 v8.4.0
-	github.com/go-sql-driver/mysql v1.5.0
+	github.com/go-sql-driver/mysql v1.6.0
 	github.com/golang-migrate/migrate/v4 v4.11.0
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.1.2
@@ -21,18 +21,16 @@ require (
 	github.com/jackc/pgx/v4 v4.11.0
 	github.com/jmoiron/sqlx v1.3.3
 	github.com/kyleconroy/pgoutput v0.1.0
-	github.com/lib/pq v1.7.0
-	github.com/nats-io/nats-server/v2 v2.1.8 // indirect
-	github.com/nats-io/nats-streaming-server v0.18.0 // indirect
-	github.com/nats-io/nats.go v1.10.0
-	github.com/nats-io/stan.go v0.7.0
+	github.com/lib/pq v1.10.2
+	github.com/nats-io/nats-streaming-server v0.22.1 // indirect
+	github.com/nats-io/nats.go v1.11.1-0.20210623165838-4b75fc59ae30
+	github.com/nats-io/stan.go v0.10.0
 	github.com/oklog/ulid/v2 v2.0.2
-	github.com/pingcap/check v0.0.0-20200212061837-5e12011dc712 // indirect
 	github.com/quintans/faults v1.4.0
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.7.0
 	github.com/testcontainers/testcontainers-go v0.9.0
-	go.mongodb.org/mongo-driver v1.1.0
+	go.mongodb.org/mongo-driver v1.7.1
 	google.golang.org/grpc v1.27.1
 	google.golang.org/protobuf v1.25.0
 	gotest.tools v0.0.0-20181223230014-1083505acf35

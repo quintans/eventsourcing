@@ -23,14 +23,14 @@ func TestMembersList(t *testing.T) {
 	// node #1
 	w1, cancel1 := newBalancer(members)
 
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	count := countRunningWorkers(w1)
 	require.Equal(t, 4, count)
 
 	// node #2
 	w2, cancel2 := newBalancer(members)
 
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	count = countRunningWorkers(w1)
 	require.Equal(t, 2, count)
 	count = countRunningWorkers(w2)
@@ -39,7 +39,7 @@ func TestMembersList(t *testing.T) {
 	// node #3
 	w3, cancel3 := newBalancer(members)
 
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	count1 := countRunningWorkers(w1)
 	require.True(t, count1 >= 1 && count1 <= 2)
 	count2 := countRunningWorkers(w2)
@@ -50,7 +50,7 @@ func TestMembersList(t *testing.T) {
 	require.Equal(t, 4, count+count2+count3)
 
 	// after a while we expect to still have he same values
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	count1B := countRunningWorkers(w1)
 	require.Equal(t, count1, count1B)
 	count2B := countRunningWorkers(w2)
@@ -60,7 +60,7 @@ func TestMembersList(t *testing.T) {
 
 	// kill node #1
 	cancel1()
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	count = countRunningWorkers(w2)
 	require.Equal(t, 2, count)
 	count = countRunningWorkers(w3)
@@ -68,21 +68,21 @@ func TestMembersList(t *testing.T) {
 
 	// kill node #2
 	cancel2()
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	count = countRunningWorkers(w3)
 	require.Equal(t, 4, count)
 
 	// node #2
 	w2, cancel2 = newBalancerWithTimeout(members, 2*time.Second)
 
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	count = countRunningWorkers(w3)
 	require.Equal(t, 2, count)
 	count = countRunningWorkers(w2)
 	require.Equal(t, 2, count)
 
 	// after node#2 timeout, it will recover and rebalance
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 	count = countRunningWorkers(w2)
 	require.Equal(t, 2, count)
 	count = countRunningWorkers(w3)
