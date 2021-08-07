@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -264,9 +263,9 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 			AggregateVersion: r.getAsUint32("aggregate_version"),
 			AggregateType:    eventsourcing.AggregateType(r.getAsString("aggregate_type")),
 			Kind:             eventsourcing.EventKind(r.getAsString("kind")),
-			Body:             r.getAsBytes("body"),
+			Body:             r.getStringAsBytes("body"),
 			IdempotencyKey:   r.getAsString("idempotency_key"),
-			Metadata:         r.getAsMap("metadata"),
+			Metadata:         r.getAsBytes("metadata"),
 			CreatedAt:        r.getAsTimeDate("created_at"),
 		})
 	}
@@ -280,7 +279,18 @@ type rec struct {
 }
 
 func (r *rec) getAsBytes(colName string) []byte {
-	return []byte(r.getAsString(colName))
+	if o := r.find(colName); o != nil {
+		return o.([]byte)
+	}
+	return nil
+}
+
+func (r *rec) getStringAsBytes(colName string) []byte {
+	s := r.getAsString(colName)
+	if s == "" {
+		return nil
+	}
+	return []byte(s)
 }
 
 func (r *rec) getAsString(colName string) string {
@@ -304,15 +314,6 @@ func (r *rec) getAsUint32(colName string) uint32 {
 		return uint32(o.(int32))
 	}
 	return 0
-}
-
-func (r *rec) getAsMap(colName string) map[string]interface{} {
-	if o := r.find(colName); o != nil {
-		m := map[string]interface{}{}
-		json.Unmarshal(o.([]byte), &m)
-		return m
-	}
-	return nil
 }
 
 func (r *rec) find(colName string) interface{} {

@@ -95,15 +95,19 @@ func dbSchema(config tpg.DBConfig) error {
 			aggregate_version INTEGER NOT NULL,
 			aggregate_type VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
-			body bytea NOT NULL,
+			body bytea,
 			idempotency_key VARCHAR (50),
-			metadata JSONB NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP
+			metadata JSONB,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
+			migrated INTEGER NOT NULL DEFAULT 0
 		);`,
-		`CREATE INDEX evt_agg_id_idx ON events (aggregate_id);`,
+		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migrated);`,
+		`CREATE INDEX evt_id_migrated_idx ON events (id, migrated);`,
+		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_type, migrated);`,
 		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
-		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key);`,
+		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migrated);`,
 		`CREATE INDEX evt_metadata_idx ON events USING GIN (metadata jsonb_path_ops);`,
+
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,
 			aggregate_id VARCHAR (50) NOT NULL,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
@@ -67,6 +68,8 @@ func dockerCompose(ctx context.Context, path string) (func(), error) {
 		if err := checkIfError(exErr); err != nil {
 			log.Printf("Error on compose shutdown: %v\n", err)
 		}
+		// something is wrong when calling through makefile
+		time.Sleep(5 * time.Second)
 	}
 
 	exErr := compose.Down()

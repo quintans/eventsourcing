@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	EmptyIdempotencyKey = ""
+	EmptyIdempotencyKey           = ""
+	InvalidatedKind     EventKind = "Invalidated"
 )
 
 var (
@@ -47,7 +48,8 @@ type Aggregater interface {
 	GetID() string
 	SetVersion(uint32)
 	GetVersion() uint32
-	// GetEventsCounter used to determine snapshots threshold
+	// GetEventsCounter used to determine snapshots threshold.
+	// It returns the number of events since the last snapshot
 	GetEventsCounter() uint32
 	GetEvents() []Eventer
 	ClearEvents()
@@ -67,7 +69,7 @@ type Event struct {
 	Kind             EventKind
 	Body             encoding.Base64
 	IdempotencyKey   string
-	Metadata         map[string]interface{}
+	Metadata         encoding.Json
 	CreatedAt        time.Time
 }
 
@@ -231,11 +233,10 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 	for _, v := range events {
 		// if the aggregate was not instantiated because the snap was not found
 		if aggregate == nil {
-			a, err := es.RehydrateAggregate(v.AggregateType, nil)
+			aggregate, err = es.RehydrateAggregate(v.AggregateType, nil)
 			if err != nil {
 				return nil, err
 			}
-			aggregate = a.(Aggregater)
 		}
 		if err := es.ApplyChangeFromHistory(aggregate, v); err != nil {
 			return nil, err

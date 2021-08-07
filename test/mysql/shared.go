@@ -98,9 +98,9 @@ func dbSchema(dbURL string) error {
 			aggregate_version INTEGER NOT NULL,
 			aggregate_type VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
-			body VARBINARY(60000) NOT NULL,
+			body VARBINARY(60000),
 			idempotency_key VARCHAR (50),
-			metadata JSON NOT NULL,
+			metadata JSON,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)ENGINE=innodb;`,
 		`CREATE UNIQUE INDEX agg_id_ver_idx ON events(aggregate_id, aggregate_version);`,

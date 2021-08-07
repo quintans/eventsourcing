@@ -84,10 +84,16 @@ func TestConsul(t *testing.T) {
 
 	go func() {
 		time.Sleep(wait)
-		lock2.Unlock(ctx)
+		err := lock2.Unlock(ctx)
+		require.NoError(t, err)
 	}()
 
 	err = lock1.WaitForUnlock(ctx)
 	require.NoError(t, err)
-	require.True(t, time.Now().Sub(start) > wait, "Waiting duration for lock was too short")
+	require.True(t, time.Since(start) > wait, "Waiting duration for lock was too short")
+
+	_, err = lock1.Lock(ctx)
+	require.NoError(t, err)
+	err = lock1.Unlock(ctx)
+	require.NoError(t, err)
 }

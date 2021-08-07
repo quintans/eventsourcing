@@ -87,11 +87,7 @@ func (EventFactory) New(kind string) (eventsourcing.Typer, error) {
 }
 
 func CreateAccount(owner string, id uuid.UUID, money int64) *Account {
-	a := &Account{
-		Status:  OPEN,
-		Balance: money,
-		Owner:   owner,
-	}
+	a := &Account{}
 	a.RootAggregate = eventsourcing.NewRootAggregate(a)
 	a.ID = id
 	a.ApplyChange(AccountCreated{
@@ -156,6 +152,7 @@ func (a *Account) HandleEvent(event eventsourcing.Eventer) {
 func (a *Account) HandleAccountCreated(event AccountCreated) {
 	a.ID = event.ID
 	a.Balance = event.Money
+	a.Owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events
 	a.Status = OPEN
 }
