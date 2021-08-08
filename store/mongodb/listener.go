@@ -123,53 +123,47 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 
 	return backoff.Retry(func() error {
 		for eventsStream.Next(ctx) {
-			var data ChangeEvent
-			if err := eventsStream.Decode(&data); err != nil {
+			var changeEvent ChangeEvent
+			if err := eventsStream.Decode(&changeEvent); err != nil {
 				return faults.Wrap(backoff.Permanent(err))
 			}
-			eventDoc := data.FullDocument
+			eventDoc := changeEvent.FullDocument
 
 			var metadata []byte
 			if len(eventDoc.Metadata) > 0 {
 				metadata, err = json.Marshal(eventDoc.Metadata)
 				if err != nil {
-					return faults.Errorf("unable to unmarshal metadata to map: %w", err)
+					return faults.Errorf("unable to unmarshal metadata to map: %w", backoff.Permanent(err))
 				}
 			}
 
-			lastIdx := len(eventDoc.Details) - 1
-			for k, d := range eventDoc.Details {
-				if k == lastIdx {
-					// we update the resume token on the last event of the transaction
-					lastResumeToken = []byte(eventsStream.ResumeToken())
-				}
-				id, err := eventid.Parse(eventDoc.ID)
-				if err != nil {
-					return faults.Wrap(backoff.Permanent(err))
-				}
-				event := eventsourcing.Event{
-					ID: id.SetCount(uint8(k)),
-					// the resume token should be from the last fully completed sinked doc, because it may fail midway.
-					// We should use the last eventID to filter out the ones that were successfully sent.
-					ResumeToken:      lastResumeToken,
-					AggregateID:      eventDoc.AggregateID,
-					AggregateIDHash:  eventDoc.AggregateIDHash,
-					AggregateVersion: eventDoc.AggregateVersion,
-					AggregateType:    eventDoc.AggregateType,
-					Kind:             d.Kind,
-					Body:             d.Body,
-					IdempotencyKey:   eventDoc.IdempotencyKey,
-					Metadata:         metadata,
-					CreatedAt:        eventDoc.CreatedAt,
-				}
-				err = sinker.Sink(ctx, event)
-				if err != nil {
-					return backoff.Permanent(err)
-				}
+			lastResumeToken = []byte(eventsStream.ResumeToken())
+			id, err := eventid.Parse(eventDoc.ID)
+			if err != nil {
+				return faults.Wrap(backoff.Permanent(err))
 			}
-
+			event := eventsourcing.Event{
+				ID: id,
+				// the resume token should be from the last fully completed sinked doc, because it may fail midway.
+				// We should use the last eventID to filter out the ones that were successfully sent.
+				ResumeToken:      lastResumeToken,
+				AggregateID:      eventDoc.AggregateID,
+				AggregateIDHash:  eventDoc.AggregateIDHash,
+				AggregateVersion: eventDoc.AggregateVersion,
+				AggregateType:    eventDoc.AggregateType,
+				Kind:             eventDoc.Kind,
+				Body:             eventDoc.Body,
+				IdempotencyKey:   eventDoc.IdempotencyKey,
+				Metadata:         metadata,
+				CreatedAt:        eventDoc.CreatedAt,
+			}
+			err = sinker.Sink(ctx, event)
+			if err != nil {
+				return backoff.Permanent(err)
+			}
 			b.Reset()
 		}
+
 		err := eventsStream.Err()
 		if errors.Is(err, context.Canceled) {
 			return backoff.Permanent(err)

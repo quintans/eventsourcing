@@ -66,6 +66,7 @@ func TestSaveAndGet(t *testing.T) {
 	err = es.Save(ctx, acc)
 	require.NoError(t, err)
 	acc.Deposit(5)
+	acc.Deposit(1)
 	err = es.Save(ctx, acc, eventsourcing.WithIdempotencyKey("idempotency-key"))
 	require.NoError(t, err)
 
@@ -75,23 +76,25 @@ func TestSaveAndGet(t *testing.T) {
 	evts, err := getEvents(ctx, dbConfig, id)
 	require.NoError(t, err)
 
-	require.Equal(t, 2, len(evts))
-	evt := evts[0]
-	assert.Equal(t, EventAccountCreated, evt.Details[0].Kind)
-	assert.Equal(t, EventMoneyDeposited, evt.Details[1].Kind)
-	assert.Equal(t, EventMoneyWithdrawn, evt.Details[2].Kind)
-	assert.Equal(t, AggregateAccount, evts[0].AggregateType)
-	assert.Equal(t, id.String(), evt.AggregateID)
-	assert.Equal(t, uint32(1), evt.AggregateVersion)
-	assert.Equal(t, "idempotency-key", evts[1].IdempotencyKey)
+	for k, v := range evts {
+		assert.Equal(t, AggregateAccount, v.AggregateType)
+		assert.Equal(t, id.String(), v.AggregateID)
+		assert.Equal(t, uint32(k+1), v.AggregateVersion)
+	}
+
+	require.Equal(t, 5, len(evts))
+	assert.Equal(t, EventAccountCreated, evts[0].Kind)
+	assert.Equal(t, EventMoneyDeposited, evts[1].Kind)
+	assert.Equal(t, EventMoneyWithdrawn, evts[2].Kind)
+	assert.Equal(t, "idempotency-key", evts[3].IdempotencyKey)
 
 	a, err := es.GetByID(ctx, id.String())
 	require.NoError(t, err)
 	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(2), acc2.GetVersion())
-	assert.Equal(t, uint32(1), acc2.GetEventsCounter())
-	assert.Equal(t, int64(110), acc2.Balance)
+	assert.Equal(t, uint32(5), acc2.GetVersion())
+	assert.Equal(t, uint32(2), acc2.GetEventsCounter())
+	assert.Equal(t, int64(111), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 
 	found, err := es.HasIdempotencyKey(ctx, "idempotency-key")
@@ -183,7 +186,7 @@ func TestPollListener(t *testing.T) {
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(2), acc2.GetVersion())
+	assert.Equal(t, uint32(4), acc2.GetVersion())
 	assert.Equal(t, int64(110), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
@@ -240,7 +243,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	}
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(2), acc2.GetVersion())
+	assert.Equal(t, uint32(4), acc2.GetVersion())
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
@@ -298,7 +301,7 @@ func TestListenerWithLabels(t *testing.T) {
 	}
 	assert.Equal(t, 3, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(1), acc2.GetVersion())
+	assert.Equal(t, uint32(3), acc2.GetVersion())
 	assert.Equal(t, int64(130), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
@@ -336,7 +339,7 @@ func TestForget(t *testing.T) {
 		"aggregate_id": bson.D{
 			{"$eq", id.String()},
 		},
-		"details.kind": bson.D{
+		"kind": bson.D{
 			{"$eq", "OwnerUpdated"},
 		},
 	})
@@ -347,13 +350,12 @@ func TestForget(t *testing.T) {
 	assert.Equal(t, 2, len(evts))
 	foundEvent := false
 	for _, e := range evts {
-		for _, v := range e.Details {
-			if v.Kind == "OwnerUpdated" {
-				foundEvent = true
-				evt := test.OwnerUpdated{}
-				codec.Decode(v.Body, &evt)
-				assert.NotEmpty(t, evt.Owner)
-			}
+		if e.Kind == "OwnerUpdated" {
+			foundEvent = true
+			evt := test.OwnerUpdated{}
+			err := codec.Decode(e.Body, &evt)
+			require.NoError(t, err)
+			assert.NotEmpty(t, evt.Owner)
 		}
 	}
 	assert.True(t, foundEvent)
@@ -398,7 +400,7 @@ func TestForget(t *testing.T) {
 		"aggregate_id": bson.D{
 			{"$eq", id.String()},
 		},
-		"details.kind": bson.D{
+		"kind": bson.D{
 			{"$eq", "OwnerUpdated"},
 		},
 	})
@@ -409,13 +411,12 @@ func TestForget(t *testing.T) {
 	assert.Equal(t, 2, len(evts))
 	foundEvent = false
 	for _, e := range evts {
-		for _, v := range e.Details {
-			if v.Kind == "OwnerUpdated" {
-				foundEvent = true
-				evt := test.OwnerUpdated{}
-				codec.Decode(v.Body, &evt)
-				assert.NotEmpty(t, evt.Owner)
-			}
+		if e.Kind == "OwnerUpdated" {
+			foundEvent = true
+			evt := test.OwnerUpdated{}
+			err := codec.Decode(e.Body, &evt)
+			require.NoError(t, err)
+			assert.NotEmpty(t, evt.Owner)
 		}
 	}
 	assert.True(t, foundEvent)
