@@ -408,18 +408,18 @@ func TestMigrationSimple(t *testing.T) {
 		},
 		es.ApplyChangeFromHistory,
 		eventsourcing.JSONCodec{},
-		func(events []postgresql.Event) ([]postgresql.EventMigration, error) {
-			var migration []postgresql.EventMigration
-			var m postgresql.EventMigration
+		func(events []*postgresql.Event) ([]*postgresql.EventMigration, error) {
+			var migration []*postgresql.EventMigration
+			var m *postgresql.EventMigration
 			// default codec used by the event store
 			codec := eventsourcing.JSONCodec{}
 			for _, e := range events {
 				var err error
 				switch e.Kind {
 				case "AccountCreated":
-					m, err = migrateAccountCreated(&e, codec)
+					m, err = migrateAccountCreated(e, codec)
 				case "OwnerUpdated":
-					m, err = migrateOwnerUpdated(&e, codec)
+					m, err = migrateOwnerUpdated(e, codec)
 				default:
 					m = postgresql.DefaultEventMigration(e)
 				}
@@ -501,11 +501,11 @@ func TestMigrationSimple(t *testing.T) {
 	assert.Equal(t, "Quintans Pereira", acc2.LastName)
 }
 
-func migrateAccountCreated(e *postgresql.Event, codec eventsourcing.Codec) (postgresql.EventMigration, error) {
+func migrateAccountCreated(e *postgresql.Event, codec eventsourcing.Codec) (*postgresql.EventMigration, error) {
 	oldEvent := test.AccountCreated{}
 	err := codec.Decode(e.Body, &oldEvent)
 	if err != nil {
-		return postgresql.EventMigration{}, err
+		return nil, err
 	}
 	first, last := splitName(oldEvent.Owner)
 	newEvent := test.AccountCreatedV2{
@@ -516,21 +516,21 @@ func migrateAccountCreated(e *postgresql.Event, codec eventsourcing.Codec) (post
 	}
 	body, err := codec.Encode(newEvent)
 	if err != nil {
-		return postgresql.EventMigration{}, err
+		return nil, err
 	}
 
-	m := postgresql.DefaultEventMigration(*e)
+	m := postgresql.DefaultEventMigration(e)
 	m.Kind = "AccountCreated_V2"
 	m.Body = body
 
 	return m, nil
 }
 
-func migrateOwnerUpdated(e *postgresql.Event, codec eventsourcing.Codec) (postgresql.EventMigration, error) {
+func migrateOwnerUpdated(e *postgresql.Event, codec eventsourcing.Codec) (*postgresql.EventMigration, error) {
 	oldEvent := test.OwnerUpdated{}
 	err := codec.Decode(e.Body, &oldEvent)
 	if err != nil {
-		return postgresql.EventMigration{}, err
+		return nil, err
 	}
 	first, last := splitName(oldEvent.Owner)
 	newEvent := test.OwnerUpdatedV2{
@@ -539,10 +539,10 @@ func migrateOwnerUpdated(e *postgresql.Event, codec eventsourcing.Codec) (postgr
 	}
 	body, err := codec.Encode(newEvent)
 	if err != nil {
-		return postgresql.EventMigration{}, err
+		return nil, err
 	}
 
-	m := postgresql.DefaultEventMigration(*e)
+	m := postgresql.DefaultEventMigration(e)
 	m.Kind = "OwnerUpdated_V2"
 	m.Body = body
 

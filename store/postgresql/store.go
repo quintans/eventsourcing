@@ -484,8 +484,8 @@ type EventMigration struct {
 	Metadata       []byte                  `db:"metadata"`
 }
 
-func DefaultEventMigration(e Event) EventMigration {
-	return EventMigration{
+func DefaultEventMigration(e *Event) *EventMigration {
+	return &EventMigration{
 		Kind:           e.Kind,
 		Body:           e.Body,
 		IdempotencyKey: e.IdempotencyKey,
@@ -495,7 +495,7 @@ func DefaultEventMigration(e Event) EventMigration {
 
 // MigrationHandler receives the list of events for a stream and transforms the list of events.
 // if the returned list is nil, it means no changes where made
-type MigrationHandler func(events []Event) ([]EventMigration, error)
+type MigrationHandler func(events []*Event) ([]*EventMigration, error)
 
 func (r *EsRepository) Migrate(
 	ctx context.Context,
@@ -539,7 +539,7 @@ func (r *EsRepository) Migrate(
 	}
 }
 
-func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eventsourcing.AggregateType, eventTypeCriteria []eventsourcing.EventKind) ([]Event, error) {
+func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eventsourcing.AggregateType, eventTypeCriteria []eventsourcing.EventKind) ([]*Event, error) {
 	if len(eventTypeCriteria) == 0 {
 		return nil, faults.New("event type criteria needs to be specified")
 	}
@@ -557,12 +557,12 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eve
 	}
 	subquery.WriteString(") ORDER BY id ASC LIMIT 1")
 
-	events := []Event{}
+	events := []*Event{}
 	query := fmt.Sprintf("SELECT * FROM events WHERE aggregate_id = (%s) AND migrated = 0 ORDER BY aggregate_version ASC", subquery.String())
 	err := r.db.SelectContext(ctx, &events, query, args...)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return []Event{}, nil
+			return nil, nil
 		}
 		return nil, faults.Errorf("Unable to query events: %w\n%s", err, query)
 	}
@@ -571,8 +571,8 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eve
 
 func (r *EsRepository) saveMigration(
 	ctx context.Context,
-	last Event,
-	migration []EventMigration,
+	last *Event,
+	migration []*EventMigration,
 	snapshotThreshold uint32,
 	aggregateFactory func() eventsourcing.Aggregater,
 	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error,
