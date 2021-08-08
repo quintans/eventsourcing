@@ -193,19 +193,20 @@ Below I present to options: Polling and Pushing (reactive)
 
 ### IDs
 
-Understanding how IDs are used and what is the best ID strategy that we can use, in my opinion, is the most important thing in an event sourcing and CQRS.
+The event IDs are incremental (monotonic). Having monotonic IDs is very important so that we can replay the events in case of a failure or when replaying events to rebuild a projection.
 
-Having incremental IDs is very important so that we can replay the events in case of a failure and
-also because, if events are incremental, it is easy to implement idempotency. For a specific aggregate, we just ignore events that have lower order than the last one received.
+Since events IDs are monotonic, we can use them to implement basic projection idempotency. Basic projection idempotency for a specific aggregate can be implemented by just ignoring events that have lower order than the last one received.
+
+The same basic projection idempotency can be achieved with the aggregate version.
 
 * **So we cannot insert events in the event store with IDs out of order?**
 
   We can, as long as this out of order events happens in different aggregates.
   For the same aggregate, the events ID must be monotonic. The order only matter for the aggregate.
 
-* **If events are inserted out of order how will they impact the projections?**
+* **If events are inserted out of order how will they impact projections?**
 
-  If what I said before is true, then it will not matter, even if consider projection built with different aggregates.
+  If events for an aggregate are monotonic, projections are not impacted, even if consider projection built with different aggregates.
   Consider the aggregates A and B that are materialised in the projection C, so that `A + B = C`. This is exactly the same as `B + A = C` 
 
 
@@ -298,14 +299,14 @@ When we interact with an aggregate, several events may be created.
 
 If a SQL database is used, like PostgreSQL, we create a record per event and used a transaction to guarantee consistency.
 
-For document NoSQL databases, like MongoDB, the solution is to use one document with the array of events inside, as a sub-collection.
+For document NoSQL databases that don't support transactions, the solution is to use one document with the array of events inside, as a sub-collection.
 The only requirement is that the database needs to provide unique constraints on multiple fields (aggregate_id, version).
 
 The record would be something like:
 
 `{ _id = 1, aggregate_id = 1, version = 1, events = [ { … }, { … }, { … }, { … } ] }`
 
-This project provides examples of both.
+The preferred approach is to transactions. This makes it easy to do `In Place Copy-Replace` migrations, to be added in the future.
 
 ### Snapshots
 
@@ -313,7 +314,7 @@ I will also use the memento pattern, to take snapshots of the current state, eve
 
 Snapshots is a technique used to improve the performance of the event store, when retrieving an aggregate, but they don't play any part in keeping the consistency of the event store, therefore if we sporadically fail to save a snapshot, it is not a problem, so they can be saved in a separate transaction and in a go routine.
 
-### Idempotency
+### Write Idempotency
 
 When saving an aggregate, we have the option to supply an idempotent key. This idempotency key needs to be unique in the whole event store. The event store needs to guarantee the uniqueness constraint.
 Later, we can check the presence of the idempotency key, to see if we are repeating an action. This can be useful when used in process manager reactors.
