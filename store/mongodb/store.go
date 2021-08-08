@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/quintans/faults"
@@ -31,15 +30,11 @@ type Event struct {
 	AggregateIDHash  uint32                      `bson:"aggregate_id_hash,omitempty"`
 	AggregateVersion uint32                      `bson:"aggregate_version,omitempty"`
 	AggregateType    eventsourcing.AggregateType `bson:"aggregate_type,omitempty"`
-	Details          []EventDetail               `bson:"details,omitempty"`
+	Kind             eventsourcing.EventKind     `bson:"kind,omitempty"`
+	Body             []byte                      `bson:"body,omitempty"`
 	IdempotencyKey   string                      `bson:"idempotency_key,omitempty"`
 	Metadata         bson.M                      `bson:"metadata,omitempty"`
 	CreatedAt        time.Time                   `bson:"created_at,omitempty"`
-}
-
-type EventDetail struct {
-	Kind eventsourcing.EventKind `bson:"kind,omitempty"`
-	Body []byte                  `bson:"body,omitempty"`
 }
 
 type Snapshot struct {
@@ -127,48 +122,49 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	if len(eRec.Details) == 0 {
 		return eventid.Zero, 0, faults.New("No events to be saved")
 	}
-	details := make([]EventDetail, 0, len(eRec.Details))
-	for _, e := range eRec.Details {
-		details = append(details, EventDetail{
-			Kind: e.Kind,
-			Body: e.Body,
-		})
-	}
 
 	entropy := eventid.EntropyFactory(eRec.CreatedAt)
-	id, err := eventid.New(eRec.CreatedAt, entropy)
-	if err != nil {
-		return eventid.Zero, 0, faults.Wrap(err)
-	}
 
-	version := eRec.Version + 1
-	doc := Event{
-		ID:               id.String(),
-		AggregateID:      eRec.AggregateID,
-		AggregateType:    eRec.AggregateType,
-		Details:          details,
-		AggregateVersion: version,
-		IdempotencyKey:   eRec.IdempotencyKey,
-		Metadata:         eRec.Labels,
-		CreatedAt:        eRec.CreatedAt,
-		AggregateIDHash:  common.Hash(eRec.AggregateID),
-	}
-
-	if r.projector != nil {
-		var metadata []byte
-		if len(eRec.Labels) > 0 {
-			metadata, err = json.Marshal(eRec.Labels)
-			if err != nil {
-				return eventid.Zero, 0, faults.Errorf("unable to unmarshal metadata to map: %w", err)
-			}
-		}
-		r.withTx(ctx, func(mCtx mongo.SessionContext) (interface{}, error) {
-			res, err := r.eventsCollection().InsertOne(mCtx, doc)
+	var id eventid.EventID
+	version := eRec.Version
+	idempotencyKey := eRec.IdempotencyKey
+	err := r.withTx(ctx, func(mCtx mongo.SessionContext) (interface{}, error) {
+		for _, e := range eRec.Details {
+			var err error
+			id, err = eventid.New(eRec.CreatedAt, entropy)
 			if err != nil {
 				return nil, faults.Wrap(err)
 			}
 
-			for _, d := range doc.Details {
+			version = version + 1
+			doc := Event{
+				ID:               id.String(),
+				AggregateID:      eRec.AggregateID,
+				AggregateType:    eRec.AggregateType,
+				Kind:             e.Kind,
+				Body:             e.Body,
+				AggregateVersion: version,
+				IdempotencyKey:   idempotencyKey,
+				Metadata:         eRec.Labels,
+				CreatedAt:        eRec.CreatedAt,
+				AggregateIDHash:  common.Hash(eRec.AggregateID),
+			}
+			// for a batch of events, the idempotency key is only applied on the first record
+			idempotencyKey = ""
+
+			_, err = r.eventsCollection().InsertOne(mCtx, doc)
+			if err != nil {
+				return nil, faults.Wrap(err)
+			}
+
+			if r.projector != nil {
+				var metadata []byte
+				if len(eRec.Labels) > 0 {
+					metadata, err = json.Marshal(eRec.Labels)
+					if err != nil {
+						return nil, faults.Errorf("unable to unmarshal metadata to map: %w", err)
+					}
+				}
 				evt := eventsourcing.Event{
 					ID:               id,
 					AggregateID:      eRec.AggregateID,
@@ -176,8 +172,8 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 					AggregateVersion: doc.AggregateVersion,
 					AggregateType:    doc.AggregateType,
 					IdempotencyKey:   doc.IdempotencyKey,
-					Kind:             d.Kind,
-					Body:             d.Body,
+					Kind:             doc.Kind,
+					Body:             doc.Body,
 					Metadata:         metadata,
 					CreatedAt:        doc.CreatedAt,
 				}
@@ -186,15 +182,13 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 					return nil, err
 				}
 			}
+		}
 
-			return res, nil
-		})
-	} else {
-		_, err = r.eventsCollection().InsertOne(ctx, doc)
-	}
+		return nil, nil
+	})
 	if err != nil {
 		if isMongoDup(err) {
-			return eventid.Zero, 0, eventsourcing.ErrConcurrentModification
+			return eventid.Zero, 0, faults.Wrap(eventsourcing.ErrConcurrentModification)
 		}
 		return eventid.Zero, 0, faults.Errorf("Unable to insert event: %w", err)
 	}
@@ -278,7 +272,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	opts := options.Find()
 	opts.SetSort(bson.D{{"aggregate_version", 1}})
 
-	events, _, err := r.queryEvents(ctx, filter, opts, eventid.Zero)
+	events, _, err := r.queryEvents(ctx, filter, opts)
 	if err != nil {
 		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
@@ -306,7 +300,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	// for events
 	filter := bson.D{
 		{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
-		{"details.kind", bson.D{{"$eq", request.EventKind}}},
+		{"kind", bson.D{{"$eq", request.EventKind}}},
 	}
 	cursor, err := r.eventsCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
@@ -314,25 +308,23 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	}
 	events := []Event{}
 	if err = cursor.All(ctx, &events); err != nil {
-		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
+		return faults.Errorf("unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
 	for _, evt := range events {
-		for k, d := range evt.Details {
-			body, err := forget(d.Kind.String(), d.Body)
-			if err != nil {
-				return err
-			}
+		body, err := forget(evt.Kind.String(), evt.Body)
+		if err != nil {
+			return err
+		}
 
-			filter := bson.D{
-				{"_id", evt.ID},
-			}
-			update := bson.D{
-				{"$set", bson.E{fmt.Sprintf("details.%d.body", k), body}},
-			}
-			_, err = r.eventsCollection().UpdateOne(ctx, filter, update)
-			if err != nil {
-				return faults.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
-			}
+		filter := bson.D{
+			{"_id", evt.ID},
+		}
+		update := bson.D{
+			{"$set", bson.E{"body", body}},
+		}
+		_, err = r.eventsCollection().UpdateOne(ctx, filter, update)
+		if err != nil {
+			return faults.Errorf("Unable to forget event ID %s: %w", evt.ID, err)
 		}
 	}
 
@@ -402,9 +394,8 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterEventID eventid.Event
 	lastMessageID := afterEventID
 	var records []eventsourcing.Event
 	for len(records) < batchSize {
-		// since we have to consider the count, the query starts with the eventID
 		flt := bson.D{
-			{"_id", bson.D{{"$gte", lastMessageID.String()}}},
+			{"_id", bson.D{{"$gt", lastMessageID.String()}}},
 		}
 
 		if trailingLag != time.Duration(0) {
@@ -420,7 +411,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterEventID eventid.Event
 			opts.SetBatchSize(-1)
 		}
 
-		rows, eID, err := r.queryEvents(ctx, flt, opts, lastMessageID)
+		rows, eID, err := r.queryEvents(ctx, flt, opts)
 		if err != nil {
 			return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", lastMessageID, filter, err)
 		}
@@ -495,7 +486,7 @@ func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint3
 	}
 }
 
-func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions, afterEventID eventid.EventID) ([]eventsourcing.Event, eventid.EventID, error) {
+func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]eventsourcing.Event, eventid.EventID, error) {
 	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -510,40 +501,32 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 	}
 
 	events := []eventsourcing.Event{}
-	after := int(afterEventID.Count())
-	afterEventIDStr := afterEventID.String()
 	var lastEventID eventid.EventID
-	for _, v := range evts {
+	for _, evt := range evts {
 		var metadata []byte
-		if len(v.Metadata) > 0 {
-			metadata, err = json.Marshal(v.Metadata)
+		if len(evt.Metadata) > 0 {
+			metadata, err = json.Marshal(evt.Metadata)
 			if err != nil {
 				return nil, eventid.Zero, faults.Errorf("unable to unmarshal metadata to map: %w", err)
 			}
 		}
 
-		for k, d := range v.Details {
-			// only collect events that are greater than afterEventID-afterCount
-			if v.ID > afterEventIDStr || k > after {
-				eventID, err := eventid.Parse(v.ID)
-				if err != nil {
-					return nil, eventid.Zero, faults.Errorf("unable to parse message ID '%s': %w", v.ID, err)
-				}
-				lastEventID = eventID.SetCount(uint8(k))
-				events = append(events, eventsourcing.Event{
-					ID:               lastEventID,
-					AggregateID:      v.AggregateID,
-					AggregateIDHash:  v.AggregateIDHash,
-					AggregateVersion: v.AggregateVersion,
-					AggregateType:    v.AggregateType,
-					Kind:             d.Kind,
-					Body:             d.Body,
-					IdempotencyKey:   v.IdempotencyKey,
-					Metadata:         metadata,
-					CreatedAt:        v.CreatedAt,
-				})
-			}
+		lastEventID, err = eventid.Parse(evt.ID)
+		if err != nil {
+			return nil, eventid.Zero, faults.Errorf("unable to parse message ID '%s': %w", evt.ID, err)
 		}
+		events = append(events, eventsourcing.Event{
+			ID:               lastEventID,
+			AggregateID:      evt.AggregateID,
+			AggregateIDHash:  evt.AggregateIDHash,
+			AggregateVersion: evt.AggregateVersion,
+			AggregateType:    evt.AggregateType,
+			Kind:             evt.Kind,
+			Body:             evt.Body,
+			IdempotencyKey:   evt.IdempotencyKey,
+			Metadata:         metadata,
+			CreatedAt:        evt.CreatedAt,
+		})
 	}
 
 	return events, lastEventID, nil
