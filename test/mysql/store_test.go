@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/store/mysql"
@@ -306,7 +305,7 @@ func TestForget(t *testing.T) {
 
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
-	evts := []encoding.Json{}
+	evts := [][]byte{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -317,7 +316,7 @@ func TestForget(t *testing.T) {
 		assert.NotEmpty(t, ou.Owner)
 	}
 
-	bodies := []encoding.Json{}
+	bodies := [][]byte{}
 	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
@@ -347,7 +346,7 @@ func TestForget(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	evts = []encoding.Json{}
+	evts = [][]byte{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -358,7 +357,7 @@ func TestForget(t *testing.T) {
 		assert.Empty(t, ou.Owner)
 	}
 
-	bodies = []encoding.Json{}
+	bodies = [][]byte{}
 	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))

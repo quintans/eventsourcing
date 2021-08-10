@@ -11,6 +11,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	pb "github.com/quintans/eventsourcing/api/proto"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
 )
@@ -80,11 +81,6 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 		if err != nil {
 			return nil, faults.Errorf("could convert timestamp to time: %w", err)
 		}
-		var metadata []byte
-		if v.Metadata != "" {
-			metadata = []byte(v.Metadata)
-		}
-
 		eID, err := eventid.Parse(v.Id)
 		if err != nil {
 			return nil, faults.Errorf("unable to parse message ID '%s': %w", v.Id, err)
@@ -98,7 +94,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 			Kind:             eventsourcing.EventKind(v.Kind),
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
-			Metadata:         metadata,
+			Metadata:         encoding.JsonOfString(v.Metadata),
 			CreatedAt:        *createdAt,
 		}
 	}

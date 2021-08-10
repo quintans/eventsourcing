@@ -3,7 +3,6 @@ package mongodb
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
@@ -129,14 +129,6 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 			}
 			eventDoc := changeEvent.FullDocument
 
-			var metadata []byte
-			if len(eventDoc.Metadata) > 0 {
-				metadata, err = json.Marshal(eventDoc.Metadata)
-				if err != nil {
-					return faults.Errorf("unable to unmarshal metadata to map: %w", backoff.Permanent(err))
-				}
-			}
-
 			lastResumeToken = []byte(eventsStream.ResumeToken())
 			id, err := eventid.Parse(eventDoc.ID)
 			if err != nil {
@@ -154,7 +146,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 				Kind:             eventDoc.Kind,
 				Body:             eventDoc.Body,
 				IdempotencyKey:   eventDoc.IdempotencyKey,
-				Metadata:         metadata,
+				Metadata:         encoding.JsonOfMap(eventDoc.Metadata),
 				CreatedAt:        eventDoc.CreatedAt,
 			}
 			err = sinker.Sink(ctx, event)

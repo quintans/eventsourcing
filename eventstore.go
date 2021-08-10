@@ -78,7 +78,7 @@ type Event struct {
 	Kind             EventKind
 	Body             encoding.Base64
 	IdempotencyKey   string
-	Metadata         encoding.Json
+	Metadata         *encoding.Json
 	CreatedAt        time.Time
 }
 
@@ -102,14 +102,46 @@ type EsRepository interface {
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
 	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
 	Forget(ctx context.Context, request ForgetRequest, forget func(kind string, body []byte, snapshot bool) ([]byte, error)) error
+	MigrateInPlaceCopyReplace(
+		ctx context.Context,
+		revision int,
+		snapshotThreshold uint32,
+		aggregateFactory func() (Aggregater, error), // called only if snapshot threshold is reached
+		rehydrateFunc func(Aggregater, Event) error, // called only if snapshot threshold is reached
+		encoder Encoder,
+		handler MigrationHandler,
+		aggregateType AggregateType,
+		eventTypeCriteria ...EventKind,
+	) error
 }
+
+// Event is the event data stored in the database
+type EventMigration struct {
+	Kind           EventKind
+	Body           []byte
+	IdempotencyKey string
+	Metadata       *encoding.Json
+}
+
+func DefaultEventMigration(e *Event) *EventMigration {
+	return &EventMigration{
+		Kind:           e.Kind,
+		Body:           e.Body,
+		IdempotencyKey: e.IdempotencyKey,
+		Metadata:       e.Metadata,
+	}
+}
+
+// MigrationHandler receives the list of events for a stream and transforms the list of events.
+// if the returned list is nil, it means no changes where made
+type MigrationHandler func(events []*Event) ([]*EventMigration, error)
 
 type EventRecord struct {
 	AggregateID    string
 	Version        uint32
 	AggregateType  AggregateType
 	IdempotencyKey string
-	Labels         map[string]interface{}
+	Metadata       map[string]interface{}
 	CreatedAt      time.Time
 	Details        []EventRecordDetail
 }
@@ -319,7 +351,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 		Version:        aggregate.GetVersion(),
 		AggregateType:  AggregateType(tName),
 		IdempotencyKey: opts.IdempotencyKey,
-		Labels:         opts.Labels,
+		Metadata:       opts.Labels,
 		CreatedAt:      now,
 		Details:        details,
 	}
@@ -397,4 +429,29 @@ func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget f
 	}
 
 	return es.store.Forget(ctx, request, fun)
+}
+
+func (es EventStore) MigrateInPlaceCopyReplace(
+	ctx context.Context,
+	revision int,
+	snapshotThreshold uint32,
+	handler MigrationHandler,
+	aggregateType AggregateType,
+	eventTypeCriteria ...EventKind,
+) error {
+	return es.store.MigrateInPlaceCopyReplace(ctx,
+		1,
+		3,
+		func() (Aggregater, error) {
+			a, err := es.factory.New(string(aggregateType))
+			if err != nil {
+				return nil, faults.Wrap(err)
+			}
+			return a.(Aggregater), nil
+		},
+		es.ApplyChangeFromHistory,
+		es.codec, //
+		handler,
+		aggregateType,
+		eventTypeCriteria...)
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
 )
@@ -103,22 +103,18 @@ func NewStore(connString string, options ...StoreOption) (*EsRepository, error) 
 }
 
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
-	metadata, err := json.Marshal(eRec.Labels)
-	if err != nil {
-		return eventid.Zero, 0, faults.Wrap(err)
-	}
-
 	var idempotencyKey *string
 	if eRec.IdempotencyKey != eventsourcing.EmptyIdempotencyKey {
 		idempotencyKey = &eRec.IdempotencyKey
 	}
 
+	metadata := encoding.JsonOfMap(eRec.Metadata)
 	version := eRec.Version
 	var id eventid.EventID
-	err = r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
+	err := r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
 		entropy := eventid.EntropyFactory(eRec.CreatedAt)
 		for _, e := range eRec.Details {
-			id, err = eventid.New(eRec.CreatedAt, entropy)
+			id, err := eventid.New(eRec.CreatedAt, entropy)
 			if err != nil {
 				return faults.Wrap(err)
 			}
@@ -438,9 +434,23 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 			AggregateType:    event.AggregateType,
 			Kind:             event.Kind,
 			Body:             event.Body,
-			Metadata:         event.Metadata,
+			Metadata:         encoding.JsonOfBytes(event.Metadata),
 			CreatedAt:        event.CreatedAt,
 		})
 	}
 	return events, nil
+}
+
+func (r *EsRepository) MigrateInPlaceCopyReplace(
+	ctx context.Context,
+	revision int,
+	snapshotThreshold uint32,
+	aggregateFactory func() (eventsourcing.Aggregater, error), // called only if snapshot threshold is reached
+	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error, // called only if snapshot threshold is reached
+	encoder eventsourcing.Encoder,
+	handler eventsourcing.MigrationHandler,
+	aggregateType eventsourcing.AggregateType,
+	eventTypeCriteria ...eventsourcing.EventKind,
+) error {
+	return faults.New("not implemented")
 }
