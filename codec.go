@@ -20,27 +20,31 @@ func (JSONCodec) Decode(data []byte, v interface{}) error {
 	return faults.Wrap(err)
 }
 
-func RehydrateAggregate(factory Factory, decoder Decoder, upcaster Upcaster, aggregateType AggregateType, body []byte) (Aggregater, error) {
-	a, err := rehydrate(factory, decoder, upcaster, aggregateType.String(), body, false)
+func RehydrateAggregate(factory AggregateFactory, decoder Decoder, upcaster Upcaster, aggregateType AggregateType, body []byte) (Aggregater, error) {
+	e, err := factory.NewAggregate(aggregateType)
+	if err != nil {
+		return nil, err
+	}
+	a, err := rehydrate(e, decoder, upcaster, body, false)
 	if err != nil {
 		return nil, err
 	}
 	return a.(Aggregater), nil
 }
 
-func RehydrateEvent(factory Factory, decoder Decoder, upcaster Upcaster, kind EventKind, body []byte) (Typer, error) {
-	return rehydrate(factory, decoder, upcaster, kind.String(), body, true)
-}
-
-func rehydrate(factory Factory, decoder Decoder, upcaster Upcaster, kind string, body []byte, dereference bool) (Typer, error) {
-	e, err := factory.New(kind)
+func RehydrateEvent(factory EventFactory, decoder Decoder, upcaster Upcaster, kind EventKind, body []byte) (Typer, error) {
+	e, err := factory.NewEvent(kind)
 	if err != nil {
 		return nil, err
 	}
+	return rehydrate(e, decoder, upcaster, body, true)
+}
+
+func rehydrate(e Typer, decoder Decoder, upcaster Upcaster, body []byte, dereference bool) (Typer, error) {
 	if len(body) > 0 {
-		err = decoder.Decode(body, e)
+		err := decoder.Decode(body, e)
 		if err != nil {
-			return nil, faults.Errorf("Unable to decode event %s: %w", kind, err)
+			return nil, faults.Errorf("Unable to decode into %T: %w", e, err)
 		}
 	}
 	if upcaster != nil {

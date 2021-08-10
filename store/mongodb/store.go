@@ -294,7 +294,7 @@ func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey str
 	return true, nil
 }
 
-func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error {
+func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetRequest, forget func(kind string, body []byte, snapshot bool) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// for events
@@ -311,7 +311,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 		return faults.Errorf("unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
 	for _, evt := range events {
-		body, err := forget(evt.Kind.String(), evt.Body)
+		body, err := forget(evt.Kind.String(), evt.Body, false)
 		if err != nil {
 			return err
 		}
@@ -342,7 +342,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	}
 
 	for _, s := range snaps {
-		body, err := forget(s.AggregateType.String(), s.Body)
+		body, err := forget(s.AggregateType.String(), s.Body, true)
 		if err != nil {
 			return err
 		}

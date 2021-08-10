@@ -23,7 +23,16 @@ var (
 )
 
 type Factory interface {
-	New(kind string) (Typer, error)
+	AggregateFactory
+	EventFactory
+}
+
+type AggregateFactory interface {
+	NewAggregate(typ AggregateType) (Aggregater, error)
+}
+
+type EventFactory interface {
+	NewEvent(kind EventKind) (Typer, error)
 }
 
 type Upcaster interface {
@@ -92,7 +101,7 @@ type EsRepository interface {
 	SaveSnapshot(ctx context.Context, snapshot Snapshot) error
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
 	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
-	Forget(ctx context.Context, request ForgetRequest, forget func(kind string, body []byte) ([]byte, error)) error
+	Forget(ctx context.Context, request ForgetRequest, forget func(kind string, body []byte, snapshot bool) ([]byte, error)) error
 }
 
 type EventRecord struct {
@@ -361,11 +370,18 @@ type ForgetRequest struct {
 }
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
-	fun := func(kind string, body []byte) ([]byte, error) {
-		e, err := es.factory.New(kind)
+	fun := func(kind string, body []byte, snapshot bool) ([]byte, error) {
+		var e Typer
+		var err error
+		if snapshot {
+			e, err = es.factory.NewAggregate(AggregateType(kind))
+		} else {
+			e, err = es.factory.NewEvent(EventKind(kind))
+		}
 		if err != nil {
 			return nil, err
 		}
+
 		err = es.codec.Decode(body, e)
 		if err != nil {
 			return nil, err
