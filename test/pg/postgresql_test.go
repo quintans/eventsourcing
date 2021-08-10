@@ -52,7 +52,7 @@ func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -115,7 +115,7 @@ func TestPollListener(t *testing.T) {
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -167,7 +167,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -219,7 +219,7 @@ func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -274,7 +274,7 @@ func TestForget(t *testing.T) {
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -365,7 +365,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 	defer tearDown()
 
 	r, _ := postgresql.NewStore(dbConfig.Url())
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(50))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(50))
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := uuid.New()
@@ -386,7 +386,7 @@ func TestMigrationSimple(t *testing.T) {
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.MustParse("cd67a139-521f-479e-ad94-431e4b23226f")
 	acc := test.CreateAccount("Paulo Pereira", id, 100)
@@ -400,7 +400,7 @@ func TestMigrationSimple(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// switching the aggregator factory
-	es = eventsourcing.NewEventStore(r, test.AggregateFactoryV2{}, eventsourcing.WithSnapshotThreshold(3))
+	es = eventsourcing.NewEventStore(r, test.FactoryV2{}, eventsourcing.WithSnapshotThreshold(3))
 	err = r.Migrate(ctx,
 		1,
 		3,

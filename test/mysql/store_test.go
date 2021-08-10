@@ -49,7 +49,7 @@ func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -112,7 +112,7 @@ func TestPollListener(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -172,7 +172,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -227,7 +227,7 @@ func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -286,7 +286,7 @@ func TestForget(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)

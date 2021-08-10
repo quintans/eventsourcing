@@ -80,7 +80,7 @@ func TestListener(t *testing.T) {
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-			es := eventsourcing.NewEventStore(repository, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+			es := eventsourcing.NewEventStore(repository, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 			partitions := partitionSize(tt.partitionSlots)
 			s := test.NewMockSink(partitions)

@@ -49,26 +49,25 @@ func (e OwnerUpdated) GetType() string {
 	return "OwnerUpdated"
 }
 
-type AggregateFactory struct {
+type Factory struct {
+	AggregateFactory
 	EventFactory
 }
 
-func (f AggregateFactory) New(kind string) (eventsourcing.Typer, error) {
+type AggregateFactory struct{}
+
+func (f AggregateFactory) NewAggregate(kind eventsourcing.AggregateType) (eventsourcing.Aggregater, error) {
 	switch kind {
 	case "Account":
 		return NewAccount(), nil
 	default:
-		evt, err := f.EventFactory.New(kind)
-		if err != nil {
-			return nil, err
-		}
-		return evt, nil
+		return nil, faults.Errorf("unknown aggregate type: %s", kind)
 	}
 }
 
 type EventFactory struct{}
 
-func (EventFactory) New(kind string) (eventsourcing.Typer, error) {
+func (EventFactory) NewEvent(kind eventsourcing.EventKind) (eventsourcing.Typer, error) {
 	var e eventsourcing.Typer
 	switch kind {
 	case "AccountCreated":

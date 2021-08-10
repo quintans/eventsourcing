@@ -36,7 +36,7 @@ func TestPgListener(t *testing.T) {
 
 	errCh := feeding(ctx, dbConfig, repository, s)
 
-	es := eventsourcing.NewEventStore(repository, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(repository, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)

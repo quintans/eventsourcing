@@ -57,7 +57,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -138,7 +138,7 @@ func TestPollListener(t *testing.T) {
 	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -200,7 +200,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -257,7 +257,7 @@ func TestListenerWithLabels(t *testing.T) {
 	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -315,7 +315,7 @@ func TestForget(t *testing.T) {
 	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.AggregateFactory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
 	id := uuid.New()
 	acc := test.CreateAccount("Paulo", id, 100)
