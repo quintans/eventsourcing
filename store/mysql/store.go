@@ -114,7 +114,8 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	err := r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
 		entropy := eventid.EntropyFactory(eRec.CreatedAt)
 		for _, e := range eRec.Details {
-			id, err := eventid.New(eRec.CreatedAt, entropy)
+			var err error
+			id, err = eventid.New(eRec.CreatedAt, entropy)
 			if err != nil {
 				return faults.Wrap(err)
 			}

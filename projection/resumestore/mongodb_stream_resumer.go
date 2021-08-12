@@ -51,8 +51,8 @@ func (m MongoDBStreamResumer) SetStreamResumeToken(ctx context.Context, key stri
 	_, err := m.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": key},
-		bson.D{
-			{"$set", bson.D{{"token", token}}},
+		bson.M{
+			"$set": bson.M{"token": token},
 		},
 		opts,
 	)

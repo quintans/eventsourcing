@@ -36,7 +36,7 @@ type Event struct {
 	IdempotencyKey   string                      `bson:"idempotency_key,omitempty"`
 	Metadata         bson.M                      `bson:"metadata,omitempty"`
 	CreatedAt        time.Time                   `bson:"created_at,omitempty"`
-	Migrated         uint32                      `bson:"migrated,omitempty"`
+	Migrated         int                         `bson:"migrated"`
 }
 
 type Snapshot struct {
@@ -321,8 +321,8 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 		filter := bson.D{
 			{"_id", evt.ID},
 		}
-		update := bson.D{
-			{"$set", bson.E{"body", body}},
+		update := bson.M{
+			"$set": bson.M{"body": body},
 		}
 		_, err = r.eventsCollection().UpdateOne(ctx, filter, update)
 		if err != nil {
@@ -668,9 +668,10 @@ func (r *EsRepository) saveMigration(
 			{"aggregate_id", last.AggregateID},
 			{"migrated", 0},
 		}
-		update := bson.D{
-			{"$set", bson.E{"migrated", revision}},
+		update := bson.M{
+			"$set": bson.M{"migrated": revision},
 		}
+
 		_, err = r.eventsCollection().UpdateMany(mCtx, filter, update)
 		if err != nil {
 			return faults.Errorf("failed to invalidate events: %w", err)

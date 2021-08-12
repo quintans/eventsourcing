@@ -21,10 +21,6 @@ import (
 	"github.com/quintans/eventsourcing/test"
 )
 
-const (
-	aggregateType eventsourcing.AggregateType = "Account"
-)
-
 var logger = log.NewLogrus(logrus.StandardLogger())
 
 func connect(dbConfig DBConfig) (*sqlx.DB, error) {
@@ -81,7 +77,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "MoneyDeposited", evts[2].Kind.String())
 	assert.Equal(t, "MoneyDeposited", evts[3].Kind.String())
 	assert.Equal(t, "idempotency-key", string(evts[3].IdempotencyKey))
-	assert.Equal(t, aggregateType, evts[0].AggregateType)
+	assert.Equal(t, test.TypeAccount, evts[0].AggregateType)
 	assert.Equal(t, id.String(), evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
 
@@ -188,7 +184,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	repository, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithAggregateTypes(aggregateType))
+	p := poller.New(logger, repository, poller.WithAggregateTypes(test.TypeAccount))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {

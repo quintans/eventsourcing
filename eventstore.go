@@ -443,14 +443,10 @@ func (es EventStore) MigrateInPlaceCopyReplace(
 		1,
 		3,
 		func() (Aggregater, error) {
-			a, err := es.factory.New(string(aggregateType))
-			if err != nil {
-				return nil, faults.Wrap(err)
-			}
-			return a.(Aggregater), nil
+			return es.factory.NewAggregate(aggregateType)
 		},
 		es.ApplyChangeFromHistory,
-		es.codec, //
+		es.codec,
 		handler,
 		aggregateType,
 		eventTypeCriteria...)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -377,7 +376,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 	})
 }
 
-func TestMigrationSimple(t *testing.T) {
+func TestMigration(t *testing.T) {
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -411,10 +410,10 @@ func TestMigrationSimple(t *testing.T) {
 			for _, e := range events {
 				var err error
 				switch e.Kind {
-				case "AccountCreated":
-					m, err = migrateAccountCreated(e, codec)
-				case "OwnerUpdated":
-					m, err = migrateOwnerUpdated(e, codec)
+				case test.KindAccountCreated:
+					m, err = test.MigrateAccountCreated(e, codec)
+				case test.KindOwnerUpdated:
+					m, err = test.MigrateOwnerUpdated(e, codec)
 				default:
 					m = eventsourcing.DefaultEventMigration(e)
 				}
@@ -425,9 +424,8 @@ func TestMigrationSimple(t *testing.T) {
 			}
 			return migration, nil
 		},
-		"Account",
-		"AccountCreated",
-		"OwnerUpdated",
+		test.TypeAccount,
+		test.KindAccountCreated, test.KindOwnerUpdated,
 	)
 	require.NoError(t, err)
 
@@ -494,66 +492,4 @@ func TestMigrationSimple(t *testing.T) {
 	assert.Equal(t, uint32(9), acc2.GetVersion())
 	assert.Equal(t, "Paulo", acc2.FirstName)
 	assert.Equal(t, "Quintans Pereira", acc2.LastName)
-}
-
-func migrateAccountCreated(e *eventsourcing.Event, codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
-	oldEvent := test.AccountCreated{}
-	err := codec.Decode(e.Body, &oldEvent)
-	if err != nil {
-		return nil, err
-	}
-	first, last := splitName(oldEvent.Owner)
-	newEvent := test.AccountCreatedV2{
-		ID:        oldEvent.ID,
-		Money:     oldEvent.Money,
-		FirstName: first,
-		LastName:  last,
-	}
-	body, err := codec.Encode(newEvent)
-	if err != nil {
-		return nil, err
-	}
-
-	m := eventsourcing.DefaultEventMigration(e)
-	m.Kind = "AccountCreated_V2"
-	m.Body = body
-
-	return m, nil
-}
-
-func migrateOwnerUpdated(e *eventsourcing.Event, codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
-	oldEvent := test.OwnerUpdated{}
-	err := codec.Decode(e.Body, &oldEvent)
-	if err != nil {
-		return nil, err
-	}
-	first, last := splitName(oldEvent.Owner)
-	newEvent := test.OwnerUpdatedV2{
-		FirstName: first,
-		LastName:  last,
-	}
-	body, err := codec.Encode(newEvent)
-	if err != nil {
-		return nil, err
-	}
-
-	m := eventsourcing.DefaultEventMigration(e)
-	m.Kind = "OwnerUpdated_V2"
-	m.Body = body
-
-	return m, nil
-}
-
-func splitName(name string) (string, string) {
-	name = strings.TrimSpace(name)
-	names := strings.Split(name, " ")
-	half := len(names) / 2
-	var first, last string
-	if half > 0 {
-		first = strings.Join(names[:half], " ")
-		last = strings.Join(names[half:], " ")
-	} else {
-		first = names[0]
-	}
-	return first, last
 }

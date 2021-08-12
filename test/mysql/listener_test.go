@@ -101,7 +101,7 @@ func TestListener(t *testing.T) {
 			err = es.Save(ctx, acc)
 			require.NoError(t, err)
 
-			time.Sleep(time.Second)
+			time.Sleep(5 * time.Second)
 			events := s.GetEvents()
 			require.Equal(t, 3, len(events), "event size")
 			assert.Equal(t, "AccountCreated", events[0].Kind.String())

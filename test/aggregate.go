@@ -7,6 +7,14 @@ import (
 	"github.com/quintans/eventsourcing"
 )
 
+var (
+	TypeAccount        = eventsourcing.AggregateType("Account")
+	KindAccountCreated = eventsourcing.EventKind("AccountCreated")
+	KindMoneyDeposited = eventsourcing.EventKind("MoneyDeposited")
+	KindMoneyWithdrawn = eventsourcing.EventKind("MoneyWithdrawn")
+	KindOwnerUpdated   = eventsourcing.EventKind("OwnerUpdated")
+)
+
 type Status string
 
 const (
@@ -56,12 +64,12 @@ type Factory struct {
 
 type AggregateFactory struct{}
 
-func (f AggregateFactory) NewAggregate(kind eventsourcing.AggregateType) (eventsourcing.Aggregater, error) {
-	switch kind {
-	case "Account":
+func (f AggregateFactory) NewAggregate(typ eventsourcing.AggregateType) (eventsourcing.Aggregater, error) {
+	switch typ {
+	case TypeAccount:
 		return NewAccount(), nil
 	default:
-		return nil, faults.Errorf("unknown aggregate type: %s", kind)
+		return nil, faults.Errorf("unknown aggregate type: %s", typ)
 	}
 }
 
@@ -70,13 +78,13 @@ type EventFactory struct{}
 func (EventFactory) NewEvent(kind eventsourcing.EventKind) (eventsourcing.Typer, error) {
 	var e eventsourcing.Typer
 	switch kind {
-	case "AccountCreated":
+	case KindAccountCreated:
 		e = &AccountCreated{}
-	case "MoneyDeposited":
+	case KindMoneyDeposited:
 		e = &MoneyDeposited{}
-	case "MoneyWithdrawn":
+	case KindMoneyWithdrawn:
 		e = &MoneyWithdrawn{}
-	case "OwnerUpdated":
+	case KindOwnerUpdated:
 		e = &OwnerUpdated{}
 	}
 	if e == nil {
@@ -116,7 +124,7 @@ func (a Account) GetID() string {
 }
 
 func (a Account) GetType() string {
-	return "Account"
+	return TypeAccount.String()
 }
 
 func (a *Account) Withdraw(money int64) bool {
