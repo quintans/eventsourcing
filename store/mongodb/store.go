@@ -515,18 +515,18 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 	return events, lastEventID, nil
 }
 
-func toEventsourcingEvent(doc Event, id eventid.EventID) eventsourcing.Event {
+func toEventsourcingEvent(e Event, id eventid.EventID) eventsourcing.Event {
 	return eventsourcing.Event{
 		ID:               id,
-		AggregateID:      doc.AggregateID,
-		AggregateIDHash:  doc.AggregateIDHash,
-		AggregateVersion: doc.AggregateVersion,
-		AggregateType:    doc.AggregateType,
-		IdempotencyKey:   doc.IdempotencyKey,
-		Kind:             doc.Kind,
-		Body:             doc.Body,
-		Metadata:         encoding.JsonOfMap(doc.Metadata),
-		CreatedAt:        doc.CreatedAt,
+		AggregateID:      e.AggregateID,
+		AggregateIDHash:  e.AggregateIDHash,
+		AggregateVersion: e.AggregateVersion,
+		AggregateType:    e.AggregateType,
+		IdempotencyKey:   e.IdempotencyKey,
+		Kind:             e.Kind,
+		Body:             e.Body,
+		Metadata:         encoding.JsonOfMap(e.Metadata),
+		CreatedAt:        e.CreatedAt,
 	}
 }
 
