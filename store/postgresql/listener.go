@@ -31,7 +31,7 @@ type FeedEvent struct {
 	Kind             eventsourcing.EventKind     `json:"kind,omitempty"`
 	Body             encoding.Json               `json:"body,omitempty"`
 	IdempotencyKey   string                      `json:"idempotency_key,omitempty"`
-	Metadata         encoding.Json               `json:"metadata,omitempty"`
+	Metadata         *encoding.Json              `json:"metadata,omitempty"`
 	CreatedAt        PgTime                      `json:"created_at,omitempty"`
 }
 
@@ -236,6 +236,11 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 			continue
 		}
 
+		body, err := pgEvent.Body.AsBytes()
+		if err != nil {
+			return eventid.Zero, err
+		}
+
 		event := eventsourcing.Event{
 			ID:               pgEvent.ID,
 			ResumeToken:      []byte(pgEvent.ID.String()),
@@ -244,7 +249,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 			AggregateVersion: pgEvent.AggregateVersion,
 			AggregateType:    pgEvent.AggregateType,
 			Kind:             pgEvent.Kind,
-			Body:             []byte(pgEvent.Body),
+			Body:             body,
 			IdempotencyKey:   pgEvent.IdempotencyKey,
 			Metadata:         pgEvent.Metadata,
 			CreatedAt:        time.Time(pgEvent.CreatedAt),

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/store/poller"
@@ -211,7 +209,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
 
-func TestListenerWithLabels(t *testing.T) {
+func TestListenerWithMetadata(t *testing.T) {
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -294,7 +292,7 @@ func TestForget(t *testing.T) {
 
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
-	evts := []encoding.Json{}
+	evts := [][]byte{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -305,7 +303,7 @@ func TestForget(t *testing.T) {
 		assert.NotEmpty(t, ou.Owner)
 	}
 
-	bodies := []encoding.Json{}
+	bodies := [][]byte{}
 	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
@@ -335,7 +333,7 @@ func TestForget(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	evts = []encoding.Json{}
+	evts = [][]byte{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -346,7 +344,7 @@ func TestForget(t *testing.T) {
 		assert.Empty(t, ou.Owner)
 	}
 
-	bodies = []encoding.Json{}
+	bodies = [][]byte{}
 	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
@@ -378,7 +376,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 	})
 }
 
-func TestMigrationSimple(t *testing.T) {
+func TestMigration(t *testing.T) {
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -401,28 +399,23 @@ func TestMigrationSimple(t *testing.T) {
 
 	// switching the aggregator factory
 	es = eventsourcing.NewEventStore(r, test.FactoryV2{}, eventsourcing.WithSnapshotThreshold(3))
-	err = r.Migrate(ctx,
+	err = es.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
-		func() eventsourcing.Aggregater {
-			return test.NewAccountV2()
-		},
-		es.ApplyChangeFromHistory,
-		eventsourcing.JSONCodec{},
-		func(events []*postgresql.Event) ([]*postgresql.EventMigration, error) {
-			var migration []*postgresql.EventMigration
-			var m *postgresql.EventMigration
+		func(events []*eventsourcing.Event) ([]*eventsourcing.EventMigration, error) {
+			var migration []*eventsourcing.EventMigration
+			var m *eventsourcing.EventMigration
 			// default codec used by the event store
 			codec := eventsourcing.JSONCodec{}
 			for _, e := range events {
 				var err error
 				switch e.Kind {
-				case "AccountCreated":
-					m, err = migrateAccountCreated(e, codec)
-				case "OwnerUpdated":
-					m, err = migrateOwnerUpdated(e, codec)
+				case test.KindAccountCreated:
+					m, err = test.MigrateAccountCreated(e, codec)
+				case test.KindOwnerUpdated:
+					m, err = test.MigrateOwnerUpdated(e, codec)
 				default:
-					m = postgresql.DefaultEventMigration(e)
+					m = eventsourcing.DefaultEventMigration(e)
 				}
 				if err != nil {
 					return nil, err
@@ -431,9 +424,8 @@ func TestMigrationSimple(t *testing.T) {
 			}
 			return migration, nil
 		},
-		"Account",
-		"AccountCreated",
-		"OwnerUpdated",
+		test.TypeAccount,
+		test.KindAccountCreated, test.KindOwnerUpdated,
 	)
 	require.NoError(t, err)
 
@@ -500,66 +492,4 @@ func TestMigrationSimple(t *testing.T) {
 	assert.Equal(t, uint32(9), acc2.GetVersion())
 	assert.Equal(t, "Paulo", acc2.FirstName)
 	assert.Equal(t, "Quintans Pereira", acc2.LastName)
-}
-
-func migrateAccountCreated(e *postgresql.Event, codec eventsourcing.Codec) (*postgresql.EventMigration, error) {
-	oldEvent := test.AccountCreated{}
-	err := codec.Decode(e.Body, &oldEvent)
-	if err != nil {
-		return nil, err
-	}
-	first, last := splitName(oldEvent.Owner)
-	newEvent := test.AccountCreatedV2{
-		ID:        oldEvent.ID,
-		Money:     oldEvent.Money,
-		FirstName: first,
-		LastName:  last,
-	}
-	body, err := codec.Encode(newEvent)
-	if err != nil {
-		return nil, err
-	}
-
-	m := postgresql.DefaultEventMigration(e)
-	m.Kind = "AccountCreated_V2"
-	m.Body = body
-
-	return m, nil
-}
-
-func migrateOwnerUpdated(e *postgresql.Event, codec eventsourcing.Codec) (*postgresql.EventMigration, error) {
-	oldEvent := test.OwnerUpdated{}
-	err := codec.Decode(e.Body, &oldEvent)
-	if err != nil {
-		return nil, err
-	}
-	first, last := splitName(oldEvent.Owner)
-	newEvent := test.OwnerUpdatedV2{
-		FirstName: first,
-		LastName:  last,
-	}
-	body, err := codec.Encode(newEvent)
-	if err != nil {
-		return nil, err
-	}
-
-	m := postgresql.DefaultEventMigration(e)
-	m.Kind = "OwnerUpdated_V2"
-	m.Body = body
-
-	return m, nil
-}
-
-func splitName(name string) (string, string) {
-	name = strings.TrimSpace(name)
-	names := strings.Split(name, " ")
-	half := len(names) / 2
-	var first, last string
-	if half > 0 {
-		first = strings.Join(names[:half], " ")
-		last = strings.Join(names[half:], " ")
-	} else {
-		first = names[0]
-	}
-	return first, last
 }

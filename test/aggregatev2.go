@@ -1,6 +1,8 @@
 package test
 
 import (
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/quintans/faults"
 
@@ -8,7 +10,12 @@ import (
 )
 
 // This represent the new software version after a migration
-// Using the suffix V2 should only be used by the migrate events. Here we use everywhere to be easy to test.
+// Using the suffix V2 should only be used by the migrate events. Here we use everywhere to be easy to
+
+var (
+	KindAccountCreatedV2 = eventsourcing.EventKind("AccountCreated_V2")
+	KindOwnerUpdatedV2   = eventsourcing.EventKind("OwnerUpdated_V2")
+)
 
 type AccountCreatedV2 struct {
 	ID        uuid.UUID `json:"id,omitempty"`
@@ -37,12 +44,12 @@ type FactoryV2 struct {
 
 type AggregateFactoryV2 struct{}
 
-func (f AggregateFactoryV2) NewAggregate(kind eventsourcing.AggregateType) (eventsourcing.Aggregater, error) {
-	switch kind {
-	case "Account":
+func (f AggregateFactoryV2) NewAggregate(typ eventsourcing.AggregateType) (eventsourcing.Aggregater, error) {
+	switch typ {
+	case TypeAccount:
 		return NewAccountV2(), nil
 	default:
-		return nil, faults.Errorf("unknown aggregate type: %s", kind)
+		return nil, faults.Errorf("unknown aggregate type: %s", typ)
 	}
 }
 
@@ -51,13 +58,13 @@ type EventFactoryV2 struct{}
 func (EventFactoryV2) NewEvent(kind eventsourcing.EventKind) (eventsourcing.Typer, error) {
 	var e eventsourcing.Typer
 	switch kind {
-	case "AccountCreated_V2":
+	case KindAccountCreatedV2:
 		e = &AccountCreatedV2{}
-	case "MoneyDeposited":
+	case KindMoneyDeposited:
 		e = &MoneyDeposited{}
-	case "MoneyWithdrawn":
+	case KindMoneyWithdrawn:
 		e = &MoneyWithdrawn{}
-	case "OwnerUpdated_V2":
+	case KindOwnerUpdatedV2:
 		e = &OwnerUpdatedV2{}
 	}
 	if e == nil {
@@ -151,4 +158,66 @@ func (a *AccountV2) HandleMoneyWithdrawn(event MoneyWithdrawn) {
 func (a *AccountV2) HandleOwnerUpdatedV2(event OwnerUpdatedV2) {
 	a.FirstName = event.FirstName
 	a.LastName = event.LastName
+}
+
+func MigrateAccountCreated(e *eventsourcing.Event, codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
+	oldEvent := AccountCreated{}
+	err := codec.Decode(e.Body, &oldEvent)
+	if err != nil {
+		return nil, err
+	}
+	first, last := SplitName(oldEvent.Owner)
+	newEvent := AccountCreatedV2{
+		ID:        oldEvent.ID,
+		Money:     oldEvent.Money,
+		FirstName: first,
+		LastName:  last,
+	}
+	body, err := codec.Encode(newEvent)
+	if err != nil {
+		return nil, err
+	}
+
+	m := eventsourcing.DefaultEventMigration(e)
+	m.Kind = KindAccountCreatedV2
+	m.Body = body
+
+	return m, nil
+}
+
+func MigrateOwnerUpdated(e *eventsourcing.Event, codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
+	oldEvent := OwnerUpdated{}
+	err := codec.Decode(e.Body, &oldEvent)
+	if err != nil {
+		return nil, err
+	}
+	first, last := SplitName(oldEvent.Owner)
+	newEvent := OwnerUpdatedV2{
+		FirstName: first,
+		LastName:  last,
+	}
+	body, err := codec.Encode(newEvent)
+	if err != nil {
+		return nil, err
+	}
+
+	m := eventsourcing.DefaultEventMigration(e)
+	m.Kind = KindOwnerUpdatedV2
+	m.Body = body
+
+	return m, nil
+}
+
+func SplitName(name string) (string, string) {
+	name = strings.TrimSpace(name)
+	names := strings.Split(name, " ")
+	half := len(names) / 2
+	var first, last string
+	if half > 0 {
+		first = strings.Join(names[:half], " ")
+		last = strings.Join(names[half:], " ")
+	} else {
+		first = names[0]
+	}
+	return first, last
 }

@@ -2,10 +2,10 @@ package mongodb
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
 )
@@ -35,6 +36,7 @@ type Event struct {
 	IdempotencyKey   string                      `bson:"idempotency_key,omitempty"`
 	Metadata         bson.M                      `bson:"metadata,omitempty"`
 	CreatedAt        time.Time                   `bson:"created_at,omitempty"`
+	Migrated         int                         `bson:"migrated"`
 }
 
 type Snapshot struct {
@@ -128,63 +130,31 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	var id eventid.EventID
 	version := eRec.Version
 	idempotencyKey := eRec.IdempotencyKey
-	err := r.withTx(ctx, func(mCtx mongo.SessionContext) (interface{}, error) {
+	err := r.withTx(ctx, func(mCtx mongo.SessionContext) error {
 		for _, e := range eRec.Details {
+			version++
 			var err error
-			id, err = eventid.New(eRec.CreatedAt, entropy)
-			if err != nil {
-				return nil, faults.Wrap(err)
-			}
-
-			version = version + 1
-			doc := Event{
+			id, err = r.saveEvent(mCtx, entropy, Event{
 				ID:               id.String(),
 				AggregateID:      eRec.AggregateID,
+				AggregateIDHash:  common.Hash(eRec.AggregateID),
 				AggregateType:    eRec.AggregateType,
 				Kind:             e.Kind,
 				Body:             e.Body,
 				AggregateVersion: version,
 				IdempotencyKey:   idempotencyKey,
-				Metadata:         eRec.Labels,
+				Metadata:         eRec.Metadata,
 				CreatedAt:        eRec.CreatedAt,
-				AggregateIDHash:  common.Hash(eRec.AggregateID),
+			})
+			if err != nil {
+				return err
 			}
 			// for a batch of events, the idempotency key is only applied on the first record
 			idempotencyKey = ""
 
-			_, err = r.eventsCollection().InsertOne(mCtx, doc)
-			if err != nil {
-				return nil, faults.Wrap(err)
-			}
-
-			if r.projector != nil {
-				var metadata []byte
-				if len(eRec.Labels) > 0 {
-					metadata, err = json.Marshal(eRec.Labels)
-					if err != nil {
-						return nil, faults.Errorf("unable to unmarshal metadata to map: %w", err)
-					}
-				}
-				evt := eventsourcing.Event{
-					ID:               id,
-					AggregateID:      eRec.AggregateID,
-					AggregateIDHash:  doc.AggregateIDHash,
-					AggregateVersion: doc.AggregateVersion,
-					AggregateType:    doc.AggregateType,
-					IdempotencyKey:   doc.IdempotencyKey,
-					Kind:             doc.Kind,
-					Body:             doc.Body,
-					Metadata:         metadata,
-					CreatedAt:        doc.CreatedAt,
-				}
-				err := r.projector(mCtx, evt)
-				if err != nil {
-					return nil, err
-				}
-			}
 		}
 
-		return nil, nil
+		return nil
 	})
 	if err != nil {
 		if isMongoDup(err) {
@@ -194,6 +164,27 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	}
 
 	return id, version, nil
+}
+
+func (r *EsRepository) saveEvent(mCtx mongo.SessionContext, entropy *ulid.MonotonicEntropy, doc Event) (eventid.EventID, error) {
+	id, err := eventid.New(doc.CreatedAt, entropy)
+	if err != nil {
+		return eventid.Zero, faults.Wrap(err)
+	}
+	doc.ID = id.String()
+	_, err = r.eventsCollection().InsertOne(mCtx, doc)
+	if err != nil {
+		return eventid.Zero, faults.Wrap(err)
+	}
+
+	if r.projector != nil {
+		evt := toEventsourcingEvent(doc, id)
+		err := r.projector(mCtx, evt)
+		if err != nil {
+			return eventid.Zero, err
+		}
+	}
+	return id, nil
 }
 
 func isMongoDup(err error) bool {
@@ -208,14 +199,18 @@ func isMongoDup(err error) bool {
 	return false
 }
 
-func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionContext) (interface{}, error)) (err error) {
+func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionContext) error) (err error) {
 	session, err := r.client.StartSession()
 	if err != nil {
 		return faults.Wrap(err)
 	}
 	defer session.EndSession(ctx)
 
-	_, err = session.WithTransaction(ctx, callback)
+	fn := func(sessCtx mongo.SessionContext) (interface{}, error) {
+		err := callback(sessCtx)
+		return nil, err
+	}
+	_, err = session.WithTransaction(ctx, fn)
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -248,15 +243,18 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 }
 
 func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.Snapshot) error {
-	snap := Snapshot{
+	return r.saveSnapshot(ctx, Snapshot{
 		ID:               snapshot.ID.String(),
 		AggregateID:      snapshot.AggregateID,
 		AggregateVersion: snapshot.AggregateVersion,
 		AggregateType:    snapshot.AggregateType,
 		Body:             snapshot.Body,
 		CreatedAt:        snapshot.CreatedAt,
-	}
-	_, err := r.snapshotCollection().InsertOne(ctx, snap)
+	})
+}
+
+func (r *EsRepository) saveSnapshot(ctx context.Context, snapshot Snapshot) error {
+	_, err := r.snapshotCollection().InsertOne(ctx, snapshot)
 
 	return faults.Wrap(err)
 }
@@ -264,6 +262,7 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.
 func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventsourcing.Event, error) {
 	filter := bson.D{
 		{"aggregate_id", bson.D{{"$eq", aggregateID}}},
+		{"migrated", bson.D{{"$eq", 0}}},
 	}
 	if snapVersion > -1 {
 		filter = append(filter, bson.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
@@ -281,7 +280,10 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 }
 
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
-	filter := bson.D{{"idempotency_key", idempotencyKey}}
+	filter := bson.D{
+		{"idempotency_key", idempotencyKey},
+		{"migrated", bson.D{{"$eq", 0}}},
+	}
 	opts := options.FindOne().SetProjection(bson.D{{"_id", 1}})
 	evt := Event{}
 	if err := r.eventsCollection().FindOne(ctx, filter, opts).Decode(&evt); err != nil {
@@ -319,8 +321,8 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 		filter := bson.D{
 			{"_id", evt.ID},
 		}
-		update := bson.D{
-			{"$set", bson.E{"body", body}},
+		update := bson.M{
+			"$set": bson.M{"body": body},
 		}
 		_, err = r.eventsCollection().UpdateOne(ctx, filter, update)
 		if err != nil {
@@ -503,31 +505,244 @@ func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *opt
 	events := []eventsourcing.Event{}
 	var lastEventID eventid.EventID
 	for _, evt := range evts {
-		var metadata []byte
-		if len(evt.Metadata) > 0 {
-			metadata, err = json.Marshal(evt.Metadata)
-			if err != nil {
-				return nil, eventid.Zero, faults.Errorf("unable to unmarshal metadata to map: %w", err)
-			}
-		}
-
 		lastEventID, err = eventid.Parse(evt.ID)
 		if err != nil {
 			return nil, eventid.Zero, faults.Errorf("unable to parse message ID '%s': %w", evt.ID, err)
 		}
-		events = append(events, eventsourcing.Event{
-			ID:               lastEventID,
-			AggregateID:      evt.AggregateID,
-			AggregateIDHash:  evt.AggregateIDHash,
-			AggregateVersion: evt.AggregateVersion,
-			AggregateType:    evt.AggregateType,
-			Kind:             evt.Kind,
-			Body:             evt.Body,
-			IdempotencyKey:   evt.IdempotencyKey,
-			Metadata:         metadata,
-			CreatedAt:        evt.CreatedAt,
-		})
+		events = append(events, toEventsourcingEvent(evt, lastEventID))
 	}
 
 	return events, lastEventID, nil
+}
+
+func toEventsourcingEvent(doc Event, id eventid.EventID) eventsourcing.Event {
+	return eventsourcing.Event{
+		ID:               id,
+		AggregateID:      doc.AggregateID,
+		AggregateIDHash:  doc.AggregateIDHash,
+		AggregateVersion: doc.AggregateVersion,
+		AggregateType:    doc.AggregateType,
+		IdempotencyKey:   doc.IdempotencyKey,
+		Kind:             doc.Kind,
+		Body:             doc.Body,
+		Metadata:         encoding.JsonOfMap(doc.Metadata),
+		CreatedAt:        doc.CreatedAt,
+	}
+}
+
+func (r *EsRepository) MigrateInPlaceCopyReplace(
+	ctx context.Context,
+	revision int,
+	snapshotThreshold uint32,
+	aggregateFactory func() (eventsourcing.Aggregater, error), // called only if snapshot threshold is reached
+	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error, // called only if snapshot threshold is reached
+	encoder eventsourcing.Encoder,
+	handler eventsourcing.MigrationHandler,
+	aggregateType eventsourcing.AggregateType,
+	eventTypeCriteria ...eventsourcing.EventKind,
+) error {
+	if revision < 1 {
+		return faults.New("revision must be greater than zero")
+	}
+	if snapshotThreshold > 0 && (aggregateFactory == nil || rehydrateFunc == nil || encoder == nil) {
+		return faults.New("if snapshot threshold is greather than zero then aggregate factory, rehydrate function and encoder must be defined.")
+	}
+
+	// loops until it exhausts all streams with the event that we want to migrate
+	for {
+		events, err := r.eventsForMigration(ctx, aggregateType, eventTypeCriteria)
+		if err != nil {
+			return err
+		}
+		// no more streams
+		if len(events) == 0 {
+			return nil
+		}
+
+		migration, err := handler(events)
+		if err != nil {
+			return err
+		}
+
+		last := events[len(events)-1]
+		err = r.saveMigration(ctx, last, migration, snapshotThreshold, aggregateFactory, rehydrateFunc, encoder, revision)
+		if !errors.Is(err, eventsourcing.ErrConcurrentModification) {
+			return err
+		}
+	}
+}
+
+func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eventsourcing.AggregateType, eventTypeCriteria []eventsourcing.EventKind) ([]*eventsourcing.Event, error) {
+	if aggregateType == "" {
+		return nil, faults.New("aggregate type needs to be specified")
+	}
+	if len(eventTypeCriteria) == 0 {
+		return nil, faults.New("event type criteria needs to be specified")
+	}
+
+	// find an aggregate ID to migrate
+	filter := bson.D{
+		{"aggregate_type", bson.D{{"$eq", aggregateType}}},
+		{"migrated", bson.D{{"$eq", 0}}},
+		{"kind", bson.D{{"$in", eventTypeCriteria}}},
+	}
+
+	oneOpts := options.FindOne().
+		SetSort(bson.D{{"_id", 1}}).
+		SetProjection(bson.D{
+			{"aggregate_id", 1},
+			{"_id", 0},
+		})
+
+	event := Event{}
+	if err := r.eventsCollection().FindOne(ctx, filter, oneOpts).Decode(&event); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, faults.Errorf("failed to find aggregate for migration: %w", err)
+	}
+
+	// get all events for the aggregate id returned by the subquery
+	filter = bson.D{
+		{"aggregate_id", bson.D{{"$eq", event.AggregateID}}},
+		{"migrated", bson.D{{"$eq", 0}}},
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{"aggregate_version", 1}})
+
+	events := []*Event{}
+	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, faults.Errorf("failed to find events for migration: %w", err)
+	}
+	if err = cursor.All(ctx, &events); err != nil {
+		return nil, faults.Wrap(err)
+	}
+
+	evts := make([]*eventsourcing.Event, len(events))
+	for k, v := range events {
+		id, err := eventid.Parse(v.ID)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		e := toEventsourcingEvent(*v, id)
+		evts[k] = &e
+	}
+	return evts, nil
+}
+
+func (r *EsRepository) saveMigration(
+	ctx context.Context,
+	last *eventsourcing.Event,
+	migration []*eventsourcing.EventMigration,
+	snapshotThreshold uint32,
+	aggregateFactory func() (eventsourcing.Aggregater, error),
+	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error,
+	encoder eventsourcing.Encoder,
+	revision int,
+) error {
+	version := last.AggregateVersion
+	entropy := eventid.EntropyFactory(time.Now().UTC())
+
+	return r.withTx(ctx, func(mCtx mongo.SessionContext) error {
+		// invalidate event
+		version++
+		_, err := r.saveEvent(mCtx, entropy, Event{
+			AggregateID:      last.AggregateID,
+			AggregateIDHash:  last.AggregateIDHash,
+			AggregateVersion: version,
+			AggregateType:    last.AggregateType,
+			Kind:             eventsourcing.InvalidatedKind,
+			CreatedAt:        time.Now().UTC(),
+		})
+		if err != nil {
+			return err
+		}
+
+		// invalidate all active events
+		filter := bson.D{
+			{"aggregate_id", last.AggregateID},
+			{"migrated", 0},
+		}
+		update := bson.M{
+			"$set": bson.M{"migrated": revision},
+		}
+
+		_, err = r.eventsCollection().UpdateMany(mCtx, filter, update)
+		if err != nil {
+			return faults.Errorf("failed to invalidate events: %w", err)
+		}
+
+		// delete snapshots
+		_, err = r.snapshotCollection().DeleteMany(mCtx, bson.D{
+			{"aggregate_id", last.AggregateID},
+		})
+		if err != nil {
+			return faults.Errorf("failed to delete stale snapshots: %w", err)
+		}
+
+		var aggregate eventsourcing.Aggregater
+		if snapshotThreshold > 0 && len(migration) >= int(snapshotThreshold) {
+			aggregate, err = aggregateFactory()
+			if err != nil {
+				return faults.Wrap(err)
+			}
+		}
+
+		// insert new events
+		var lastID eventid.EventID
+		for _, mig := range migration {
+			version++
+			metadata, err := mig.Metadata.AsMap()
+			if err != nil {
+				return faults.Wrap(err)
+			}
+			event := Event{
+				AggregateID:      last.AggregateID,
+				AggregateIDHash:  last.AggregateIDHash,
+				AggregateVersion: version,
+				AggregateType:    last.AggregateType,
+				Kind:             mig.Kind,
+				Body:             mig.Body,
+				IdempotencyKey:   mig.IdempotencyKey,
+				Metadata:         metadata,
+				CreatedAt:        time.Now().UTC(),
+			}
+			lastID, err = r.saveEvent(mCtx, entropy, event)
+			if err != nil {
+				return err
+			}
+			if aggregate != nil {
+				err = rehydrateFunc(aggregate, toEventsourcingEvent(event, lastID))
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		if aggregate != nil {
+			body, err := encoder.Encode(aggregate)
+			if err != nil {
+				return faults.Errorf("failed to encode aggregate on migration: %w", err)
+			}
+
+			err = r.saveSnapshot(mCtx, Snapshot{
+				ID:               lastID.String(),
+				AggregateID:      aggregate.GetID(),
+				AggregateVersion: aggregate.GetVersion(),
+				AggregateType:    eventsourcing.AggregateType(aggregate.GetType()),
+				Body:             body,
+				CreatedAt:        time.Now().UTC(),
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
 }

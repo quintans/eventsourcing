@@ -18,6 +18,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
@@ -277,12 +278,9 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			AggregateType:    eventsourcing.AggregateType(aggregateType),
 			Kind:             eventsourcing.EventKind(kind),
 			Body:             body,
+			Metadata:         encoding.JsonOfString(metadata),
 			IdempotencyKey:   idempotencyKey,
 			CreatedAt:        createdAt,
-		}
-
-		if metadata != "" {
-			e.Metadata = []byte(metadata)
 		}
 
 		return &e, nil

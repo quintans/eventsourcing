@@ -14,16 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/store/poller"
 	"github.com/quintans/eventsourcing/test"
-)
-
-const (
-	aggregateType eventsourcing.AggregateType = "Account"
 )
 
 var logger = log.NewLogrus(logrus.StandardLogger())
@@ -82,7 +77,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "MoneyDeposited", evts[2].Kind.String())
 	assert.Equal(t, "MoneyDeposited", evts[3].Kind.String())
 	assert.Equal(t, "idempotency-key", string(evts[3].IdempotencyKey))
-	assert.Equal(t, aggregateType, evts[0].AggregateType)
+	assert.Equal(t, test.TypeAccount, evts[0].AggregateType)
 	assert.Equal(t, id.String(), evts[0].AggregateID)
 	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
 
@@ -189,7 +184,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	repository, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithAggregateTypes(aggregateType))
+	p := poller.New(logger, repository, poller.WithAggregateTypes(test.TypeAccount))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
@@ -306,7 +301,7 @@ func TestForget(t *testing.T) {
 
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
-	evts := []encoding.Json{}
+	evts := [][]byte{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -317,7 +312,7 @@ func TestForget(t *testing.T) {
 		assert.NotEmpty(t, ou.Owner)
 	}
 
-	bodies := []encoding.Json{}
+	bodies := [][]byte{}
 	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
@@ -347,7 +342,7 @@ func TestForget(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	evts = []encoding.Json{}
+	evts = [][]byte{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
@@ -358,7 +353,7 @@ func TestForget(t *testing.T) {
 		assert.Empty(t, ou.Owner)
 	}
 
-	bodies = []encoding.Json{}
+	bodies = [][]byte{}
 	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))

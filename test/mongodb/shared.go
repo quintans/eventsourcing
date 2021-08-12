@@ -111,6 +111,24 @@ func dbSchema(cli *mongo.Client) error {
 				{
 					{"key", bson.D{
 						{"aggregate_id", 1},
+						{"migrated", 1},
+					}},
+					{"name", "evt_agg_id_migrated_idx"},
+					{"unique", false},
+					{"background", true},
+				},
+				{
+					{"key", bson.D{
+						{"aggregate_type", 1},
+						{"migrated", 1},
+					}},
+					{"name", "evt_type_migrated_idx"},
+					{"unique", false},
+					{"background", true},
+				},
+				{
+					{"key", bson.D{
+						{"aggregate_id", 1},
 						{"aggregate_version", 1},
 					}},
 					{"name", "unique_aggregate_version"},
@@ -120,6 +138,7 @@ func dbSchema(cli *mongo.Client) error {
 				{
 					{"key", bson.D{
 						{"idempotency_key", 1},
+						{"migrated", 1},
 					}},
 					{"name", "idx_idempotency"},
 					{"unique", true},

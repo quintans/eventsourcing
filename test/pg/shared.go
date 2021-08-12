@@ -110,7 +110,6 @@ func dbSchema(dbConfig DBConfig) error {
 		migrated INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migrated);
-	CREATE INDEX evt_id_migrated_idx ON events (id, migrated);
 	CREATE INDEX evt_type_migrated_idx ON events (aggregate_type, migrated);
 	CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);
 	CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migrated);

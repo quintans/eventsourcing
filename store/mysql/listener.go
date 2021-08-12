@@ -20,6 +20,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
@@ -265,7 +266,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 			Kind:             eventsourcing.EventKind(r.getAsString("kind")),
 			Body:             r.getStringAsBytes("body"),
 			IdempotencyKey:   r.getAsString("idempotency_key"),
-			Metadata:         r.getAsBytes("metadata"),
+			Metadata:         encoding.JsonOfBytes(r.getAsBytes("metadata")),
 			CreatedAt:        r.getAsTimeDate("created_at"),
 		})
 	}
