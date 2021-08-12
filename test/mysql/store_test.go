@@ -18,6 +18,7 @@ import (
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/store/poller"
+	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
 )
 
@@ -364,4 +365,122 @@ func TestForget(t *testing.T) {
 		assert.Empty(t, a.Owner)
 		assert.NotEmpty(t, a.ID)
 	}
+}
+
+func TestMigration(t *testing.T) {
+	dbConfig, tearDown, err := setup()
+	require.NoError(t, err)
+	defer tearDown()
+
+	ctx := context.Background()
+	r, err := mysql.NewStore(dbConfig.Url())
+	require.NoError(t, err)
+	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
+
+	id := uuid.MustParse("cd67a139-521f-479e-ad94-431e4b23226f")
+	acc := test.CreateAccount("Paulo Pereira", id, 100)
+	acc.Deposit(20)
+	acc.Withdraw(15)
+	acc.UpdateOwner("Paulo Quintans Pereira")
+	err = es.Save(ctx, acc)
+	require.NoError(t, err)
+
+	// giving time for the snapshots to write
+	time.Sleep(100 * time.Millisecond)
+
+	// switching the aggregator factory
+	es = eventsourcing.NewEventStore(r, test.FactoryV2{}, eventsourcing.WithSnapshotThreshold(3))
+	err = es.MigrateInPlaceCopyReplace(ctx,
+		1,
+		3,
+		func(events []*eventsourcing.Event) ([]*eventsourcing.EventMigration, error) {
+			var migration []*eventsourcing.EventMigration
+			var m *eventsourcing.EventMigration
+			// default codec used by the event store
+			codec := eventsourcing.JSONCodec{}
+			for _, e := range events {
+				var err error
+				switch e.Kind {
+				case test.KindAccountCreated:
+					m, err = test.MigrateAccountCreated(e, codec)
+				case test.KindOwnerUpdated:
+					m, err = test.MigrateOwnerUpdated(e, codec)
+				default:
+					m = eventsourcing.DefaultEventMigration(e)
+				}
+				if err != nil {
+					return nil, err
+				}
+				migration = append(migration, m)
+			}
+			return migration, nil
+		},
+		test.TypeAccount,
+		test.KindAccountCreated, test.KindOwnerUpdated,
+	)
+	require.NoError(t, err)
+
+	db, err := connect(dbConfig)
+	require.NoError(t, err)
+	evts := []postgresql.Event{}
+	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id.String())
+	require.NoError(t, err)
+	require.Equal(t, 9, len(evts))
+
+	evt := evts[0]
+	assert.Equal(t, "AccountCreated", evt.Kind.String())
+	assert.Equal(t, 1, int(evt.AggregateVersion))
+	assert.Equal(t, `{"id":"cd67a139-521f-479e-ad94-431e4b23226f","money":100,"owner":"Paulo Pereira"}`, string(evt.Body))
+	assert.Equal(t, 1, evt.Migrated)
+
+	evt = evts[1]
+	assert.Equal(t, "MoneyDeposited", evt.Kind.String())
+	assert.Equal(t, 2, int(evt.AggregateVersion))
+	assert.Equal(t, 1, evt.Migrated)
+
+	evt = evts[2]
+	assert.Equal(t, "MoneyWithdrawn", evt.Kind.String())
+	assert.Equal(t, 3, int(evt.AggregateVersion))
+	assert.Equal(t, 1, evt.Migrated)
+
+	evt = evts[3]
+	assert.Equal(t, "OwnerUpdated", evt.Kind.String())
+	assert.Equal(t, 4, int(evt.AggregateVersion))
+	assert.Equal(t, `{"owner":"Paulo Quintans Pereira"}`, string(evt.Body))
+	assert.Equal(t, 1, evt.Migrated)
+
+	evt = evts[4]
+	assert.Equal(t, "Invalidated", evt.Kind.String())
+	assert.Equal(t, 5, int(evt.AggregateVersion))
+	assert.Equal(t, 0, len(evt.Body))
+	assert.Equal(t, 1, evt.Migrated)
+
+	evt = evts[5]
+	assert.Equal(t, "AccountCreated_V2", evt.Kind.String())
+	assert.Equal(t, 6, int(evt.AggregateVersion))
+	assert.Equal(t, `{"id":"cd67a139-521f-479e-ad94-431e4b23226f","money":100,"first_name":"Paulo","last_name":"Pereira"}`, string(evt.Body))
+	assert.Equal(t, 0, evt.Migrated)
+
+	evt = evts[6]
+	assert.Equal(t, "MoneyDeposited", evt.Kind.String())
+	assert.Equal(t, 7, int(evt.AggregateVersion))
+	assert.Equal(t, 0, evt.Migrated)
+
+	evt = evts[7]
+	assert.Equal(t, "MoneyWithdrawn", evt.Kind.String())
+	assert.Equal(t, 8, int(evt.AggregateVersion))
+	assert.Equal(t, 0, evt.Migrated)
+
+	evt = evts[8]
+	assert.Equal(t, "OwnerUpdated_V2", evt.Kind.String())
+	assert.Equal(t, 9, int(evt.AggregateVersion))
+	assert.Equal(t, `{"first_name":"Paulo","last_name":"Quintans Pereira"}`, string(evt.Body))
+	assert.Equal(t, 0, evt.Migrated)
+
+	a, err := es.GetByID(ctx, id.String())
+	require.NoError(t, err)
+	acc2 := a.(*test.AccountV2)
+	assert.Equal(t, uint32(9), acc2.GetVersion())
+	assert.Equal(t, "Paulo", acc2.FirstName)
+	assert.Equal(t, "Quintans Pereira", acc2.LastName)
 }

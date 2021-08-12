@@ -101,11 +101,13 @@ func dbSchema(dbURL string) error {
 			body VARBINARY(60000),
 			idempotency_key VARCHAR (50),
 			metadata JSON,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			migrated INTEGER NOT NULL DEFAULT 0
 		)ENGINE=innodb;`,
-		`CREATE UNIQUE INDEX agg_id_ver_idx ON events(aggregate_id, aggregate_version);`,
-		`CREATE UNIQUE INDEX idempot_idx ON events(idempotency_key);`,
-		`CREATE INDEX agg_id_idx ON events(aggregate_id);`,
+		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migrated);`,
+		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_type, migrated);`,
+		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
+		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migrated);`,
 
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,

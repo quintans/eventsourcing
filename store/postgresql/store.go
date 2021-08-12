@@ -448,17 +448,17 @@ func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...in
 	return events, nil
 }
 
-func toEventsourcingEvent(pgEvent Event) eventsourcing.Event {
+func toEventsourcingEvent(e Event) eventsourcing.Event {
 	return eventsourcing.Event{
-		ID:               pgEvent.ID,
-		AggregateID:      pgEvent.AggregateID,
-		AggregateIDHash:  uint32(pgEvent.AggregateIDHash),
-		AggregateVersion: pgEvent.AggregateVersion,
-		AggregateType:    pgEvent.AggregateType,
-		Kind:             pgEvent.Kind,
-		Body:             pgEvent.Body,
-		Metadata:         pgEvent.Metadata,
-		CreatedAt:        pgEvent.CreatedAt,
+		ID:               e.ID,
+		AggregateID:      e.AggregateID,
+		AggregateIDHash:  uint32(e.AggregateIDHash),
+		AggregateVersion: e.AggregateVersion,
+		AggregateType:    e.AggregateType,
+		Kind:             e.Kind,
+		Body:             e.Body,
+		Metadata:         e.Metadata,
+		CreatedAt:        e.CreatedAt,
 	}
 }
 
