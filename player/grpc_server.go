@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/ptypes"
-	_ "github.com/lib/pq"
 	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 
