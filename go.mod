@@ -10,8 +10,8 @@ require (
 	github.com/go-redis/redis/v8 v8.4.0
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/golang-migrate/migrate/v4 v4.11.0
-	github.com/golang/protobuf v1.4.2
-	github.com/google/uuid v1.1.2
+	github.com/golang/protobuf v1.5.2
+	github.com/google/uuid v1.3.0
 	github.com/hashicorp/consul/api v1.8.0
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
 	github.com/jackc/pgconn v1.8.1
@@ -27,11 +27,11 @@ require (
 	github.com/nats-io/stan.go v0.10.0
 	github.com/oklog/ulid/v2 v2.0.2
 	github.com/quintans/faults v1.4.0
-	github.com/sirupsen/logrus v1.4.2
+	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.7.0
-	github.com/testcontainers/testcontainers-go v0.9.0
+	github.com/testcontainers/testcontainers-go v0.12.0
 	go.mongodb.org/mongo-driver v1.7.1
-	google.golang.org/grpc v1.27.1
-	google.golang.org/protobuf v1.25.0
-	gotest.tools v0.0.0-20181223230014-1083505acf35
+	google.golang.org/grpc v1.33.2
+	google.golang.org/protobuf v1.27.1
+	gotest.tools v2.2.0+incompatible
 )
