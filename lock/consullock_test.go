@@ -68,14 +68,13 @@ func TestConsul(t *testing.T) {
 	require.NoError(t, err)
 
 	lock2 := pool2.NewLock(LOCK_KEY, 10*time.Second)
-	done2, err := lock2.Lock(ctx)
-	require.NoError(t, err)
-	require.Nil(t, done2, "Expected to not acquire lock")
+	_, err = lock2.Lock(ctx)
+	require.ErrorIs(t, err, lock.ErrLockAlreadyAcquired)
 
 	err = lock1.Unlock(ctx)
 	require.NoError(t, err)
 
-	done2, err = lock2.Lock(ctx)
+	done2, err := lock2.Lock(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, done2, "Expected to acquire lock")
 

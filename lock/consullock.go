@@ -52,7 +52,7 @@ func (l *ConsulLock) Lock(ctx context.Context) (chan struct{}, error) {
 	defer l.mu.Unlock()
 
 	if l.done != nil {
-		return nil, fmt.Errorf("this lock is already acquire: '%s'", l.lockName)
+		return nil, fmt.Errorf("failed to acquire lock: '%s': %w", l.lockName, ErrLockAlreadyHeld)
 	}
 
 	sEntry := &api.SessionEntry{
@@ -80,7 +80,7 @@ func (l *ConsulLock) Lock(ctx context.Context) (chan struct{}, error) {
 
 	if !acquired {
 		l.client.Session().Destroy(sID, options)
-		return nil, nil
+		return nil, ErrLockAlreadyAcquired
 	}
 
 	// auto renew session
@@ -104,7 +104,7 @@ func (l *ConsulLock) Unlock(ctx context.Context) error {
 	defer l.mu.Unlock()
 
 	if l.done == nil {
-		return nil
+		return ErrLockNotHeld
 	}
 
 	lockEnt := &api.KVPair{

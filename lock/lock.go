@@ -6,9 +6,9 @@ import (
 )
 
 var (
-	ErrLockHeld     = errors.New("lock already held")
-	ErrLockNotHeld  = errors.New("lock not held")
-	ErrLockAcquired = errors.New("lock already acquired by other")
+	ErrLockAlreadyHeld     = errors.New("lock already held")
+	ErrLockNotHeld         = errors.New("lock not held")
+	ErrLockAlreadyAcquired = errors.New("lock already acquired by other")
 )
 
 type Locker interface {
