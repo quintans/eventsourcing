@@ -66,12 +66,9 @@ func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, 
 	})
 
 	logger.Info("Acquiring rebuild projection lock")
-	released, err := r.lock.Lock(ctx)
+	_, err := r.lock.Lock(ctx)
 	if err != nil {
-		return faults.Errorf("Failed to acquire rebuild lock for projection %s: %w", projection, err)
-	}
-	if released == nil {
-		return faults.Errorf("Unable to acquire rebuild lock for projection %s", projection)
+		return faults.Errorf("failed to acquire rebuild lock for projection %s: %w", projection, err)
 	}
 
 	go func() {

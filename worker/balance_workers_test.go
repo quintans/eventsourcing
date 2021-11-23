@@ -143,12 +143,15 @@ func (l *InMemLocker) Lock(context.Context) (<-chan struct{}, error) {
 		return l.done, nil
 	}
 
-	return nil, nil
+	return nil, lock.ErrLockAlreadyHeld
 }
 
 func (l *InMemLocker) Unlock(context.Context) error {
+	_, loaded := l.locks.LoadAndDelete(l.name)
+	if !loaded {
+		return lock.ErrLockNotHeld
+	}
 	close(l.done)
-	l.locks.Delete(l.name)
 	return nil
 }
 

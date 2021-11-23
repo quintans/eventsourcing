@@ -2,6 +2,7 @@ package projection
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/quintans/faults"
@@ -16,6 +17,8 @@ type Canceller interface {
 	Name() string
 	Cancel()
 }
+
+var ErrCancelProjectionTimeout = errors.New("cancel projection timeout")
 
 // Notifier represents the interface that a message queue needs to implement to able to cancel distributed projections execution
 type Notifier interface {

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/stan.go"
 	"github.com/quintans/faults"
@@ -184,6 +185,7 @@ type NatsProjectionSubscriber struct {
 	queue        *nats.Conn
 	managerTopic string
 	messageCodec sink.Codec
+	cancelID     string
 }
 
 func NewNatsProjectionSubscriber(
@@ -208,6 +210,7 @@ func NewNatsProjectionSubscriber(
 		queue:        nc,
 		managerTopic: managerTopic,
 		messageCodec: sink.JsonCodec{},
+		cancelID:     uuid.New().String(),
 	}
 
 	for _, o := range options {
@@ -227,7 +230,7 @@ func (s NatsProjectionSubscriber) ListenCancelProjection(ctx context.Context, ca
 		n := projection.Notification{}
 		err := json.Unmarshal(msg.Data, &n)
 		if err != nil {
-			logger.Errorf("Unable to unmarshal %v", faults.Wrap(err))
+			logger.Errorf("unable to unmarshal: %+v", faults.Wrap(err))
 			return
 		}
 		if n.Projection != canceller.Name() {
@@ -237,6 +240,10 @@ func (s NatsProjectionSubscriber) ListenCancelProjection(ctx context.Context, ca
 		switch n.Action {
 		case projection.Release:
 			canceller.Cancel()
+			err = s.queue.Publish(msg.Reply, []byte(s.cancelID))
+			if err != nil {
+				logger.Errorf("unable to publish reply to '%s': %+v", msg.Reply, faults.Wrap(err))
+			}
 		default:
 			logger.WithTags(log.Tags{"notification": n}).Error("Unknown notification")
 		}
@@ -269,6 +276,8 @@ func (s NatsProjectionSubscriber) CancelProjection(ctx context.Context, projecti
 	if err != nil {
 		return faults.Wrap(err)
 	}
+	defer sub.Unsubscribe()
+
 	err = s.queue.Flush()
 	if err != nil {
 		return faults.Wrap(err)
@@ -280,22 +289,21 @@ func (s NatsProjectionSubscriber) CancelProjection(ctx context.Context, projecti
 		return faults.Wrap(err)
 	}
 
-	// Wait for a single response
+	// Wait for all responses
 	max := time.Second
 	start := time.Now()
-	count := 0
+	replies := map[string]struct{}{}
 	for time.Now().Sub(start) < max {
-		_, err = sub.NextMsg(1 * time.Second)
+		msg, err := sub.NextMsg(1 * time.Second)
 		if err != nil {
-			break
+			return faults.Wrap(err)
 		}
+		replies[string(msg.Data)] = struct{}{}
 
-		count++
-		if count >= listenerCount {
-			break
+		if len(replies) == listenerCount {
+			return nil
 		}
 	}
-	sub.Unsubscribe()
 
-	return nil
+	return projection.ErrCancelProjectionTimeout
 }
