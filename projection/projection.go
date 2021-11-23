@@ -88,7 +88,7 @@ func ProjectionWorkersAndRebuilder(
 ) ([]worker.Worker, *NotifierLockRebuilder) {
 	workers, tokenStreams, unlockWaiter := ProjectionWorkers(
 		logger,
-		"balance",
+		name,
 		lockerFactory,
 		notifier,
 		subscriber,
