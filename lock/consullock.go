@@ -10,6 +10,8 @@ import (
 	"github.com/quintans/faults"
 )
 
+var _ Locker = (*ConsulLock)(nil)
+
 type ConsulLockPool struct {
 	client *api.Client
 }
@@ -47,7 +49,7 @@ type ConsulLock struct {
 	mu       sync.Mutex
 }
 
-func (l *ConsulLock) Lock(ctx context.Context) (chan struct{}, error) {
+func (l *ConsulLock) Lock(ctx context.Context) (<-chan struct{}, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
