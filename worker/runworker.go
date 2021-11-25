@@ -18,7 +18,7 @@ type Tasker interface {
 	Cancel()
 }
 
-// BootMonitor is responsible for refreshing the lease
+// RunWorker is responsible for refreshing the lease
 type RunWorker struct {
 	logger log.Logger
 	name   string
@@ -42,11 +42,10 @@ func (w *RunWorker) Name() string {
 }
 
 func (w *RunWorker) Stop(ctx context.Context) {
-	w.logger.Infof("Stopping worker %s", w.name)
-
 	w.mu.Lock()
 	if w.cancel != nil {
 		w.locker.Unlock(ctx)
+		w.logger.Infof("Stopping worker %s", w.name)
 		w.cancel()
 		w.cancel = nil
 	}
@@ -60,21 +59,22 @@ func (w *RunWorker) IsRunning() bool {
 }
 
 func (w *RunWorker) Start(ctx context.Context) bool {
-	release, _ := w.locker.Lock(ctx)
-	if release != nil {
-		go func() {
-			ctx, cancel := context.WithCancel(ctx)
-			select {
-			case <-release:
-			case <-ctx.Done():
-				w.locker.Unlock(ctx)
-			}
-			cancel()
-		}()
-		go w.start(ctx)
+	release, err := w.locker.Lock(ctx)
+	if err != nil {
+		return false
 	}
+	go func() {
+		ctx, cancel := context.WithCancel(ctx)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			w.locker.Unlock(ctx)
+		}
+		cancel()
+	}()
+	go w.start(ctx)
 
-	return release != nil
+	return true
 }
 
 func (w *RunWorker) start(ctx context.Context) {

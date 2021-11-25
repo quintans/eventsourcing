@@ -5,11 +5,10 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/quintans/faults"
-
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/worker"
 )
 
 // Canceller is the interface for cancelling a running projection
@@ -20,10 +19,13 @@ type Canceller interface {
 
 var ErrCancelProjectionTimeout = errors.New("cancel projection timeout")
 
-// Notifier represents the interface that a message queue needs to implement to able to cancel distributed projections execution
-type Notifier interface {
-	ListenCancelProjection(ctx context.Context, restarter Canceller) error
-	CancelProjection(ctx context.Context, projectionName string, partitions int) error
+// CancelPublisher represents the interface that a message queue needs to implement to able to cancel distributed projections execution
+type CancelPublisher interface {
+	PublishCancel(ctx context.Context, targetName string, members int) error
+}
+
+type CancelListener interface {
+	ListenCancel(ctx context.Context, restarter Canceller) error
 }
 
 type StreamResume struct {
@@ -59,67 +61,56 @@ type StreamResumer interface {
 
 type EventHandlerFunc func(ctx context.Context, e eventsourcing.Event) error
 
-type ProjectionPartition struct {
-	logger      log.Logger
-	handler     EventHandlerFunc
-	restartLock lock.Locker
-	notifier    Notifier
-	resume      StreamResume
-	filter      func(e eventsourcing.Event) bool
-	subscriber  Subscriber
+type StartStopBalancer struct {
+	logger         log.Logger
+	restartLock    lock.Locker
+	cancelListener CancelListener
+	balancer       worker.Balancer
 
 	cancel context.CancelFunc
-	done   chan struct{}
+	done   <-chan struct{}
 	mu     sync.RWMutex
 }
 
-// NewProjectionPartition creates an instance that manages the lifecycle of a projection that has the capability of being stopped and restarted on demand.
-func NewProjectionPartition(
+// NewStartStopBalancer creates an instance that manages the lifecycle of a balancer that has the capability of being stopped and restarted on demand.
+func NewStartStopBalancer(
 	logger log.Logger,
 	restartLock lock.Locker,
-	notifier Notifier,
-	subscriber Subscriber,
-	resume StreamResume,
-	filter func(e eventsourcing.Event) bool,
-	handler EventHandlerFunc,
-) *ProjectionPartition {
-	mc := &ProjectionPartition{
-		logger:      logger,
-		restartLock: restartLock,
-		handler:     handler,
-		notifier:    notifier,
-		resume:      resume,
-		filter:      filter,
-		subscriber:  subscriber,
+	cancelListener CancelListener,
+	balancer worker.Balancer,
+) *StartStopBalancer {
+	mc := &StartStopBalancer{
+		logger: logger.WithTags(log.Tags{
+			"balancer": balancer.Name(),
+		}),
+		restartLock:    restartLock,
+		cancelListener: cancelListener,
+		balancer:       balancer,
 	}
 
 	return mc
 }
 
-// Name returns the name of this projection
-func (m *ProjectionPartition) Name() string {
-	return m.resume.Stream
+// Name returns the name of this balancer
+func (b *StartStopBalancer) Name() string {
+	return b.balancer.Name()
 }
 
 // Run action to be executed on boot
-func (m *ProjectionPartition) Run(ctx context.Context) error {
-	logger := m.logger.WithTags(log.Tags{
-		"projection": m.resume.Stream,
-	})
+func (b *StartStopBalancer) Run(ctx context.Context) error {
 	for {
-		logger.Info("Waiting for Unlock")
-		m.restartLock.WaitForUnlock(ctx)
+		b.logger.Info("Waiting for Unlock")
+		b.restartLock.WaitForUnlock(ctx)
 		ctx2, cancel := context.WithCancel(ctx)
+		b.mu.Lock()
+		b.cancel = cancel
+		b.mu.Unlock()
 
-		err := m.bootAndListen(ctx2)
+		err := b.startAndWait(ctx2)
 		if err != nil {
 			cancel()
 			return err
 		}
-
-		m.mu.Lock()
-		m.cancel = cancel
-		m.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
@@ -129,52 +120,26 @@ func (m *ProjectionPartition) Run(ctx context.Context) error {
 	}
 }
 
-func (m *ProjectionPartition) bootAndListen(ctx context.Context) error {
-	err := m.boot(ctx)
+func (b *StartStopBalancer) startAndWait(ctx context.Context) error {
+	b.mu.Lock()
+	b.done = b.balancer.Start(ctx)
+	b.mu.Unlock()
+
+	err := b.cancelListener.ListenCancel(ctx, b)
 	if err != nil {
 		return err
 	}
 
-	err = m.notifier.ListenCancelProjection(ctx, m)
-	if err != nil {
-		return err
-	}
-
-	<-ctx.Done()
-
-	return nil
-}
-
-func (m *ProjectionPartition) boot(ctx context.Context) error {
-	// start consuming events from the last available position
-	options := []ConsumerOption{}
-	if m.filter != nil {
-		options = append(options, WithFilter(m.filter))
-	}
-	done, err := m.subscriber.StartConsumer(
-		ctx,
-		m.resume,
-		m.handler,
-		options...,
-	)
-	if err != nil {
-		return faults.Errorf("Unable to start consumer projection %s: %w", m.resume.Stream, err)
-	}
-
-	m.mu.Lock()
-	m.done = done
-	m.mu.Unlock()
-
-	return nil
-}
-
-func (m *ProjectionPartition) Cancel() {
-	m.mu.Lock()
-	if m.cancel != nil {
-		m.cancel()
-	}
 	// wait for the closing subscriber
-	<-m.done
+	<-b.done
 
-	m.mu.Unlock()
+	return nil
+}
+
+func (b *StartStopBalancer) Cancel() {
+	b.mu.Lock()
+	if b.cancel != nil {
+		b.cancel()
+	}
+	b.mu.Unlock()
 }

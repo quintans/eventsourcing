@@ -12,12 +12,18 @@ type MemberWorkers struct {
 	Workers []string
 }
 
+// Memberlister represents a member of a list to which the a worker may be assigned
 type Memberlister interface {
 	Name() string
+	// List lists all servers and the workers under each of them
 	List(context.Context) ([]MemberWorkers, error)
+	// Register registers the workers under this member
 	Register(context.Context, []string) error
+	// Unregister removes itself from the list
+	Unregister(context.Context) error
 }
 
+// Worker represents an execution that can be started or stopped
 type Worker interface {
 	Name() string
 	IsRunning() bool
@@ -25,24 +31,61 @@ type Worker interface {
 	Stop(context.Context)
 }
 
-func BalanceWorkers(ctx context.Context, logger log.Logger, member Memberlister, workers []Worker, heartbeat time.Duration) {
-	ticker := time.NewTicker(heartbeat)
-	defer ticker.Stop()
-	for {
-		err := run(ctx, member, workers)
-		if err != nil {
-			logger.Warnf("Error while balancing partitions: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+type Balancer struct {
+	name      string
+	logger    log.Logger
+	member    Memberlister
+	workers   []Worker
+	heartbeat time.Duration
+}
+
+func NewBalancer(name string, logger log.Logger, member Memberlister, workers []Worker, heartbeat time.Duration) *Balancer {
+	return &Balancer{
+		name: name,
+		logger: logger.WithTags(log.Tags{
+			"name": name,
+		}),
+		member:    member,
+		workers:   workers,
+		heartbeat: heartbeat,
 	}
 }
 
-func run(ctx context.Context, member Memberlister, workers []Worker) error {
-	members, err := member.List(ctx)
+func (b *Balancer) Name() string {
+	return b.name
+}
+
+func (b *Balancer) Start(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(b.heartbeat)
+		defer ticker.Stop()
+		for {
+			err := b.run(ctx)
+			if err != nil {
+				b.logger.Warnf("Error while balancing partitions: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				// shutdown
+				for _, w := range b.workers {
+					w.Stop(context.Background())
+				}
+				err = b.member.Unregister(context.Background())
+				if err != nil {
+					b.logger.Warnf("Error while cleaning register on shutdown: %v", err)
+				}
+				close(done)
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return done
+}
+
+func (b *Balancer) run(ctx context.Context) error {
+	members, err := b.member.List(ctx)
 	if err != nil {
 		return err
 	}
@@ -50,7 +93,7 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 	// if current member is not in the list, add it to the member count
 	present := false
 	for _, v := range members {
-		if v.Name == member.Name() {
+		if v.Name == b.member.Name() {
 			present = true
 			break
 		}
@@ -60,7 +103,7 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 		membersCount++
 	}
 
-	monitorsNo := len(workers)
+	monitorsNo := len(b.workers)
 	workersToAcquire := monitorsNo / membersCount
 
 	// check if all members have the minimum workers. Only after that, any additional can be picked up.
@@ -73,7 +116,7 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 			allHaveMinWorkers = false
 		}
 		// map only other members workers
-		if m.Name != member.Name() {
+		if m.Name != b.member.Name() {
 			for _, v := range m.Workers {
 				workersInUse[v] = true
 			}
@@ -81,7 +124,7 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 	}
 	// mapping my current workers
 	myRunningWorkers := map[string]bool{}
-	for _, v := range workers {
+	for _, v := range b.workers {
 		if v.IsRunning() {
 			workersInUse[v.Name()] = true
 			myRunningWorkers[v.Name()] = true
@@ -96,19 +139,19 @@ func run(ctx context.Context, member Memberlister, workers []Worker) error {
 		workersToAcquire++
 	}
 
-	locks := balance(ctx, workers, workersToAcquire, workersInUse, myRunningWorkers)
-	member.Register(ctx, locks)
+	locks := b.balance(ctx, workersToAcquire, workersInUse, myRunningWorkers)
+	b.member.Register(ctx, locks)
 
 	return nil
 }
 
-func balance(ctx context.Context, workers []Worker, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
+func (b *Balancer) balance(ctx context.Context, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
 	running := len(myRunningWorkers)
 	if running == workersToAcquire {
 		return mapToString(myRunningWorkers)
 	}
 
-	for _, v := range workers {
+	for _, v := range b.workers {
 		if running > workersToAcquire {
 			if !v.IsRunning() {
 				continue

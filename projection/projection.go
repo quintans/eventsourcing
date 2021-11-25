@@ -45,11 +45,17 @@ type Consumer interface {
 	StartConsumer(ctx context.Context, resume StreamResume, handler EventHandlerFunc, options ...ConsumerOption) (chan struct{}, error)
 }
 
-func ReactorConsumerWorkers(ctx context.Context, logger log.Logger, streamName string, lockerFactory LockerFactory, topic string, partitions uint32, consumer Consumer, handler EventHandlerFunc) []worker.Worker {
+func ReactorConsumerWorkers(ctx context.Context, logger log.Logger, streamName string, lockerFactory LockerFactory, topic string, partitions uint32, consumer Consumer, handler EventHandlerFunc) ([]worker.Worker, []StreamResume) {
 	workers := make([]worker.Worker, partitions)
+	resumes := make([]StreamResume, partitions)
 	for i := uint32(0); i < partitions; i++ {
 		x := i
 		name := streamName + "-lock-" + strconv.Itoa(int(x))
+		resume := StreamResume{
+			Topic:  common.TopicWithPartition(topic, x+1),
+			Stream: streamName,
+		}
+		resumes[x] = resume
 		workers[x] = worker.NewRunWorker(
 			logger,
 			name,
@@ -57,10 +63,7 @@ func ReactorConsumerWorkers(ctx context.Context, logger log.Logger, streamName s
 			worker.NewTask(func(ctx context.Context) (<-chan struct{}, error) {
 				done, err := consumer.StartConsumer(
 					ctx,
-					StreamResume{
-						Topic:  common.TopicWithPartition(topic, x+1),
-						Stream: streamName,
-					},
+					resume,
 					handler,
 				)
 				if err != nil {
@@ -72,78 +75,5 @@ func ReactorConsumerWorkers(ctx context.Context, logger log.Logger, streamName s
 		)
 	}
 
-	return workers
-}
-
-func ProjectionWorkersAndRebuilder(
-	logger log.Logger,
-	name string,
-	lockerFactory LockerFactory,
-	notifier Notifier,
-	subscriber Subscriber,
-	streamResumer StreamResumer,
-	topic string,
-	partitions uint32,
-	handler EventHandlerFunc,
-) ([]worker.Worker, *NotifierLockRebuilder) {
-	workers, tokenStreams, unlockWaiter := ProjectionWorkers(
-		logger,
-		name,
-		lockerFactory,
-		notifier,
-		subscriber,
-		topic,
-		partitions,
-		handler,
-	)
-	rebuilder := NewNotifierLockRestarter(
-		logger,
-		unlockWaiter,
-		notifier,
-		subscriber,
-		streamResumer,
-		tokenStreams,
-	)
-
-	return workers, rebuilder
-}
-
-func ProjectionWorkers(
-	logger log.Logger,
-	name string,
-	lockerFactory LockerFactory,
-	notifier Notifier,
-	subscriber Subscriber,
-	topic string,
-	partitions uint32,
-	handler EventHandlerFunc,
-) ([]worker.Worker, []StreamResume, lock.Locker) {
-	tokenStreams := []StreamResume{}
-	unlockWaiter := lockerFactory(name + "-freeze")
-	workers := make([]worker.Worker, partitions)
-	for i := uint32(1); i <= partitions; i++ {
-		resume := StreamResume{
-			Topic:  common.TopicWithPartition(topic, i),
-			Stream: name + "-projection",
-		}
-		tokenStreams = append(tokenStreams, resume)
-		runner := NewProjectionPartition(
-			logger,
-			unlockWaiter,
-			notifier,
-			subscriber,
-			resume,
-			nil,
-			handler,
-		)
-		idx := strconv.Itoa(int(i))
-		workers[i-1] = worker.NewRunWorker(
-			logger,
-			name+"-projection-"+idx,
-			lockerFactory(name+"-lock-"+idx),
-			runner,
-		)
-	}
-
-	return workers, tokenStreams, unlockWaiter
+	return workers, resumes
 }
