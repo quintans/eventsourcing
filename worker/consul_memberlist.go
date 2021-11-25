@@ -8,21 +8,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/consul/api"
 	"github.com/quintans/faults"
-
-	"github.com/quintans/eventsourcing/log"
 )
 
 var _ Memberlister = (*ConsulMemberList)(nil)
 
 // NewConsulMemberList is a member of a list of servers managing distributed workers backed by consul.
 type ConsulMemberList struct {
-	client     *api.Client
-	prefix     string
-	name       string
-	expiration time.Duration
-	sID        string
-
-	workers []Worker
+	client *api.Client
+	prefix string
+	name   string
+	sID    string
 }
 
 func NewConsulMemberList(address string, family string, expiration time.Duration) (*ConsulMemberList, error) {
@@ -41,11 +36,10 @@ func NewConsulMemberList(address string, family string, expiration time.Duration
 	}
 
 	return &ConsulMemberList{
-		client:     client,
-		prefix:     family,
-		name:       family + "-" + uuid.New().String(),
-		expiration: expiration,
-		sID:        sID,
+		client: client,
+		prefix: family,
+		name:   family + "-" + uuid.New().String(),
+		sID:    sID,
 	}, nil
 }
 
@@ -108,11 +102,28 @@ func (c *ConsulMemberList) Register(ctx context.Context, workers []string) error
 	return nil
 }
 
-// AddWorkers adds the workers than can be managed by this member
-func (c *ConsulMemberList) AddWorkers(workers []Worker) {
-	c.workers = append(c.workers, workers...)
-}
+func (c *ConsulMemberList) Unregister(ctx context.Context) error {
+	options := &api.WriteOptions{}
+	options = options.WithContext(ctx)
 
-func (c *ConsulMemberList) BalanceWorkers(ctx context.Context, logger log.Logger) {
-	BalanceWorkers(ctx, logger, c, c.workers, c.expiration/2)
+	go func() {
+		c.client.Session().Renew(c.sID, options)
+	}()
+
+	kv := &api.KVPair{
+		Session: c.sID,
+		Key:     c.name,
+	}
+
+	acquired, _, err := c.client.KV().DeleteCAS(kv, options)
+	if err != nil {
+		return faults.Wrap(err)
+	}
+
+	if !acquired {
+		c.client.Session().Destroy(c.sID, options)
+		return nil
+	}
+
+	return nil
 }

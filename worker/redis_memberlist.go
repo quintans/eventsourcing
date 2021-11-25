@@ -70,3 +70,8 @@ func (r *RedisMemberList) Register(ctx context.Context, workers []string) error 
 	err := r.rdb.Set(ctx, r.name, s, r.expiration).Err()
 	return faults.Wrap(err)
 }
+
+func (r *RedisMemberList) Unregister(ctx context.Context) error {
+	err := r.rdb.Del(ctx, r.name).Err()
+	return faults.Wrap(err)
+}

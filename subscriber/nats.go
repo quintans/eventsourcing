@@ -224,7 +224,7 @@ func (s NatsProjectionSubscriber) GetQueue() *nats.Conn {
 	return s.queue
 }
 
-func (s NatsProjectionSubscriber) ListenCancelProjection(ctx context.Context, canceller projection.Canceller) error {
+func (s NatsProjectionSubscriber) ListenCancel(ctx context.Context, canceller projection.Canceller) error {
 	logger := s.logger.WithTags(log.Tags{"topic": s.managerTopic})
 	sub, err := s.queue.Subscribe(s.managerTopic, func(msg *nats.Msg) {
 		n := projection.Notification{}
@@ -260,7 +260,7 @@ func (s NatsProjectionSubscriber) ListenCancelProjection(ctx context.Context, ca
 	return nil
 }
 
-func (s NatsProjectionSubscriber) CancelProjection(ctx context.Context, projectionName string, listenerCount int) error {
+func (s NatsProjectionSubscriber) PublishCancel(ctx context.Context, projectionName string, listenerCount int) error {
 	s.logger.WithTags(log.Tags{"projection": projectionName}).Info("Cancelling projection")
 
 	payload, err := json.Marshal(projection.Notification{

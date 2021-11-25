@@ -8,6 +8,7 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/worker"
 )
 
 type Action int
@@ -35,19 +36,21 @@ type ResumeTokenUpdater interface {
 type NotifierLockRebuilder struct {
 	logger        log.Logger
 	lock          lock.Locker
-	notifier      Notifier
+	notifier      CancelPublisher
 	subscriber    Subscriber
 	streamResumer StreamResumer
 	tokenStreams  []StreamResume
+	memberLister  worker.Memberlister
 }
 
 func NewNotifierLockRestarter(
 	logger log.Logger,
 	lock lock.Locker,
-	notifier Notifier,
+	notifier CancelPublisher,
 	subscriber Subscriber,
 	streamResumer StreamResumer,
 	tokenStreams []StreamResume,
+	memberLister worker.Memberlister,
 ) *NotifierLockRebuilder {
 	return &NotifierLockRebuilder{
 		logger:        logger,
@@ -56,10 +59,16 @@ func NewNotifierLockRestarter(
 		subscriber:    subscriber,
 		streamResumer: streamResumer,
 		tokenStreams:  tokenStreams,
+		memberLister:  memberLister,
 	}
 }
 
-func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, beforeRecordingTokens func(ctx context.Context) (eventid.EventID, error), afterRecordingTokens func(ctx context.Context, afterEventID eventid.EventID) (eventid.EventID, error)) error {
+func (r *NotifierLockRebuilder) Rebuild(
+	ctx context.Context,
+	projection string,
+	beforeRecordingTokens func(ctx context.Context) (eventid.EventID, error),
+	afterRecordingTokens func(ctx context.Context, afterEventID eventid.EventID) (eventid.EventID, error),
+) error {
 	logger := r.logger.WithTags(log.Tags{
 		"method":     "NotifierLockRebuilder.Rebuild",
 		"projection": projection,
@@ -71,22 +80,21 @@ func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, 
 		return faults.Errorf("failed to acquire rebuild lock for projection %s: %w", projection, err)
 	}
 
+	logger.Info("Signalling to STOP projection listener")
+	members, err := r.memberLister.List(ctx)
+	if err != nil {
+		return faults.Errorf("failed to members list for projection %s: %w", projection, err)
+	}
+	err = r.notifier.PublishCancel(ctx, projection, len(members))
+	if err != nil {
+		logger.WithError(err).Error("Error while freezing projection")
+		r.unlock(ctx, logger)
+		return err
+	}
+
 	go func() {
 		ctx := context.Background()
-		defer func() {
-			logger.Info("Releasing rebuild projection lock")
-			err := r.lock.Unlock(ctx)
-			if err != nil {
-				logger.WithError(err).Info("Failed to release rebuild projection lock")
-			}
-		}()
-
-		logger.Info("Signalling to STOP projection listener")
-		err = r.notifier.CancelProjection(ctx, projection, len(r.tokenStreams))
-		if err != nil {
-			logger.WithError(err).Error("Error while freezing projection")
-			return
-		}
+		defer r.unlock(ctx, logger)
 
 		logger.Info("Before recording BUS tokens")
 		afterEventID, err := beforeRecordingTokens(ctx)
@@ -106,6 +114,14 @@ func (r *NotifierLockRebuilder) Rebuild(ctx context.Context, projection string, 
 	}()
 
 	return nil
+}
+
+func (r *NotifierLockRebuilder) unlock(ctx context.Context, logger log.Logger) {
+	logger.Info("Releasing rebuild projection lock")
+	err := r.lock.Unlock(ctx)
+	if err != nil {
+		logger.WithError(err).Info("Failed to release rebuild projection lock")
+	}
 }
 
 func (r *NotifierLockRebuilder) recordResumeTokens(ctx context.Context) error {
