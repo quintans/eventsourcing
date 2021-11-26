@@ -180,12 +180,19 @@ func WithProjectionMessageCodec(codec sink.Codec) ProjectionOption {
 	}
 }
 
+func WithCancelTimeout(timeout time.Duration) ProjectionOption {
+	return func(r *NatsProjectionSubscriber) {
+		r.cancelTimeout = timeout
+	}
+}
+
 type NatsProjectionSubscriber struct {
-	logger       log.Logger
-	queue        *nats.Conn
-	managerTopic string
-	messageCodec sink.Codec
-	cancelID     string
+	logger        log.Logger
+	queue         *nats.Conn
+	managerTopic  string
+	messageCodec  sink.Codec
+	cancelID      string
+	cancelTimeout time.Duration
 }
 
 func NewNatsProjectionSubscriber(
@@ -206,11 +213,12 @@ func NewNatsProjectionSubscriber(
 	}()
 
 	s := &NatsProjectionSubscriber{
-		logger:       logger,
-		queue:        nc,
-		managerTopic: managerTopic,
-		messageCodec: sink.JsonCodec{},
-		cancelID:     uuid.New().String(),
+		logger:        logger,
+		queue:         nc,
+		managerTopic:  managerTopic,
+		messageCodec:  sink.JsonCodec{},
+		cancelID:      uuid.New().String(),
+		cancelTimeout: 5 * time.Second,
 	}
 
 	for _, o := range options {
@@ -240,9 +248,9 @@ func (s NatsProjectionSubscriber) ListenCancel(ctx context.Context, canceller pr
 		switch n.Action {
 		case projection.Release:
 			canceller.Cancel()
-			err = s.queue.Publish(msg.Reply, []byte(s.cancelID))
+			err = msg.Respond([]byte(s.cancelID))
 			if err != nil {
-				logger.Errorf("unable to publish reply to '%s': %+v", msg.Reply, faults.Wrap(err))
+				logger.Errorf("unable to publish cancel reply to '%s': %+v", s.managerTopic, faults.Wrap(err))
 			}
 		default:
 			logger.WithTags(log.Tags{"notification": n}).Error("Unknown notification")
@@ -290,11 +298,13 @@ func (s NatsProjectionSubscriber) PublishCancel(ctx context.Context, projectionN
 	}
 
 	// Wait for all responses
-	max := time.Second
+	max := s.cancelTimeout
 	start := time.Now()
 	replies := map[string]struct{}{}
-	for time.Now().Sub(start) < max {
-		msg, err := sub.NextMsg(1 * time.Second)
+	since := time.Since(start)
+	for since < max {
+		remainingTimeout := max - since
+		msg, err := sub.NextMsg(remainingTimeout)
 		if err != nil {
 			return faults.Wrap(err)
 		}

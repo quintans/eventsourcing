@@ -10,8 +10,7 @@ The goal of this project is to implement an event store and how this event store
 This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS.
 
 To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
-If we would like to write the read model into the same database in the same transaction as the write model (dual write), we can easily add an event handler for that.
-Unfortunately this approach makes it hard to rebuild a projection or introduce new projections. Only use for the simplest cases.
+We could write the read model into the same database in the same transaction as the write model (dual write), by adding adding an event handler for that but unfortunately this approach does not allow us to rebuild a projection or introduce new projections.
 
 Other than the event store and the event streaming I also implemented an orchestration layer for the event consumer on the read side.
 
@@ -133,48 +132,48 @@ Since events are being partitioned we use the same approach of spreading the par
 
 ![Balancing Projection Partitioning](balancing-projection-partitions.png)
 
-The above picture depicts balancing over several instances.
+The above picture depicts balancing over several server instances.
 
-Consider a Projection A that listens for messages coming from topic X and Y.
-If messages are partitioned into 2 partitions, we create a worker for each partition (we could also group partitions per worker). Each worker has an associated lock and a service instance can only run a worker for which it has a lock for. So `Projection A1` consumes messages in partition `X1` and `Y1` and `Worker 1` manages the `Projection A1` instance lifecycle.
+Consider a Projection that consumes messages coming from topic X and Y.
+If messages are partitioned into 2 partitions for X and 3 partitions for Y, we create a worker for each partition and have their life cycle be managed by a Balancer. Each worker has an associated lock and a service instance can only run a worker for which it has a lock for.
+The image above depicts the situation where the server instance #1 is consuming messages from topic partitions `Y1`, `Y2` and `X1` and server instance #2 is consuming messages from topic partitions `X2` and `Y3`.
 
-To avoid a an instance to lock all the workers, we rely in a distributed member list.
+To avoid a an instance to lock all the workers, we rely on a balancer with a distributed member list.
 This way a specific instance will only attempt to lock its share of workers.
 For example, if we have 2 instances and 4 workers, one instance will only attempt to lock 2 workers as per the formula `locks = workers / instances`.
 If the remainder is non zero, then every instance will attempt to lock one more worker, but only after all the instances have locked their share.
 This is to avoid the following scenario.
 
-Consider that we have 4 workers and 2 service instances and eagerly lock the extra worker.
+Consider that we have 4 workers and an increasing number of replica service instances and eagerly lock the extra worker.
 Balancing them, as the instances come online, would happen int the following manner:
 
-    1 instance -> 4 workers
-    2 instances -> balanced to 2 workers each
-    3 instances -> due to the non remainder, each would try to lock 2 workers, but since the first 2 instances already have a lock, they would not release it and the 3rd instance would have zero workers locked, ending in an unfair distribution.
+    replica #1 -> comes online
+    replica #1 -> locks the 4 workers
+	replica #2 -> comes online
+	replica #1 -> release the lock of 2 workers
+	replica #2 -> locks the 2 unlocked workers
+	replica #3 -> comes online
+	replica #1 -> release the lock of 1 workers
+	replica #2 -> release the lock of 1 workers
+	replica #3 -> locks the 1 unlocked worker and 
+    replica #? -> one of the replicas locks the remaining worker.
 
 I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection. The process is described as follow:
 
-Request Rebuild projections
+Rebuild projections
 - Acquire Freeze Lock
 - Emit Cancel projection notification
-- Wait for all partitions listeners to acknowledge stopping (timeout 1s)
-- handle the control to the projection for the rebuild
+- Wait for all balancers listeners to acknowledge stopping (fails with the configurable timeout of 5s)
+- Before rebuild action
+- Replay all events in the store
+- After rebuild action
 - Release Freeze Lock
 
 Boot Partitioned Projection
 - Wait for lock release (if any)
-- Boot from the last position for this partition(s). The view stores the partition number and the - last event id.
+- Every worker boots from the last position for its partition.
 - Start consuming the stream from the last event position
 - Listen to Cancel projection notification
-
-
-All that is handled by the following pseudo code (it may change since development is ongoing)
-
-```go
-memberlist, _ := worker.NewConsulMemberList(cfg.ConsulURL, "forwarder-member", cfg.LockExpiry)
-// workers was defined in the previous example
-memberlist.AddWorkers(workers)
-go memberlist.BalanceWorkers(ctx, logger)
-```
 
 All this balancing and projection rebuilds assumes that a projection is idempotent.
 
