@@ -36,6 +36,9 @@ type FeedOption func(*Feed)
 func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 	return func(p *Feed) {
 		if partitions <= 1 {
+			p.partitions = 0
+			p.partitionsLow = 0
+			p.partitionsHi = 0
 			return
 		}
 		p.partitions = partitions
