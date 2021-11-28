@@ -87,7 +87,7 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsou
 	return &event, nil
 }
 
-// Sink sends the event to pulsar
+// Sink sends the event to the message queue
 func (p *NatsSink) Sink(ctx context.Context, e eventsourcing.Event) error {
 	b, err := p.codec.Encode(e)
 	if err != nil {
