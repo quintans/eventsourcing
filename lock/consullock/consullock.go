@@ -1,4 +1,4 @@
-package lock
+package consullock
 
 import (
 	"context"
@@ -8,39 +8,13 @@ import (
 
 	"github.com/hashicorp/consul/api"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing/lock"
 )
 
-var _ Locker = (*ConsulLock)(nil)
+var _ lock.Locker = (*Lock)(nil)
 
-type ConsulLockPool struct {
-	client *api.Client
-}
-
-func NewConsulLockPool(consulAddress string) (ConsulLockPool, error) {
-	api.DefaultConfig()
-	client, err := api.NewClient(&api.Config{Address: consulAddress})
-	if err != nil {
-		return ConsulLockPool{}, err
-	}
-
-	if err != nil {
-		return ConsulLockPool{}, fmt.Errorf("session create err: %v", err)
-	}
-
-	return ConsulLockPool{
-		client: client,
-	}, nil
-}
-
-func (p ConsulLockPool) NewLock(lockName string, expiry time.Duration) *ConsulLock {
-	return &ConsulLock{
-		client:   p.client,
-		lockName: lockName,
-		expiry:   expiry,
-	}
-}
-
-type ConsulLock struct {
+type Lock struct {
 	client   *api.Client
 	sID      string
 	lockName string
@@ -49,12 +23,12 @@ type ConsulLock struct {
 	mu       sync.Mutex
 }
 
-func (l *ConsulLock) Lock(ctx context.Context) (<-chan struct{}, error) {
+func (l *Lock) Lock(ctx context.Context) (<-chan struct{}, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if l.done != nil {
-		return nil, fmt.Errorf("failed to acquire lock: '%s': %w", l.lockName, ErrLockAlreadyHeld)
+		return nil, fmt.Errorf("failed to acquire lock: '%s': %w", l.lockName, lock.ErrLockAlreadyHeld)
 	}
 
 	sEntry := &api.SessionEntry{
@@ -82,16 +56,14 @@ func (l *ConsulLock) Lock(ctx context.Context) (<-chan struct{}, error) {
 
 	if !acquired {
 		l.client.Session().Destroy(sID, options)
-		return nil, ErrLockAlreadyAcquired
+		return nil, faults.Wrap(lock.ErrLockAlreadyAcquired)
 	}
 
 	// auto renew session
-	l.done = make(chan struct{})
+	done := make(chan struct{})
+	l.done = done
 	go func() {
 		// we use a new options because context may no longer be usable
-		l.mu.Lock()
-		done := l.done
-		l.mu.Unlock()
 		err := l.client.Session().RenewPeriodic(sEntry.TTL, sID, &api.WriteOptions{}, done)
 		if err != nil {
 			l.Unlock(context.Background())
@@ -101,12 +73,12 @@ func (l *ConsulLock) Lock(ctx context.Context) (<-chan struct{}, error) {
 	return l.done, nil
 }
 
-func (l *ConsulLock) Unlock(ctx context.Context) error {
+func (l *Lock) Unlock(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if l.done == nil {
-		return ErrLockNotHeld
+		return faults.Wrap(lock.ErrLockNotHeld)
 	}
 
 	lockEnt := &api.KVPair{
@@ -126,7 +98,7 @@ func (l *ConsulLock) Unlock(ctx context.Context) error {
 	return nil
 }
 
-func (l *ConsulLock) WaitForUnlock(ctx context.Context) error {
+func (l *Lock) WaitForUnlock(ctx context.Context) error {
 	opts := &api.QueryOptions{}
 	opts = opts.WithContext(ctx)
 

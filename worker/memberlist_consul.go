@@ -5,8 +5,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/avast/retry-go/v3"
 	"github.com/google/uuid"
 	"github.com/hashicorp/consul/api"
+	"github.com/hashicorp/go-multierror"
 	"github.com/quintans/faults"
 )
 
@@ -49,28 +51,50 @@ func (c *ConsulMemberList) Name() string {
 
 // List lists all servers and the workers under each of them
 func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
-	members := []MemberWorkers{}
+	membersWorkers := []MemberWorkers{}
 	options := &api.QueryOptions{}
 	options = options.WithContext(ctx)
-	keys, _, err := c.client.KV().Keys(c.prefix+"-", "", options)
+	members, _, err := c.client.KV().Keys(c.prefix+"-", "", options)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	for _, v := range keys {
-		kvPair, _, err := c.client.KV().Get(v, options)
-		if err != nil {
-			return nil, faults.Wrap(err)
-		}
-		if kvPair != nil {
-			s := strings.Split(string(kvPair.Value), ",")
-			members = append(members, MemberWorkers{
-				Name:    v,
-				Workers: s,
-			})
+	type result struct {
+		KVPair *api.KVPair
+		Err    error
+	}
+	var allErr error
+	ch := make(chan result, len(members))
+	for _, memberID := range members {
+		go func(m string) {
+			r := result{}
+			retry.Do(
+				func() error {
+					r.KVPair, _, r.Err = c.client.KV().Get(m, options)
+					return r.Err
+				},
+				retry.Attempts(retries),
+			)
+			r.Err = faults.Wrap(r.Err)
+			ch <- r
+		}(memberID)
+		for _, memberID := range members {
+			r := <-ch
+			if r.Err != nil {
+				allErr = multierror.Append(err, r.Err)
+			} else if r.KVPair != nil {
+				s := strings.Split(string(r.KVPair.Value), ",")
+				membersWorkers = append(membersWorkers, MemberWorkers{
+					Name:    memberID,
+					Workers: s,
+				})
+			}
 		}
 	}
+	if allErr != nil {
+		return nil, allErr
+	}
 
-	return members, nil
+	return membersWorkers, nil
 }
 
 // Register registers the workers under this member
