@@ -3,6 +3,7 @@ module github.com/quintans/eventsourcing
 go 1.15
 
 require (
+	github.com/avast/retry-go/v3 v3.1.1
 	github.com/cenkalti/backoff/v4 v4.1.1
 	github.com/containerd/containerd v1.5.8 // indirect
 	github.com/docker/go-connections v0.4.0
@@ -14,6 +15,7 @@ require (
 	github.com/golang/protobuf v1.5.2
 	github.com/google/uuid v1.3.0
 	github.com/hashicorp/consul/api v1.8.0
+	github.com/hashicorp/go-multierror v1.1.0
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
 	github.com/jackc/pgconn v1.8.1
 	github.com/jackc/pglogrepl v0.0.0-20210514235833-4afe73f2b337

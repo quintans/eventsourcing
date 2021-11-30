@@ -1,4 +1,4 @@
-package lock_test
+package consullock_test
 
 import (
 	"context"
@@ -12,9 +12,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/lock/consullock"
 )
 
-func Setup(ctx context.Context) (testcontainers.Container, string, error) {
+func SetupConsul(ctx context.Context) (testcontainers.Container, string, error) {
 	tcpPort := "8500"
 	natPort := nat.Port(tcpPort)
 
@@ -50,11 +51,11 @@ func Setup(ctx context.Context) (testcontainers.Container, string, error) {
 func TestConsul(t *testing.T) {
 	LOCK_KEY := "123"
 	ctx := context.Background()
-	container, addr, err := Setup(ctx)
+	container, addr, err := SetupConsul(ctx)
 	require.NoError(t, err)
 	defer container.Terminate(ctx)
 
-	pool1, err := lock.NewConsulLockPool(addr)
+	pool1, err := consullock.NewPool(addr)
 	require.NoError(t, err)
 
 	lock1 := pool1.NewLock(LOCK_KEY, 10*time.Second)
@@ -64,7 +65,7 @@ func TestConsul(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	pool2, err := lock.NewConsulLockPool(addr)
+	pool2, err := consullock.NewPool(addr)
 	require.NoError(t, err)
 
 	lock2 := pool2.NewLock(LOCK_KEY, 10*time.Second)

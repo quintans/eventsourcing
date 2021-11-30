@@ -12,7 +12,10 @@ var (
 )
 
 type Locker interface {
+	// Lock acquires a lock. The return channel will be closed when the lock is released.
 	Lock(context.Context) (<-chan struct{}, error)
+	// Unlock releases the lock, leading to the closing the channel returned in Lock()
 	Unlock(context.Context) error
+	// WaitForUnlock blocks until this lock is released
 	WaitForUnlock(context.Context) error
 }
