@@ -39,7 +39,11 @@ type Balancer struct {
 	heartbeat time.Duration
 }
 
-func NewBalancer(name string, logger log.Logger, member Memberlister, workers []Worker, heartbeat time.Duration) *Balancer {
+func NewSingleBalancer(logger log.Logger, name string, worker Worker, heartbeat time.Duration) *Balancer {
+	return NewBalancer(logger, name, NewInMemMemberList(), []Worker{worker}, heartbeat)
+}
+
+func NewBalancer(logger log.Logger, name string, member Memberlister, workers []Worker, heartbeat time.Duration) *Balancer {
 	return &Balancer{
 		name: name,
 		logger: logger.WithTags(log.Tags{
@@ -183,4 +187,26 @@ func mapToString(m map[string]bool) []string {
 		s = append(s, k)
 	}
 	return s
+}
+
+type InMemMemberList struct{}
+
+func NewInMemMemberList() *InMemMemberList {
+	return &InMemMemberList{}
+}
+
+func (m InMemMemberList) Name() string {
+	return "InMemMemberList"
+}
+
+func (m InMemMemberList) List(context.Context) ([]MemberWorkers, error) {
+	return []MemberWorkers{}, nil
+}
+
+func (m *InMemMemberList) Register(context.Context, []string) error {
+	return nil
+}
+
+func (m *InMemMemberList) Unregister(context.Context) error {
+	return nil
 }
