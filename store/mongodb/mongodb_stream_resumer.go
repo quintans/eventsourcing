@@ -1,4 +1,4 @@
-package resumestore
+package mongodb
 
 import (
 	"context"
@@ -12,34 +12,34 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 )
 
-var _ projection.StreamResumer = (*MongoDBStreamResumer)(nil)
+var _ projection.StreamResumer = (*StreamResumer)(nil)
 
-type MongoDBStreamResumerRow struct {
+type StreamResumerRow struct {
 	ID    string `bson:"_id,omitempty"`
 	Token string `bson:"token,omitempty"`
 }
 
-type MongoDBStreamResumer struct {
+type StreamResumer struct {
 	collection *mongo.Collection
 }
 
-func NewMongoDBStreamResumer(connString string, dbName string, collection string) (MongoDBStreamResumer, error) {
+func NewStreamResumer(connString string, dbName string, collection string) (StreamResumer, error) {
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
-		return MongoDBStreamResumer{}, faults.Wrap(err)
+		return StreamResumer{}, faults.Wrap(err)
 	}
 
 	c := client.Database(dbName).Collection(collection)
 
-	return MongoDBStreamResumer{
+	return StreamResumer{
 		collection: c,
 	}, nil
 }
 
-func (m MongoDBStreamResumer) GetStreamResumeToken(ctx context.Context, key projection.StreamResume) (string, error) {
+func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.StreamResume) (string, error) {
 	opts := options.FindOne()
-	row := MongoDBStreamResumerRow{}
+	row := StreamResumerRow{}
 	if err := m.collection.FindOne(ctx, bson.D{{"_id", key.String()}}, opts).Decode(&row); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return "", nil
@@ -50,7 +50,7 @@ func (m MongoDBStreamResumer) GetStreamResumeToken(ctx context.Context, key proj
 	return row.Token, nil
 }
 
-func (m MongoDBStreamResumer) SetStreamResumeToken(ctx context.Context, key projection.StreamResume, token string) error {
+func (m StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.StreamResume, token string) error {
 	opts := options.Update().SetUpsert(true)
 	_, err := m.collection.UpdateOne(
 		ctx,

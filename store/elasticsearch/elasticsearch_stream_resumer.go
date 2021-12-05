@@ -1,4 +1,4 @@
-package resumestore
+package elasticsearch
 
 import (
 	"context"

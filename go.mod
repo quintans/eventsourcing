@@ -5,7 +5,6 @@ go 1.15
 require (
 	github.com/avast/retry-go/v3 v3.1.1
 	github.com/cenkalti/backoff/v4 v4.1.1
-	github.com/containerd/containerd v1.5.8 // indirect
 	github.com/docker/go-connections v0.4.0
 	github.com/elastic/go-elasticsearch/v7 v7.10.0
 	github.com/go-mysql-org/go-mysql v1.2.1
@@ -24,12 +23,9 @@ require (
 	github.com/jackc/pgx/v4 v4.11.0
 	github.com/jmoiron/sqlx v1.3.3
 	github.com/kyleconroy/pgoutput v0.1.0
-	github.com/lib/pq v1.10.2
-	github.com/nats-io/nats-streaming-server v0.22.1 // indirect
-	github.com/nats-io/nats.go v1.11.1-0.20210623165838-4b75fc59ae30
-	github.com/nats-io/stan.go v0.10.0
+	github.com/lib/pq v1.10.4
+	github.com/nats-io/nats.go v1.13.0
 	github.com/oklog/ulid/v2 v2.0.2
-	github.com/opencontainers/image-spec v1.0.2 // indirect
 	github.com/quintans/faults v1.4.0
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.7.0

@@ -19,7 +19,7 @@ func NewPool(consulAddress string) (Pool, error) {
 	}
 
 	if err != nil {
-		return Pool{}, fmt.Errorf("session create err: %v", err)
+		return Pool{}, fmt.Errorf("session create err: %w", err)
 	}
 
 	return Pool{

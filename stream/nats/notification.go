@@ -1,4 +1,4 @@
-package subscriber
+package nats
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/stan.go"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/log"
@@ -16,38 +15,33 @@ import (
 	"github.com/quintans/eventsourcing/sink"
 )
 
-type Option func(*NatsSubscriberWithResumer)
+type SubOption func(*SubscriberWithResumer)
 
-func WithMessageCodec(codec sink.Codec) Option {
-	return func(r *NatsSubscriberWithResumer) {
+func WithMsgCodec(codec sink.Codec) SubOption {
+	return func(r *SubscriberWithResumer) {
 		r.messageCodec = codec
 	}
 }
 
-var _ projection.Subscriber = (*NatsSubscriberWithResumer)(nil)
+var _ projection.Subscriber = (*SubscriberWithResumer)(nil)
 
-type NatsSubscriberWithResumer struct {
+type SubscriberWithResumer struct {
 	logger       log.Logger
-	stream       stan.Conn
+	stream       nats.JetStreamContext
 	resumerStore projection.StreamResumer
 	resumeKey    projection.StreamResume
 	messageCodec sink.Codec
 }
 
-func NewNatsSubscriberWithResumer(
+func NewSubscriberWithResumer(
 	ctx context.Context,
 	logger log.Logger,
-	stream stan.Conn,
+	stream nats.JetStreamContext,
 	resumerStore projection.StreamResumer,
 	resumeKey projection.StreamResume,
-	options ...Option,
-) (*NatsSubscriberWithResumer, error) {
-	go func() {
-		<-ctx.Done()
-		stream.Close()
-	}()
-
-	s := &NatsSubscriberWithResumer{
+	options ...SubOption,
+) (*SubscriberWithResumer, error) {
+	s := &SubscriberWithResumer{
 		logger:       logger,
 		stream:       stream,
 		resumerStore: resumerStore,
@@ -62,24 +56,25 @@ func NewNatsSubscriberWithResumer(
 	return s, nil
 }
 
-func (s NatsSubscriberWithResumer) GetStream() stan.Conn {
-	return s.stream
+func sequence(m *nats.Msg) uint64 {
+	md, _ := m.Metadata()
+	return md.Sequence.Stream
 }
 
-func (s NatsSubscriberWithResumer) MoveToLastPosition(ctx context.Context) error {
+func (s SubscriberWithResumer) MoveToLastPosition(ctx context.Context) error {
 	ch := make(chan uint64)
 	// this will position the stream at the last position+1
 	sub, err := s.stream.Subscribe(
 		s.resumeKey.Topic(),
-		func(m *stan.Msg) {
-			ch <- m.Sequence
+		func(m *nats.Msg) {
+			ch <- sequence(m)
 		},
-		stan.StartWithLastReceived(),
+		nats.DeliverLast(),
 	)
 	if err != nil {
 		return faults.Wrap(err)
 	}
-	defer sub.Close()
+	defer sub.Unsubscribe()
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 	var sequence uint64
@@ -92,7 +87,7 @@ func (s NatsSubscriberWithResumer) MoveToLastPosition(ctx context.Context) error
 	return s.resumerStore.SetStreamResumeToken(ctx, s.resumeKey, token)
 }
 
-func (s NatsSubscriberWithResumer) StartConsumer(ctx context.Context, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) (chan struct{}, error) {
+func (s SubscriberWithResumer) StartConsumer(ctx context.Context, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) (chan struct{}, error) {
 	logger := s.logger.WithTags(log.Tags{"topic": s.resumeKey.Topic()})
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
@@ -101,7 +96,7 @@ func (s NatsSubscriberWithResumer) StartConsumer(ctx context.Context, handler pr
 		v(&opts)
 	}
 	var token string
-	var start stan.SubscriptionOption
+	var startOption nats.SubOpt
 	saveResume := make(chan uint64, 100)
 	var err error
 	token, err = s.resumerStore.GetStreamResumeToken(ctx, s.resumeKey)
@@ -110,22 +105,23 @@ func (s NatsSubscriberWithResumer) StartConsumer(ctx context.Context, handler pr
 	}
 	if token == "" {
 		logger.Infof("Starting consuming all available [token key: %s]", s.resumeKey)
-		start = stan.DeliverAllAvailable()
+		startOption = nats.DeliverAll()
 	} else {
 		logger.Infof("Starting consuming from %s [token key: %s]", token, s.resumeKey)
 		seq, err := strconv.ParseUint(token, 10, 64)
 		if err != nil {
 			return nil, faults.Errorf("unable to parse resume token %s: %w", token, err)
 		}
-		start = stan.StartAtSequence(seq)
+		startOption = nats.StartSequence(seq)
 	}
 
-	sub, err := s.stream.Subscribe(
+	_, err = s.stream.Subscribe(
 		s.resumeKey.Topic(),
-		func(m *stan.Msg) {
+		func(m *nats.Msg) {
 			evt, err := s.messageCodec.Decode(m.Data)
 			if err != nil {
 				logger.WithError(err).Errorf("unable to unmarshal event '%s'", string(m.Data))
+				m.Nak()
 				return
 			}
 			if opts.Filter(evt) {
@@ -133,21 +129,23 @@ func (s NatsSubscriberWithResumer) StartConsumer(ctx context.Context, handler pr
 				err = handler(ctx, evt)
 				if err != nil {
 					logger.WithError(err).Errorf("Error when handling event with ID '%s'", evt.ID)
+					m.Nak()
 					return
 				}
 			}
 
+			seq := sequence(m)
 			if err := m.Ack(); err != nil {
-				logger.WithError(err).Errorf("failed to ACK msg: %d", m.Sequence)
+				logger.WithError(err).Errorf("failed to ACK msg: %d", seq)
 				return
 			}
 
-			saveResume <- m.Sequence
+			saveResume <- seq
 		},
-		start,
-		stan.MaxInflight(1),
-		stan.SetManualAckMode(),
-		stan.AckWait(opts.AckWait),
+		startOption,
+		nats.MaxAckPending(1),
+		nats.AckExplicit(),
+		nats.AckWait(opts.AckWait),
 	)
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -156,7 +154,6 @@ func (s NatsSubscriberWithResumer) StartConsumer(ctx context.Context, handler pr
 	stopped := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		sub.Close()
 		close(stopped)
 		close(saveResume)
 	}()
@@ -174,28 +171,32 @@ func (s NatsSubscriberWithResumer) StartConsumer(ctx context.Context, handler pr
 	return stopped, nil
 }
 
-var _ projection.Subscriber = (*NatsSubscriber)(nil)
+type Option func(*Subscriber)
 
-type NatsSubscriber struct {
+func WithMessageCodec(codec sink.Codec) Option {
+	return func(r *Subscriber) {
+		r.messageCodec = codec
+	}
+}
+
+var _ projection.Subscriber = (*Subscriber)(nil)
+
+type Subscriber struct {
 	logger       log.Logger
-	stream       stan.Conn
+	stream       nats.JetStreamContext
 	resumeKey    projection.StreamResume
 	messageCodec sink.Codec
 }
 
-func NewNatsSubscriber(
+func NewSubscriber(
 	ctx context.Context,
 	logger log.Logger,
-	stream stan.Conn,
+	stream nats.JetStreamContext,
 	resumeKey projection.StreamResume,
 	options ...Option,
-) (*NatsSubscriberWithResumer, error) {
-	go func() {
-		<-ctx.Done()
-		stream.Close()
-	}()
+) (*Subscriber, error) {
 
-	s := &NatsSubscriberWithResumer{
+	s := &Subscriber{
 		logger:       logger,
 		stream:       stream,
 		resumeKey:    resumeKey,
@@ -209,27 +210,22 @@ func NewNatsSubscriber(
 	return s, nil
 }
 
-func (s NatsSubscriber) GetStream() stan.Conn {
-	return s.stream
-}
-
-func (s NatsSubscriber) MoveToLastPosition(ctx context.Context) error {
+func (s Subscriber) MoveToLastPosition(ctx context.Context) error {
 	ch := make(chan uint64)
 	groupName := s.resumeKey.String()
 	// this will position the stream at the last position+1
-	sub, err := s.stream.QueueSubscribe(
+	_, err := s.stream.QueueSubscribe(
 		s.resumeKey.Topic(),
 		groupName,
-		func(m *stan.Msg) {
-			ch <- m.Sequence
+		func(m *nats.Msg) {
+			ch <- sequence(m)
 		},
-		stan.DurableName(groupName),
-		stan.StartWithLastReceived(),
+		nats.Durable(groupName),
+		nats.DeliverLast(),
 	)
 	if err != nil {
 		return faults.Wrap(err)
 	}
-	defer sub.Close()
 	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
 	select {
@@ -240,7 +236,7 @@ func (s NatsSubscriber) MoveToLastPosition(ctx context.Context) error {
 	return nil
 }
 
-func (s NatsSubscriber) StartConsumer(ctx context.Context, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) (chan struct{}, error) {
+func (s Subscriber) StartConsumer(ctx context.Context, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) (chan struct{}, error) {
 	logger := s.logger.WithTags(log.Tags{"topic": s.resumeKey.Topic()})
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
@@ -250,13 +246,14 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, handler projection.Ev
 	}
 
 	groupName := s.resumeKey.String()
-	sub, err := s.stream.QueueSubscribe(
+	_, err := s.stream.QueueSubscribe(
 		s.resumeKey.Topic(),
 		groupName,
-		func(m *stan.Msg) {
+		func(m *nats.Msg) {
 			evt, err := s.messageCodec.Decode(m.Data)
 			if err != nil {
 				logger.WithError(err).Errorf("unable to unmarshal event '%s'", string(m.Data))
+				m.Nak()
 				return
 			}
 			if opts.Filter(evt) {
@@ -264,19 +261,20 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, handler projection.Ev
 				err = handler(ctx, evt)
 				if err != nil {
 					logger.WithError(err).Errorf("Error when handling event with ID '%s'", evt.ID)
+					m.Nak()
 					return
 				}
 			}
 
 			if err := m.Ack(); err != nil {
-				logger.WithError(err).Errorf("failed to ACK msg: %d", m.Sequence)
+				logger.WithError(err).Errorf("failed to ACK msg: %d", sequence(m))
 				return
 			}
 		},
-		stan.DurableName(groupName),
-		stan.MaxInflight(1),
-		stan.SetManualAckMode(),
-		stan.AckWait(opts.AckWait),
+		nats.Durable(groupName),
+		nats.MaxAckPending(1),
+		nats.AckExplicit(),
+		nats.AckWait(opts.AckWait),
 	)
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -285,28 +283,27 @@ func (s NatsSubscriber) StartConsumer(ctx context.Context, handler projection.Ev
 	stopped := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		sub.Close()
 		close(stopped)
 	}()
 
 	return stopped, nil
 }
 
-type ProjectionOption func(*NatsProjectionSubscriber)
+type NotificationOption func(*NotificationListener)
 
-func WithProjectionMessageCodec(codec sink.Codec) ProjectionOption {
-	return func(r *NatsProjectionSubscriber) {
+func WithNotificationMessageCodec(codec sink.Codec) NotificationOption {
+	return func(r *NotificationListener) {
 		r.messageCodec = codec
 	}
 }
 
-func WithCancelTimeout(timeout time.Duration) ProjectionOption {
-	return func(r *NatsProjectionSubscriber) {
+func WithCancelTimeout(timeout time.Duration) NotificationOption {
+	return func(r *NotificationListener) {
 		r.cancelTimeout = timeout
 	}
 }
 
-type NatsProjectionSubscriber struct {
+type NotificationListener struct {
 	logger        log.Logger
 	queue         *nats.Conn
 	managerTopic  string
@@ -315,16 +312,37 @@ type NatsProjectionSubscriber struct {
 	cancelTimeout time.Duration
 }
 
-func NewNatsProjectionSubscriber(
+func NewNotificationListener(
 	ctx context.Context,
 	logger log.Logger,
-	queue *nats.Conn,
+	url string,
 	managerTopic string,
-	options ...ProjectionOption,
-) (*NatsProjectionSubscriber, error) {
-	s := &NatsProjectionSubscriber{
+	options ...NotificationOption,
+) (*NotificationListener, error) {
+
+	nc, err := nats.Connect(url)
+	if err != nil {
+		return nil, faults.Errorf("Could not instantiate Nats connection: %w", err)
+	}
+
+	go func() {
+		<-ctx.Done()
+		nc.Close()
+	}()
+
+	return NewNotificationListenerWithConn(ctx, logger, nc, managerTopic, options...)
+}
+
+func NewNotificationListenerWithConn(
+	ctx context.Context,
+	logger log.Logger,
+	conn *nats.Conn,
+	managerTopic string,
+	options ...NotificationOption,
+) (*NotificationListener, error) {
+	s := &NotificationListener{
 		logger:        logger,
-		queue:         queue,
+		queue:         conn,
 		managerTopic:  managerTopic,
 		messageCodec:  sink.JsonCodec{},
 		cancelID:      uuid.New().String(),
@@ -338,11 +356,11 @@ func NewNatsProjectionSubscriber(
 	return s, nil
 }
 
-func (s NatsProjectionSubscriber) GetQueue() *nats.Conn {
+func (s NotificationListener) GetQueue() *nats.Conn {
 	return s.queue
 }
 
-func (s NatsProjectionSubscriber) ListenCancel(ctx context.Context, canceller projection.Canceller) error {
+func (s NotificationListener) ListenCancel(ctx context.Context, canceller projection.Canceller) error {
 	logger := s.logger.WithTags(log.Tags{"topic": s.managerTopic})
 	sub, err := s.queue.Subscribe(
 		s.managerTopic,
@@ -380,7 +398,7 @@ func (s NatsProjectionSubscriber) ListenCancel(ctx context.Context, canceller pr
 	return nil
 }
 
-func (s NatsProjectionSubscriber) PublishCancel(ctx context.Context, projectionName string, listenerCount int) error {
+func (s NotificationListener) PublishCancel(ctx context.Context, projectionName string, listenerCount int) error {
 	s.logger.WithTags(log.Tags{"projection": projectionName}).Info("Cancelling projection")
 
 	payload, err := json.Marshal(projection.Notification{

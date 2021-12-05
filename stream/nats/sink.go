@@ -1,53 +1,68 @@
-package sink
+package nats
 
 import (
 	"context"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/nats-io/stan.go"
+	"github.com/nats-io/nats.go"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/sink"
 )
 
 type NatsSink struct {
 	logger     log.Logger
 	topic      string
-	client     stan.Conn
+	nc         *nats.Conn
+	js         nats.JetStreamContext
 	partitions uint32
-	codec      Codec
+	codec      sink.Codec
 }
 
-// NewNatsSink instantiate PulsarSink
-func NewNatsSink(logger log.Logger, topic string, partitions uint32, stanClusterID, clientID string, options ...stan.Option) (_ *NatsSink, err error) {
-	defer faults.Catch(&err, "NewNatsSink(topic=%s, partitions=%d)", topic, partitions)
+// NewSink instantiate nats sink
+func NewSink(logger log.Logger, topic string, partitions uint32, url string, options ...nats.Option) (_ *NatsSink, err error) {
+	defer faults.Catch(&err, "NewSink(topic=%s, partitions=%d)", topic, partitions)
 
 	p := &NatsSink{
 		logger:     logger,
 		topic:      topic,
 		partitions: partitions,
-		codec:      JsonCodec{},
+		codec:      sink.JsonCodec{},
 	}
 
-	c, err := stan.Connect(stanClusterID, clientID, options...)
+	nc, err := nats.Connect(url, options...)
 	if err != nil {
 		return nil, faults.Errorf("Could not instantiate Nats connection: %w", err)
 	}
-	p.client = c
+	p.nc = nc
+	js, err := nc.JetStream()
+	if err != nil {
+		return nil, faults.Errorf("Could not instantiate Nats jetstream context: %w", err)
+	}
+	p.js = js
+
+	if partitions == 0 {
+		createStream(js, common.TopicWithPartition(topic, 0))
+	} else {
+		for p := uint32(1); p <= partitions; p++ {
+			createStream(js, common.TopicWithPartition(topic, p))
+		}
+	}
+
 	return p, nil
 }
 
-func (p *NatsSink) SetCodec(codec Codec) {
+func (p *NatsSink) SetCodec(codec sink.Codec) {
 	p.codec = codec
 }
 
-// Close releases resources blocking until
 func (p *NatsSink) Close() {
-	if p.client != nil {
-		p.client.Close()
+	if p.nc != nil {
+		p.nc.Close()
 	}
 }
 
@@ -59,20 +74,19 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsou
 	}
 	topic := common.TopicWithPartition(p.topic, partition)
 	ch := make(chan message)
-	sub, err := p.client.Subscribe(
+	_, err := p.js.Subscribe(
 		topic,
-		func(m *stan.Msg) {
+		func(m *nats.Msg) {
 			ch <- message{
-				sequence: m.Sequence,
+				sequence: sequence(m),
 				data:     m.Data,
 			}
 		},
-		stan.StartWithLastReceived(),
+		nats.DeliverLast(),
 	)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	defer sub.Close()
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 
@@ -108,14 +122,31 @@ func (p *NatsSink) Sink(ctx context.Context, e eventsourcing.Event) error {
 	bo.MaxElapsedTime = 10 * time.Second
 
 	err = backoff.Retry(func() error {
-		err := p.client.Publish(topic, b)
-		if err != nil && p.client.NatsConn().IsClosed() {
+		_, err := p.js.Publish(topic, b)
+		if err != nil && p.nc.IsClosed() {
 			return backoff.Permanent(err)
 		}
 		return err
 	}, bo)
 	if err != nil {
 		return faults.Errorf("Failed to send message: %w", err)
+	}
+	return nil
+}
+
+func createStream(js nats.JetStreamContext, streamName string) error {
+	// Check if the ORDERS stream already exists; if not, create it.
+	stream, err := js.StreamInfo(streamName)
+	if err != nil {
+		return err
+	}
+	if stream == nil {
+		_, err = js.AddStream(&nats.StreamConfig{
+			Name: streamName,
+		})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

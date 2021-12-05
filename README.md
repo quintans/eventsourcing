@@ -115,7 +115,7 @@ feederFact := func(partitionLow, partitionHi uint32) store.Feeder {
 
 const name = "forwarder"
 clientID := name + "-" + uuid.New().String()
-sinker, _ := sink.NewNatsSink(logger, cfg.Topic, partitions, "test-cluster", clientID, stan.NatsURL(cfg.NatsURL))
+sinker, _ := nats.NewSink(logger, cfg.Topic, partitions, cfg.NatsURL)
 go func() {
     <-ctx.Done()
     sinker.Close()
