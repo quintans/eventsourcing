@@ -34,32 +34,26 @@ type ResumeTokenUpdater interface {
 }
 
 type NotifierLockRebuilder struct {
-	logger        log.Logger
-	lock          lock.Locker
-	notifier      CancelPublisher
-	subscriber    Subscriber
-	streamResumer StreamResumer
-	tokenStreams  []StreamResume
-	memberLister  worker.Memberlister
+	logger       log.Logger
+	lock         lock.Locker
+	notifier     CancelPublisher
+	subscribers  []Subscriber
+	memberLister worker.Memberlister
 }
 
 func NewNotifierLockRestarter(
 	logger log.Logger,
 	lock lock.Locker,
 	notifier CancelPublisher,
-	subscriber Subscriber,
-	streamResumer StreamResumer,
-	tokenStreams []StreamResume,
+	subscribers []Subscriber,
 	memberLister worker.Memberlister,
 ) *NotifierLockRebuilder {
 	return &NotifierLockRebuilder{
-		logger:        logger,
-		lock:          lock,
-		notifier:      notifier,
-		subscriber:    subscriber,
-		streamResumer: streamResumer,
-		tokenStreams:  tokenStreams,
-		memberLister:  memberLister,
+		logger:       logger,
+		lock:         lock,
+		notifier:     notifier,
+		subscribers:  subscribers,
+		memberLister: memberLister,
 	}
 }
 
@@ -102,7 +96,7 @@ func (r *NotifierLockRebuilder) Rebuild(
 			logger.WithError(err).Error("Error while restarting projection")
 		}
 		logger.Info("Recording BUS tokens")
-		err = r.recordResumeTokens(ctx)
+		err = r.recordSubscriptionsPosition(ctx)
 		if err != nil {
 			logger.WithError(err).Error("Error while restarting projection")
 		}
@@ -124,14 +118,9 @@ func (r *NotifierLockRebuilder) unlock(ctx context.Context, logger log.Logger) {
 	}
 }
 
-func (r *NotifierLockRebuilder) recordResumeTokens(ctx context.Context) error {
-	for _, ts := range r.tokenStreams {
-		token, err := r.subscriber.GetResumeToken(ctx, ts.Topic)
-		if err != nil {
-			return faults.Wrap(err)
-		}
-		err = r.streamResumer.SetStreamResumeToken(ctx, ts.String(), token)
-		if err != nil {
+func (r *NotifierLockRebuilder) recordSubscriptionsPosition(ctx context.Context) error {
+	for _, sub := range r.subscribers {
+		if err := sub.MoveToLastPosition(ctx); err != nil {
 			return faults.Wrap(err)
 		}
 	}

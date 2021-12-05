@@ -1,6 +1,10 @@
 package log
 
-import "github.com/sirupsen/logrus"
+import (
+	"context"
+
+	"github.com/sirupsen/logrus"
+)
 
 type Tags map[string]interface{}
 
@@ -77,4 +81,15 @@ func (l LogrusWrap) WithTags(vals Tags) Logger {
 	return LogrusWrap{
 		logger: l.logger.WithFields(logrus.Fields(vals)),
 	}
+}
+
+func EmbellishFromContext(ctx context.Context, logger Logger, keys ...string) Logger {
+	tags := Tags{}
+	for _, k := range keys {
+		v := ctx.Value(k)
+		if v != nil {
+			tags[k] = v
+		}
+	}
+	return logger.WithTags(tags)
 }

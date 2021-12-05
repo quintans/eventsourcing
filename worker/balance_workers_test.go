@@ -124,7 +124,7 @@ func newBalancer(name string, members *sync.Map) ([]worker.Worker, context.Cance
 	ctx, cancel := context.WithCancel(context.Background())
 	member := NewInMemMemberList(ctx, members)
 	ws := getWorkers(name)
-	balancer := worker.NewBalancer(log.NewLogrus(logrus.StandardLogger()), name, member, ws, 500*time.Millisecond)
+	balancer := worker.NewMembersBalancer(log.NewLogrus(logrus.StandardLogger()), name, member, ws, 500*time.Millisecond)
 	done := balancer.Start(ctx)
 	return ws, cancel, done
 }

@@ -31,7 +31,14 @@ type Worker interface {
 	Stop(context.Context)
 }
 
-type Balancer struct {
+type Balancer interface {
+	Name() string
+	Start(ctx context.Context) <-chan struct{}
+}
+
+var _ Balancer = (*MembersBalancer)(nil)
+
+type MembersBalancer struct {
 	name      string
 	logger    log.Logger
 	member    Memberlister
@@ -39,12 +46,12 @@ type Balancer struct {
 	heartbeat time.Duration
 }
 
-func NewSingleBalancer(logger log.Logger, name string, worker Worker, heartbeat time.Duration) *Balancer {
-	return NewBalancer(logger, name, NewInMemMemberList(), []Worker{worker}, heartbeat)
+func NewSingleBalancer(logger log.Logger, name string, worker Worker, heartbeat time.Duration) *MembersBalancer {
+	return NewMembersBalancer(logger, name, NewInMemMemberList(), []Worker{worker}, heartbeat)
 }
 
-func NewBalancer(logger log.Logger, name string, member Memberlister, workers []Worker, heartbeat time.Duration) *Balancer {
-	return &Balancer{
+func NewMembersBalancer(logger log.Logger, name string, member Memberlister, workers []Worker, heartbeat time.Duration) *MembersBalancer {
+	return &MembersBalancer{
 		name: name,
 		logger: logger.WithTags(log.Tags{
 			"name": name,
@@ -55,11 +62,11 @@ func NewBalancer(logger log.Logger, name string, member Memberlister, workers []
 	}
 }
 
-func (b *Balancer) Name() string {
+func (b *MembersBalancer) Name() string {
 	return b.name
 }
 
-func (b *Balancer) Start(ctx context.Context) <-chan struct{} {
+func (b *MembersBalancer) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(b.heartbeat)
@@ -88,7 +95,7 @@ func (b *Balancer) Start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
-func (b *Balancer) run(ctx context.Context) error {
+func (b *MembersBalancer) run(ctx context.Context) error {
 	members, err := b.member.List(ctx)
 	if err != nil {
 		return err
@@ -144,12 +151,10 @@ func (b *Balancer) run(ctx context.Context) error {
 	}
 
 	locks := b.balance(ctx, workersToAcquire, workersInUse, myRunningWorkers)
-	b.member.Register(ctx, locks)
-
-	return nil
+	return b.member.Register(ctx, locks)
 }
 
-func (b *Balancer) balance(ctx context.Context, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
+func (b *MembersBalancer) balance(ctx context.Context, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
 	running := len(myRunningWorkers)
 	if running == workersToAcquire {
 		return mapToString(myRunningWorkers)

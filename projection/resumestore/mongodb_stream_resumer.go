@@ -8,7 +8,11 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/quintans/eventsourcing/projection"
 )
+
+var _ projection.StreamResumer = (*MongoDBStreamResumer)(nil)
 
 type MongoDBStreamResumerRow struct {
 	ID    string `bson:"_id,omitempty"`
@@ -33,10 +37,10 @@ func NewMongoDBStreamResumer(connString string, dbName string, collection string
 	}, nil
 }
 
-func (m MongoDBStreamResumer) GetStreamResumeToken(ctx context.Context, key string) (string, error) {
+func (m MongoDBStreamResumer) GetStreamResumeToken(ctx context.Context, key projection.StreamResume) (string, error) {
 	opts := options.FindOne()
 	row := MongoDBStreamResumerRow{}
-	if err := m.collection.FindOne(ctx, bson.D{{"_id", key}}, opts).Decode(&row); err != nil {
+	if err := m.collection.FindOne(ctx, bson.D{{"_id", key.String()}}, opts).Decode(&row); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return "", nil
 		}
@@ -46,11 +50,11 @@ func (m MongoDBStreamResumer) GetStreamResumeToken(ctx context.Context, key stri
 	return row.Token, nil
 }
 
-func (m MongoDBStreamResumer) SetStreamResumeToken(ctx context.Context, key string, token string) error {
+func (m MongoDBStreamResumer) SetStreamResumeToken(ctx context.Context, key projection.StreamResume, token string) error {
 	opts := options.Update().SetUpsert(true)
 	_, err := m.collection.UpdateOne(
 		ctx,
-		bson.M{"_id": key},
+		bson.M{"_id": key.String()},
 		bson.M{
 			"$set": bson.M{"token": token},
 		},

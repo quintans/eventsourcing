@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
+
+	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/lock"
@@ -29,16 +32,38 @@ type CancelListener interface {
 }
 
 type StreamResume struct {
-	Topic  string
-	Stream string
+	// topic identifies the topic. eg: account.3
+	topic string
+	// stream identifies a stream for a topic.
+	// The same topic can be consumed by different projections and/or reactors.
+	stream string
+}
+
+func NewStreamResume(topic, stream string) (StreamResume, error) {
+	if topic == "" {
+		faults.New("topic cannot be empty")
+	}
+	if stream == "" {
+		faults.New("stream cannot be empty")
+	}
+
+	return StreamResume{
+		topic:  topic,
+		stream: stream,
+	}, nil
+}
+
+func (ts StreamResume) Topic() string {
+	return ts.topic
 }
 
 func (ts StreamResume) String() string {
-	return ts.Topic + "." + ts.Stream
+	return ts.topic + "." + ts.stream
 }
 
 type ConsumerOptions struct {
-	Filter func(e eventsourcing.Event) bool
+	Filter  func(e eventsourcing.Event) bool
+	AckWait time.Duration
 }
 
 type ConsumerOption func(*ConsumerOptions)
@@ -49,21 +74,31 @@ func WithFilter(filter func(e eventsourcing.Event) bool) ConsumerOption {
 	}
 }
 
+func WithAckWait(ackWait time.Duration) ConsumerOption {
+	return func(o *ConsumerOptions) {
+		o.AckWait = ackWait
+	}
+}
+
+type Consumer interface {
+	StartConsumer(ctx context.Context, handler EventHandlerFunc, options ...ConsumerOption) (chan struct{}, error)
+}
+
 type Subscriber interface {
-	StartConsumer(ctx context.Context, resume StreamResume, handler EventHandlerFunc, options ...ConsumerOption) (chan struct{}, error)
-	GetResumeToken(ctx context.Context, topic string) (string, error)
+	Consumer
+	MoveToLastPosition(ctx context.Context) error
 }
 
 type StreamResumer interface {
-	GetStreamResumeToken(ctx context.Context, key string) (string, error)
-	SetStreamResumeToken(ctx context.Context, key string, token string) error
+	GetStreamResumeToken(ctx context.Context, key StreamResume) (string, error)
+	SetStreamResumeToken(ctx context.Context, key StreamResume, token string) error
 }
 
 type EventHandlerFunc func(ctx context.Context, e eventsourcing.Event) error
 
 type StartStopBalancer struct {
 	logger         log.Logger
-	restartLock    lock.Locker
+	restartLock    lock.WaitForUnlocker
 	cancelListener CancelListener
 	balancer       worker.Balancer
 
@@ -75,7 +110,7 @@ type StartStopBalancer struct {
 // NewStartStopBalancer creates an instance that manages the lifecycle of a balancer that has the capability of being stopped and restarted on demand.
 func NewStartStopBalancer(
 	logger log.Logger,
-	restartLock lock.Locker,
+	restartLock lock.WaitForUnlocker,
 	cancelListener CancelListener,
 	balancer worker.Balancer,
 ) *StartStopBalancer {

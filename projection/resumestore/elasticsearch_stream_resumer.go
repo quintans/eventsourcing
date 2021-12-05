@@ -10,7 +10,11 @@ import (
 	"github.com/elastic/go-elasticsearch/v7"
 	"github.com/elastic/go-elasticsearch/v7/esapi"
 	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing/projection"
 )
+
+var _ projection.StreamResumer = (*ElasticSearchStreamResumer)(nil)
 
 type ElasticGetResponse struct {
 	ID      string      `json:"_id"`
@@ -43,10 +47,10 @@ func NewElasticSearchStreamResumer(addresses []string, index string) (ElasticSea
 	}, nil
 }
 
-func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, key string) (string, error) {
+func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, key projection.StreamResume) (string, error) {
 	req := esapi.GetRequest{
 		Index:      es.index,
-		DocumentID: key,
+		DocumentID: key.String(),
 	}
 	res, err := req.Do(ctx, es.client)
 	if err != nil {
@@ -73,10 +77,10 @@ func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, k
 	return row.Token, nil
 }
 
-func (es ElasticSearchStreamResumer) SetStreamResumeToken(ctx context.Context, key string, token string) error {
+func (es ElasticSearchStreamResumer) SetStreamResumeToken(ctx context.Context, key projection.StreamResume, token string) error {
 	res, err := es.client.Update(
 		es.index,
-		key,
+		key.String(),
 		strings.NewReader(fmt.Sprintf(`{
 		  "doc": {
 			"token": "%s"

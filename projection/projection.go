@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/quintans/faults"
 
@@ -57,46 +58,79 @@ func EventForwarderWorker(ctx context.Context, logger log.Logger, name string, l
 		))
 }
 
-type Consumer interface {
-	StartConsumer(ctx context.Context, resume StreamResume, handler EventHandlerFunc, options ...ConsumerOption) (chan struct{}, error)
+type ConsumerFactory func(context.Context, StreamResume) (Consumer, error)
+
+type dummyLocker struct {
+	done chan struct{}
+	mu   sync.RWMutex
 }
 
-func ReactorConsumerWorkers(ctx context.Context, logger log.Logger, streamName string, lockerFactory LockerFactory, topic string, partitions uint32, consumer Consumer, handler EventHandlerFunc) ([]worker.Worker, []StreamResume) {
+func (d *dummyLocker) Lock(context.Context) (<-chan struct{}, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.done != nil {
+		return d.done, nil
+	}
+	d.done = make(chan struct{})
+	return d.done, nil
+}
+
+func (d *dummyLocker) Unlock(context.Context) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.done != nil {
+		close(d.done)
+	}
+	return nil
+}
+
+func UnmanagedWorkers(ctx context.Context, logger log.Logger, streamName string, topic string, partitions uint32, consumerFactory ConsumerFactory, handler EventHandlerFunc) ([]worker.Worker, error) {
+	lockerFactory := func(lockName string) lock.Locker {
+		return &dummyLocker{}
+	}
+	return ManagedWorkers(ctx, logger, streamName, topic, partitions, lockerFactory, consumerFactory, handler)
+}
+
+func ManagedWorkers(ctx context.Context, logger log.Logger, streamName string, topic string, partitions uint32, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) ([]worker.Worker, error) {
 	if partitions <= 1 {
-		w, r := reactorConsumerWorker(ctx, logger, streamName, lockerFactory, topic, 0, consumer, handler)
-		return []worker.Worker{w}, []StreamResume{r}
+		w, err := createWorker(ctx, logger, streamName, topic, 0, lockerFactory, consumerFactory, handler)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		return []worker.Worker{w}, nil
 	}
 	workers := make([]worker.Worker, partitions)
-	resumes := make([]StreamResume, partitions)
 	for x := uint32(0); x < partitions; x++ {
-		w, r := reactorConsumerWorker(ctx, logger, streamName, lockerFactory, topic, x+1, consumer, handler)
-		resumes[x] = r
-		workers[x] = w
+		var err error
+		workers[x], err = createWorker(ctx, logger, streamName, topic, x+1, lockerFactory, consumerFactory, handler)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
 	}
 
-	return workers, resumes
+	return workers, nil
 }
 
-func ReactorConsumerWorker(ctx context.Context, logger log.Logger, streamName string, lockerFactory LockerFactory, topic string, consumer Consumer, handler EventHandlerFunc) (worker.Worker, StreamResume) {
-	return reactorConsumerWorker(ctx, logger, streamName, lockerFactory, topic, 0, consumer, handler)
+func ManagedWorker(ctx context.Context, logger log.Logger, streamName string, topic string, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
+	return createWorker(ctx, logger, streamName, topic, 0, lockerFactory, consumerFactory, handler)
 }
 
-func reactorConsumerWorker(ctx context.Context, logger log.Logger, streamName string, lockerFactory LockerFactory, topic string, partition uint32, consumer Consumer, handler EventHandlerFunc) (worker.Worker, StreamResume) {
+func createWorker(ctx context.Context, logger log.Logger, streamName string, topic string, partition uint32, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
+	sr, err := NewStreamResume(common.TopicWithPartition(topic, 0), streamName)
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
+	consumer, err := consumerFactory(ctx, sr)
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
 	name := streamName + "-lock-" + strconv.Itoa(int(partition))
-	resume := StreamResume{
-		Topic:  common.TopicWithPartition(topic, partition),
-		Stream: streamName,
-	}
 	worker := worker.NewRunWorker(
 		logger,
 		name,
 		lockerFactory(name),
 		worker.NewTask(func(ctx context.Context) (<-chan struct{}, error) {
-			done, err := consumer.StartConsumer(
-				ctx,
-				resume,
-				handler,
-			)
+			done, err := consumer.StartConsumer(ctx, handler)
 			if err != nil {
 				return nil, faults.Errorf("Unable to start consumer for %s-%d: %w", streamName, partition, err)
 			}
@@ -104,5 +138,5 @@ func reactorConsumerWorker(ctx context.Context, logger log.Logger, streamName st
 			return done, nil
 		}),
 	)
-	return worker, resume
+	return worker, nil
 }

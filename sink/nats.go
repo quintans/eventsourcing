@@ -59,12 +59,16 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsou
 	}
 	topic := common.TopicWithPartition(p.topic, partition)
 	ch := make(chan message)
-	sub, err := p.client.Subscribe(topic, func(m *stan.Msg) {
-		ch <- message{
-			sequence: m.Sequence,
-			data:     m.Data,
-		}
-	}, stan.StartWithLastReceived())
+	sub, err := p.client.Subscribe(
+		topic,
+		func(m *stan.Msg) {
+			ch <- message{
+				sequence: m.Sequence,
+				data:     m.Data,
+			}
+		},
+		stan.StartWithLastReceived(),
+	)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
