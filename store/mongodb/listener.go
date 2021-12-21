@@ -19,7 +19,10 @@ import (
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/worker"
 )
+
+var _ worker.Tasker = (*Feed)(nil)
 
 type Feed struct {
 	logger           log.Logger
@@ -29,6 +32,7 @@ type Feed struct {
 	partitions       uint32
 	partitionsLow    uint32
 	partitionsHi     uint32
+	sinker           sink.Sinker
 }
 
 type FeedOption func(*Feed)
@@ -53,12 +57,13 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(logger log.Logger, connString, database string, opts ...FeedOption) Feed {
+func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) Feed {
 	m := Feed{
 		logger:           logger,
 		dbName:           database,
 		connString:       connString,
 		eventsCollection: "events",
+		sinker:           sinker,
 	}
 
 	for _, o := range opts {
@@ -71,9 +76,10 @@ type ChangeEvent struct {
 	FullDocument Event `bson:"fullDocument,omitempty"`
 }
 
-func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
+func (f Feed) Run(ctx context.Context) error {
+	f.logger.Infof("Starting Feed for '%s.%s'", f.dbName, f.eventsCollection)
 	var lastResumeToken []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, m.partitionsLow, m.partitionsHi, func(message *eventsourcing.Event) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
 		if bytes.Compare(message.ResumeToken, lastResumeToken) > 0 {
 			lastResumeToken = message.ResumeToken
 		}
@@ -84,10 +90,10 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}
 
 	ctx2, cancel := context.WithTimeout(ctx, 10*time.Second)
-	client, err := mongo.Connect(ctx2, options.Client().ApplyURI(m.connString))
+	client, err := mongo.Connect(ctx2, options.Client().ApplyURI(f.connString))
 	cancel()
 	if err != nil {
-		return faults.Errorf("Unable to connect to '%s': %w", m.connString, err)
+		return faults.Errorf("Unable to connect to '%s': %w", f.connString, err)
 	}
 	defer func() {
 		client.Disconnect(context.Background())
@@ -96,23 +102,23 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	match := bson.D{
 		{"operationType", "insert"},
 	}
-	if m.partitions > 1 {
-		match = append(match, partitionFilter("fullDocument.aggregate_id_hash", m.partitions, m.partitionsLow, m.partitionsHi))
+	if f.partitions > 1 {
+		match = append(match, partitionFilter("fullDocument.aggregate_id_hash", f.partitions, f.partitionsLow, f.partitionsHi))
 	}
 
 	matchPipeline := bson.D{{Key: "$match", Value: match}}
 	pipeline := mongo.Pipeline{matchPipeline}
 
-	eventsCollection := client.Database(m.dbName).Collection(m.eventsCollection)
+	eventsCollection := client.Database(f.dbName).Collection(f.eventsCollection)
 	var eventsStream *mongo.ChangeStream
 	if len(lastResumeToken) != 0 {
-		m.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%X'", m.partitionsLow, m.partitionsHi, lastResumeToken)
+		f.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%X'", f.partitionsLow, f.partitionsHi, lastResumeToken)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
 		if err != nil {
 			return faults.Wrap(err)
 		}
 	} else {
-		m.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", m.partitionsLow, m.partitionsHi)
+		f.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", f.partitionsLow, f.partitionsHi)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
 		if err != nil {
 			return faults.Wrap(err)
@@ -152,7 +158,7 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 				Metadata:         encoding.JsonOfMap(eventDoc.Metadata),
 				CreatedAt:        eventDoc.CreatedAt,
 			}
-			err = sinker.Sink(ctx, event)
+			err = f.sinker.Sink(ctx, event)
 			if err != nil {
 				return backoff.Permanent(err)
 			}
@@ -166,3 +172,5 @@ func (m Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		return err
 	}, b)
 }
+
+func (Feed) Cancel(ctx context.Context, hard bool) {}

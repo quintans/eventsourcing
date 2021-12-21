@@ -163,13 +163,13 @@ func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slot
 	var wg sync.WaitGroup
 	for k, v := range slots {
 		wg.Add(1)
-		listener, err := postgresql.NewFeed(dbConfig.ReplicationUrl(), k+1, len(slots), postgresql.WithLogRepPartitions(partitions, v.low, v.high))
+		listener, err := postgresql.NewFeed(dbConfig.ReplicationUrl(), k+1, len(slots), sinker, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
 		if err != nil {
 			return nil, err
 		}
 		go func() {
 			wg.Done()
-			err := listener.Feed(ctx, sinker)
+			err := listener.Run(ctx)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				errCh <- err
 			} else {

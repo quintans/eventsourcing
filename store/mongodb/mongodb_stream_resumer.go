@@ -12,7 +12,7 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 )
 
-var _ projection.StreamResumer = (*StreamResumer)(nil)
+var _ projection.ResumeStore = (*StreamResumer)(nil)
 
 type StreamResumerRow struct {
 	ID    string `bson:"_id,omitempty"`
@@ -37,7 +37,7 @@ func NewStreamResumer(connString string, dbName string, collection string) (Stre
 	}, nil
 }
 
-func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.StreamResume) (string, error) {
+func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
 	opts := options.FindOne()
 	row := StreamResumerRow{}
 	if err := m.collection.FindOne(ctx, bson.D{{"_id", key.String()}}, opts).Decode(&row); err != nil {
@@ -50,7 +50,7 @@ func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.
 	return row.Token, nil
 }
 
-func (m StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.StreamResume, token string) error {
+func (m StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token string) error {
 	opts := options.Update().SetUpsert(true)
 	_, err := m.collection.UpdateOne(
 		ctx,

@@ -9,6 +9,7 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
+	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 )
@@ -107,7 +108,7 @@ func New(logger log.Logger, repository player.Repository, options ...Option) Pol
 	return p
 }
 
-func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler player.EventHandlerFunc) error {
+func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler projection.EventHandlerFunc) error {
 	var afterMsgID eventid.EventID
 	var err error
 	switch startOption.StartFrom() {
@@ -123,7 +124,7 @@ func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handle
 	return p.forward(ctx, afterMsgID, handler)
 }
 
-func (p Poller) forward(ctx context.Context, after eventid.EventID, handler player.EventHandlerFunc) error {
+func (p Poller) forward(ctx context.Context, after eventid.EventID, handler projection.EventHandlerFunc) error {
 	wait := p.pollInterval
 	filters := []store.FilterOption{
 		store.WithAggregateTypes(p.aggregateTypes...),

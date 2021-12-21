@@ -60,10 +60,10 @@ func TestPgListener(t *testing.T) {
 func feeding(ctx context.Context, dbConfig DBConfig, repository player.Repository, sinker sink.Sinker) chan error {
 	errCh := make(chan error, 1)
 	done := make(chan struct{})
-	listener := postgresql.NewFeedListenNotify(logger, dbConfig.ReplicationUrl(), repository, "events_channel")
+	listener := postgresql.NewFeedListenNotify(logger, dbConfig.ReplicationUrl(), repository, "events_channel", sinker)
 	go func() {
 		close(done)
-		err := listener.Feed(ctx, sinker)
+		err := listener.Run(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			errCh <- err
 		} else {

@@ -93,6 +93,7 @@ func ProjectorOption(fn Projector) StoreOption {
 type EsRepository struct {
 	db        *sqlx.DB
 	projector Projector
+	entropy   *ulid.MonotonicEntropy
 }
 
 func NewStore(connString string, options ...StoreOption) (*EsRepository, error) {
@@ -103,7 +104,8 @@ func NewStore(connString string, options ...StoreOption) (*EsRepository, error) 
 
 	dbx := sqlx.NewDb(db, driverName)
 	r := &EsRepository{
-		db: dbx,
+		db:      dbx,
+		entropy: eventid.EntropyFactory(),
 	}
 
 	for _, o := range options {
@@ -119,12 +121,11 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	version := eRec.Version
 	var id eventid.EventID
 	err := r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
-		entropy := eventid.EntropyFactory(eRec.CreatedAt)
 		for _, e := range eRec.Details {
 			version++
 			hash := common.Hash(eRec.AggregateID)
 			var err error
-			id, err = r.saveEvent(c, tx, entropy, Event{
+			id, err = r.saveEvent(c, tx, Event{
 				AggregateID:      eRec.AggregateID,
 				AggregateIDHash:  int32ring(hash),
 				AggregateVersion: version,
@@ -151,8 +152,8 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	return id, version, nil
 }
 
-func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, entropy *ulid.MonotonicEntropy, event Event) (eventid.EventID, error) {
-	id, err := eventid.New(event.CreatedAt, entropy)
+func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) (eventid.EventID, error) {
+	id, err := eventid.New(event.CreatedAt, r.entropy)
 	if err != nil {
 		return eventid.Zero, faults.Wrap(err)
 	}
@@ -556,12 +557,11 @@ func (r *EsRepository) saveMigration(
 	revision int,
 ) error {
 	version := last.AggregateVersion
-	entropy := eventid.EntropyFactory(time.Now().UTC())
 
 	return r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
 		// invalidate event
 		version++
-		_, err := r.saveEvent(c, tx, entropy, Event{
+		_, err := r.saveEvent(c, tx, Event{
 			AggregateID:      last.AggregateID,
 			AggregateIDHash:  int32ring(last.AggregateIDHash),
 			AggregateVersion: version,
@@ -608,7 +608,7 @@ func (r *EsRepository) saveMigration(
 				Metadata:         mig.Metadata,
 				CreatedAt:        time.Now().UTC(),
 			}
-			lastID, err = r.saveEvent(c, tx, entropy, event)
+			lastID, err = r.saveEvent(c, tx, event)
 			if err != nil {
 				return err
 			}

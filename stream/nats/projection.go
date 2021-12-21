@@ -12,82 +12,134 @@ import (
 	"github.com/quintans/eventsourcing/worker"
 )
 
-func NewProjection(
+type (
+	WaitLockerFactory func(string) lock.WaitLocker
+)
+
+type ProjectionHandler struct {
+	topic      string
+	partitions uint32
+	handler    projection.EventHandlerFunc
+}
+
+type Projector struct {
+	logger            log.Logger
+	nc                *nats.Conn
+	stream            nats.JetStreamContext
+	waitLockerFactory WaitLockerFactory
+	memberlist        worker.Memberlister
+	resumeStore       projection.ResumeStore
+	projectionName    string
+	handlers          []ProjectionHandler
+	subscribers       []projection.Subscriber
+}
+
+func NewProjector(
 	ctx context.Context,
 	logger log.Logger,
 	url string,
-	locker lock.Locker,
-	unlocker lock.WaitForUnlocker,
+	lockerFactory WaitLockerFactory,
 	memberlist worker.Memberlister,
+	resumeStore projection.ResumeStore,
 	projectionName string,
-	topic string,
-	partitions uint32,
-	handler projection.EventHandlerFunc,
-) (*projection.NotifierLockRebuilder, *projection.StartStopBalancer, error) {
+) (*Projector, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
-		return nil, nil, faults.Errorf("Could not instantiate NATS connection: %w", err)
+		return nil, faults.Errorf("Could not instantiate NATS connection: %w", err)
+	}
+	p, err := NewProjectorWithConn(ctx, logger, nc, lockerFactory, memberlist, resumeStore, projectionName)
+	if err != nil {
+		return nil, err
 	}
 	go func() {
 		<-ctx.Done()
+		p.Shutdown(false)
 		nc.Close()
 	}()
 
-	return NewProjectionWithConn(ctx, logger, nc, locker, unlocker, memberlist, projectionName, topic, partitions, handler)
+	return p, nil
 }
 
-func NewProjectionWithConn(
+func NewProjectorWithConn(
 	ctx context.Context,
 	logger log.Logger,
-	pubsub *nats.Conn,
-	locker lock.Locker,
-	unlocker lock.WaitForUnlocker,
+	nc *nats.Conn,
+	lockerFactory WaitLockerFactory,
 	memberlist worker.Memberlister,
+	resumeStore projection.ResumeStore,
 	projectionName string,
-	topic string,
-	partitions uint32,
-	handler projection.EventHandlerFunc,
-) (*projection.NotifierLockRebuilder, *projection.StartStopBalancer, error) {
-	stream, err := pubsub.JetStream()
+) (*Projector, error) {
+	stream, err := nc.JetStream()
 	if err != nil {
-		return nil, nil, faults.Wrap(err)
+		return nil, faults.Wrap(err)
 	}
-	var subscribers []projection.Subscriber
-	consumerFactory := func(ctx context.Context, resume projection.StreamResume) (projection.Consumer, error) {
-		sub, err := NewSubscriber(ctx, logger, stream, resume)
-		if err != nil {
-			return nil, faults.Wrap(err)
-		}
-		subscribers = append(subscribers, sub)
+
+	return &Projector{
+		nc:                nc,
+		stream:            stream,
+		logger:            logger,
+		waitLockerFactory: lockerFactory,
+		memberlist:        memberlist,
+		projectionName:    projectionName,
+		resumeStore:       resumeStore,
+	}, nil
+}
+
+func (p *Projector) AddTopicHandler(topic string, partitions uint32, handler projection.EventHandlerFunc) {
+	p.handlers = append(p.handlers, ProjectionHandler{
+		topic:      topic,
+		partitions: partitions,
+		handler:    handler,
+	})
+}
+
+func (p *Projector) Projection(ctx context.Context) (*projection.NotifierLockRebuilder, *projection.StartStopBalancer, error) {
+	if len(p.handlers) == 0 {
+		return nil, nil, faults.Errorf("no handlers defined for projector %s", p.projectionName)
+	}
+	consumerFactory := func(ctx context.Context, resume projection.ResumeKey) (projection.Consumer, error) {
+		sub := NewSubscriber(p.logger, p.stream, p.resumeStore, resume)
+		p.subscribers = append(p.subscribers, sub)
 		return sub, nil
 	}
 
-	// create workers according to the topic that we want to listen
-	workers, err := projection.UnmanagedWorkers(ctx, logger, projectionName, topic, partitions, consumerFactory, handler)
-	if err != nil {
-		return nil, nil, faults.Wrap(err)
+	var workers []worker.Worker
+	for _, h := range p.handlers {
+		// create workers according to the topic that we want to listen
+		w, err := projection.UnmanagedWorkers(ctx, p.logger, p.projectionName, h.topic, h.partitions, consumerFactory, h.handler)
+		if err != nil {
+			return nil, nil, faults.Wrap(err)
+		}
+		workers = append(workers, w...)
 	}
 
-	balancer := worker.NewNoBalancer(logger, projectionName, memberlist, workers)
+	balancer := worker.NewNoBalancer(p.logger, p.projectionName, p.memberlist, workers)
 
-	natsCanceller, err := NewNotificationListenerWithConn(ctx, logger, pubsub, projectionName+"_notifications")
+	natsCanceller, err := NewNotificationListenerWithConn(ctx, p.logger, p.nc, p.projectionName+"_notifications")
 	if err != nil {
 		return nil, nil, faults.Errorf("Error creating NATS canceller subscriber: %w", err)
 	}
-	startStop := projection.NewStartStopBalancer(logger, unlocker, natsCanceller, balancer)
+	locker := p.waitLockerFactory(p.projectionName + "-freeze")
+	startStop := projection.NewStartStopBalancer(p.logger, locker, natsCanceller, balancer)
 
 	rebuilder := projection.NewNotifierLockRestarter(
-		logger,
+		p.logger,
 		locker,
 		natsCanceller,
-		subscribers,
-		memberlist,
+		p.subscribers,
+		p.memberlist,
 	)
 
 	return rebuilder, startStop, nil
 }
 
-// NewReactorWithConn creates workers that listen to events coming through the event bus,
+func (p *Projector) Shutdown(hard bool) {
+	for _, c := range p.subscribers {
+		c.StopConsumer(context.Background(), hard)
+	}
+}
+
+// NewReactor creates workers that listen to events coming through the event bus,
 // forwarding them to an handler. This is the same approache used for projections
 // but where we don't care about replays, usually for the write side of things.
 // The number of workers will be equal to the number of partitions.
@@ -134,8 +186,8 @@ func NewReactorWithConn(
 	partitions uint32,
 	handler projection.EventHandlerFunc,
 ) (<-chan struct{}, error) {
-	consumerFactory := func(ctx context.Context, resumeKey projection.StreamResume) (projection.Consumer, error) {
-		return NewSubscriber(ctx, logger, stream, resumeKey)
+	consumerFactory := func(_ context.Context, resumeKey projection.ResumeKey) (projection.Consumer, error) {
+		return NewReactorSubscriber(logger, stream, resumeKey), nil
 	}
 
 	workers, err := projection.UnmanagedWorkers(ctx, logger, projectionName, topic, partitions, consumerFactory, handler)
@@ -146,7 +198,7 @@ func NewReactorWithConn(
 	go func() {
 		<-ctx.Done()
 		for _, w := range workers {
-			w.Stop(context.Background())
+			w.Stop(context.Background(), false)
 		}
 		close(done)
 	}()

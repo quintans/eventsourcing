@@ -25,9 +25,12 @@ import (
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/worker"
 )
 
 const resumeTokenSep = ":"
+
+var _ worker.Tasker = (*Feed)(nil)
 
 type Feed struct {
 	logger                log.Logger
@@ -38,6 +41,7 @@ type Feed struct {
 	partitionsHi          uint32
 	flavour               string
 	backoffMaxElapsedTime time.Duration
+	sinker                sink.Sinker
 }
 
 type FeedOption func(*Feed)
@@ -79,13 +83,14 @@ type DBConfig struct {
 	Password string
 }
 
-func NewFeed(logger log.Logger, config DBConfig, opts ...FeedOption) Feed {
+func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...FeedOption) Feed {
 	feed := Feed{
 		logger:                logger,
 		config:                config,
 		eventsTable:           "events",
 		flavour:               "mariadb",
 		backoffMaxElapsedTime: 10 * time.Second,
+		sinker:                sinker,
 	}
 	for _, o := range opts {
 		o(&feed)
@@ -94,10 +99,11 @@ func NewFeed(logger log.Logger, config DBConfig, opts ...FeedOption) Feed {
 	return feed
 }
 
-func (f Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
+func (f Feed) Run(ctx context.Context) error {
+	f.logger.Infof("Starting Feed for '%s'", f.eventsTable)
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
 		p, err := parse(string(message.ResumeToken))
 		if err != nil {
 			return faults.Wrap(err)
@@ -134,7 +140,7 @@ func (f Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 
 	blh := &binlogHandler{
 		logger:          f.logger,
-		sinker:          sinker,
+		sinker:          f.sinker,
 		lastResumeToken: lastResumeToken,
 		partitions:      f.partitions,
 		partitionsLow:   f.partitionsLow,
@@ -169,6 +175,8 @@ func (f Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 		return nil
 	}, b)
 }
+
+func (Feed) Cancel(ctx context.Context, hard bool) {}
 
 func (f Feed) newCanal() (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()

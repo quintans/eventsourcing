@@ -2,8 +2,10 @@ package projection
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/quintans/faults"
+	"github.com/teris-io/shortid"
 
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
@@ -48,6 +50,9 @@ func NewNotifierLockRestarter(
 	subscribers []Subscriber,
 	memberLister worker.Memberlister,
 ) *NotifierLockRebuilder {
+	logger = logger.WithTags(log.Tags{
+		"id": shortid.MustGenerate(),
+	})
 	return &NotifierLockRebuilder{
 		logger:       logger,
 		lock:         lock,
@@ -74,11 +79,11 @@ func (r *NotifierLockRebuilder) Rebuild(
 		return faults.Errorf("failed to acquire rebuild lock for projection %s: %w", projection, err)
 	}
 
-	logger.Info("Signalling to STOP projection listener")
 	members, err := r.memberLister.List(ctx)
 	if err != nil {
 		return faults.Errorf("failed to members list for projection %s: %w", projection, err)
 	}
+	logger.Infof("Signalling '%d' members to STOP projection listener", len(members))
 	err = r.notifier.PublishCancel(ctx, projection, len(members))
 	if err != nil {
 		logger.WithError(err).Error("Error while freezing projection")
@@ -93,17 +98,27 @@ func (r *NotifierLockRebuilder) Rebuild(
 		logger.Info("Before recording BUS tokens")
 		afterEventID, err := beforeRecordingTokens(ctx)
 		if err != nil {
-			logger.WithError(err).Error("Error while restarting projection")
+			logger.
+				WithTags(log.Tags{
+					"error": fmt.Sprintf("%+v", err),
+				}).Error("Error while restarting projection before recording BUS tokens")
 		}
-		logger.Info("Recording BUS tokens")
-		err = r.recordSubscriptionsPosition(ctx)
+		logger.Info("Moving subscriptions to last position")
+		err = r.recordResumeTokens(ctx)
 		if err != nil {
-			logger.WithError(err).Error("Error while restarting projection")
+			logger.
+				WithTags(log.Tags{
+					"error": fmt.Sprintf("%+v", err),
+				}).
+				Errorf("Error while restarting projection when moving subscriptions to last position")
 		}
 		logger.Infof("After recording BUS tokens. Last mile after %s", afterEventID)
 		_, err = afterRecordingTokens(ctx, afterEventID)
 		if err != nil {
-			logger.WithError(err).Error("Error while restarting projection")
+			logger.
+				WithTags(log.Tags{
+					"error": fmt.Sprintf("%+v", err),
+				}).Error("Error while restarting projection after recording BUS tokens")
 		}
 	}()
 
@@ -118,9 +133,9 @@ func (r *NotifierLockRebuilder) unlock(ctx context.Context, logger log.Logger) {
 	}
 }
 
-func (r *NotifierLockRebuilder) recordSubscriptionsPosition(ctx context.Context) error {
+func (r *NotifierLockRebuilder) recordResumeTokens(ctx context.Context) error {
 	for _, sub := range r.subscribers {
-		if err := sub.MoveToLastPosition(ctx); err != nil {
+		if err := sub.RecordLastResume(ctx); err != nil {
 			return faults.Wrap(err)
 		}
 	}

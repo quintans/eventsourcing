@@ -17,7 +17,7 @@ import (
 // Canceller is the interface for cancelling a running projection
 type Canceller interface {
 	Name() string
-	Cancel()
+	Cancel(ctx context.Context, hard bool)
 }
 
 var ErrCancelProjectionTimeout = errors.New("cancel projection timeout")
@@ -31,7 +31,8 @@ type CancelListener interface {
 	ListenCancel(ctx context.Context, restarter Canceller) error
 }
 
-type StreamResume struct {
+// ResumeKey is used to retrieve the last event id to replay messages directly from the event store.
+type ResumeKey struct {
 	// topic identifies the topic. eg: account.3
 	topic string
 	// stream identifies a stream for a topic.
@@ -39,7 +40,7 @@ type StreamResume struct {
 	stream string
 }
 
-func NewStreamResume(topic, stream string) (StreamResume, error) {
+func NewStreamResume(topic, stream string) (ResumeKey, error) {
 	if topic == "" {
 		faults.New("topic cannot be empty")
 	}
@@ -47,18 +48,18 @@ func NewStreamResume(topic, stream string) (StreamResume, error) {
 		faults.New("stream cannot be empty")
 	}
 
-	return StreamResume{
+	return ResumeKey{
 		topic:  topic,
 		stream: stream,
 	}, nil
 }
 
-func (ts StreamResume) Topic() string {
+func (ts ResumeKey) Topic() string {
 	return ts.topic
 }
 
-func (ts StreamResume) String() string {
-	return ts.topic + "." + ts.stream
+func (ts ResumeKey) String() string {
+	return ts.topic + ":" + ts.stream
 }
 
 type ConsumerOptions struct {
@@ -81,20 +82,23 @@ func WithAckWait(ackWait time.Duration) ConsumerOption {
 }
 
 type Consumer interface {
-	StartConsumer(ctx context.Context, handler EventHandlerFunc, options ...ConsumerOption) (chan struct{}, error)
+	StartConsumer(ctx context.Context, handler EventHandlerFunc, options ...ConsumerOption) error
+	StopConsumer(ctx context.Context, hard bool)
 }
 
 type Subscriber interface {
 	Consumer
-	MoveToLastPosition(ctx context.Context) error
+	RecordLastResume(ctx context.Context) error
 }
 
-type StreamResumer interface {
-	GetStreamResumeToken(ctx context.Context, key StreamResume) (string, error)
-	SetStreamResumeToken(ctx context.Context, key StreamResume, token string) error
+type ResumeStore interface {
+	GetStreamResumeToken(ctx context.Context, key ResumeKey) (string, error)
+	SetStreamResumeToken(ctx context.Context, key ResumeKey, token string) error
 }
 
 type EventHandlerFunc func(ctx context.Context, e eventsourcing.Event) error
+
+var _ Canceller = (*StartStopBalancer)(nil)
 
 type StartStopBalancer struct {
 	logger         log.Logger
@@ -102,9 +106,8 @@ type StartStopBalancer struct {
 	cancelListener CancelListener
 	balancer       worker.Balancer
 
-	cancel context.CancelFunc
-	done   <-chan struct{}
-	mu     sync.RWMutex
+	done chan struct{}
+	mu   sync.RWMutex
 }
 
 // NewStartStopBalancer creates an instance that manages the lifecycle of a balancer that has the capability of being stopped and restarted on demand.
@@ -136,45 +139,44 @@ func (b *StartStopBalancer) Run(ctx context.Context) error {
 	for {
 		b.logger.Info("Waiting for Unlock")
 		b.restartLock.WaitForUnlock(ctx)
-		ctx2, cancel := context.WithCancel(ctx)
 		b.mu.Lock()
-		b.cancel = cancel
+		b.done = make(chan struct{})
 		b.mu.Unlock()
+		b.balancer.Start(ctx)
 
-		err := b.startAndWait(ctx2)
+		err := b.startAndWait(ctx, b.done)
 		if err != nil {
-			cancel()
+			b.Cancel(context.Background(), false)
 			return err
 		}
 
 		select {
 		case <-ctx.Done():
+			b.Cancel(context.Background(), false)
 			return nil
 		default:
 		}
 	}
 }
 
-func (b *StartStopBalancer) startAndWait(ctx context.Context) error {
-	b.mu.Lock()
-	b.done = b.balancer.Start(ctx)
-	b.mu.Unlock()
-
+func (b *StartStopBalancer) startAndWait(ctx context.Context, done chan struct{}) error {
 	err := b.cancelListener.ListenCancel(ctx, b)
 	if err != nil {
 		return err
 	}
 
 	// wait for the closing subscriber
-	<-b.done
+	<-done
 
 	return nil
 }
 
-func (b *StartStopBalancer) Cancel() {
+func (b *StartStopBalancer) Cancel(ctx context.Context, hard bool) {
 	b.mu.Lock()
-	if b.cancel != nil {
-		b.cancel()
+	if b.done != nil {
+		b.balancer.Stop(ctx, hard)
+		close(b.done)
+		b.done = nil
 	}
 	b.mu.Unlock()
 }

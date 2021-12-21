@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"sync"
 
 	"github.com/quintans/eventsourcing/log"
 )
@@ -13,10 +14,12 @@ type NoBalancer struct {
 	logger  log.Logger
 	member  Memberlister
 	workers []Worker
+	mu      sync.Mutex
+	done    chan struct{}
 }
 
-func NewNoBalancer(logger log.Logger, name string, member Memberlister, workers []Worker) *MembersBalancer {
-	return &MembersBalancer{
+func NewNoBalancer(logger log.Logger, name string, member Memberlister, workers []Worker) *NoBalancer {
+	return &NoBalancer{
 		name: name,
 		logger: logger.WithTags(log.Tags{
 			"name": name,
@@ -30,19 +33,22 @@ func (b *NoBalancer) Name() string {
 	return b.name
 }
 
-func (b *NoBalancer) Start(ctx context.Context) <-chan struct{} {
+func (b *NoBalancer) Start(ctx context.Context) {
 	done := make(chan struct{})
+	b.mu.Lock()
+	b.done = done
+	b.mu.Unlock()
 	go func() {
 		err := b.run(ctx)
 		if err != nil {
-			b.logger.Warnf("Error while balancing partitions: %v", err)
+			b.logger.Warnf("Error while balancing %s's partitions: %v", b.name, err)
 		}
-		<-ctx.Done()
-		b.shutdown()
-		close(done)
-		return
+		select {
+		case <-done:
+		case <-ctx.Done():
+			b.Stop(context.Background(), false)
+		}
 	}()
-	return done
 }
 
 func (b *NoBalancer) run(ctx context.Context) error {
@@ -54,14 +60,19 @@ func (b *NoBalancer) run(ctx context.Context) error {
 	return b.member.Register(ctx, []string{})
 }
 
-func (b *NoBalancer) shutdown() error {
+func (b *NoBalancer) Stop(ctx context.Context, hard bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.done == nil {
+		return
+	}
 	// shutdown
 	for _, w := range b.workers {
-		w.Stop(context.Background())
+		w.Stop(ctx, hard)
 	}
 	if err := b.member.Unregister(context.Background()); err != nil {
-		b.logger.Warnf("Error while cleaning register on shutdown: %v", err)
+		b.logger.Warnf("Error while cleaning register for %s on shutdown: %v", b.name, err)
 	}
-
-	return nil
+	close(b.done)
+	b.done = nil
 }

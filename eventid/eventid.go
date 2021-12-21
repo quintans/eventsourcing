@@ -25,7 +25,8 @@ type EventID struct {
 	u ulid.ULID
 }
 
-func EntropyFactory(t time.Time) *ulid.MonotonicEntropy {
+func EntropyFactory() *ulid.MonotonicEntropy {
+	t := time.Now().UTC()
 	return ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
 }
 
@@ -35,6 +36,14 @@ func New(t time.Time, entropy io.Reader) (EventID, error) {
 		return Zero, err
 	}
 	return EventID{u: id}, nil
+}
+
+func MustNew(t time.Time, entropy io.Reader) EventID {
+	id, err := New(t, entropy)
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 func TimeOnly(t time.Time) EventID {

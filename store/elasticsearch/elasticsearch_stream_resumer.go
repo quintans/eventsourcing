@@ -14,7 +14,7 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 )
 
-var _ projection.StreamResumer = (*ElasticSearchStreamResumer)(nil)
+var _ projection.ResumeStore = (*ElasticSearchStreamResumer)(nil)
 
 type ElasticGetResponse struct {
 	ID      string      `json:"_id"`
@@ -47,7 +47,7 @@ func NewElasticSearchStreamResumer(addresses []string, index string) (ElasticSea
 	}, nil
 }
 
-func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, key projection.StreamResume) (string, error) {
+func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
 	req := esapi.GetRequest{
 		Index:      es.index,
 		DocumentID: key.String(),
@@ -77,7 +77,7 @@ func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, k
 	return row.Token, nil
 }
 
-func (es ElasticSearchStreamResumer) SetStreamResumeToken(ctx context.Context, key projection.StreamResume, token string) error {
+func (es ElasticSearchStreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token string) error {
 	res, err := es.client.Update(
 		es.index,
 		key.String(),

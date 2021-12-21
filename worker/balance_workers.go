@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/quintans/eventsourcing/log"
@@ -28,12 +29,13 @@ type Worker interface {
 	Name() string
 	IsRunning() bool
 	Start(context.Context) bool
-	Stop(context.Context)
+	Stop(ctx context.Context, hard bool)
 }
 
 type Balancer interface {
 	Name() string
-	Start(ctx context.Context) <-chan struct{}
+	Start(ctx context.Context)
+	Stop(ctx context.Context, hard bool)
 }
 
 var _ Balancer = (*MembersBalancer)(nil)
@@ -44,6 +46,9 @@ type MembersBalancer struct {
 	member    Memberlister
 	workers   []Worker
 	heartbeat time.Duration
+
+	mu   sync.Mutex
+	done chan struct{}
 }
 
 func NewSingleBalancer(logger log.Logger, name string, worker Worker, heartbeat time.Duration) *MembersBalancer {
@@ -66,33 +71,47 @@ func (b *MembersBalancer) Name() string {
 	return b.name
 }
 
-func (b *MembersBalancer) Start(ctx context.Context) <-chan struct{} {
+func (b *MembersBalancer) Start(ctx context.Context) {
 	done := make(chan struct{})
+	b.mu.Lock()
+	b.done = done
+	b.mu.Unlock()
 	go func() {
 		ticker := time.NewTicker(b.heartbeat)
 		defer ticker.Stop()
 		for {
 			err := b.run(ctx)
 			if err != nil {
-				b.logger.Warnf("Error while balancing partitions: %v", err)
+				b.logger.Warnf("Error while balancing %s's partitions: %v", b.name, err)
 			}
 			select {
+			case <-done:
+				return
 			case <-ctx.Done():
 				// shutdown
-				for _, w := range b.workers {
-					w.Stop(context.Background())
-				}
-				err = b.member.Unregister(context.Background())
-				if err != nil {
-					b.logger.Warnf("Error while cleaning register on shutdown: %v", err)
-				}
-				close(done)
+				b.Stop(context.Background(), false)
 				return
 			case <-ticker.C:
 			}
 		}
 	}()
-	return done
+}
+
+func (b *MembersBalancer) Stop(ctx context.Context, hard bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.done == nil {
+		return
+	}
+	for _, w := range b.workers {
+		w.Stop(ctx, hard)
+	}
+	err := b.member.Unregister(context.Background())
+	if err != nil {
+		b.logger.Warnf("Error while cleaning register for %s on shutdown: %v", b.name, err)
+	}
+	close(b.done)
+	b.done = nil
 }
 
 func (b *MembersBalancer) run(ctx context.Context) error {
@@ -166,7 +185,7 @@ func (b *MembersBalancer) balance(ctx context.Context, workersToAcquire int, wor
 				continue
 			}
 
-			v.Stop(ctx)
+			v.Stop(ctx, false)
 			delete(myRunningWorkers, v.Name())
 			running--
 		} else {

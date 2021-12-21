@@ -13,7 +13,7 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.15.1
 	github.com/golang/protobuf v1.5.2
 	github.com/google/uuid v1.3.0
-	github.com/hashicorp/consul/api v1.8.0
+	github.com/hashicorp/consul/api v1.8.1
 	github.com/hashicorp/go-multierror v1.1.0
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
 	github.com/jackc/pgconn v1.8.1
@@ -27,8 +27,10 @@ require (
 	github.com/nats-io/nats.go v1.13.0
 	github.com/oklog/ulid/v2 v2.0.2
 	github.com/quintans/faults v1.4.0
+	github.com/quintans/toolkit v0.1.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.7.0
+	github.com/teris-io/shortid v0.0.0-20201117134242-e59966efd125 // indirect
 	github.com/testcontainers/testcontainers-go v0.12.0
 	go.mongodb.org/mongo-driver v1.7.1
 	google.golang.org/grpc v1.41.0

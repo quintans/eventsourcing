@@ -3,7 +3,6 @@ package projection
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
 
 	"github.com/quintans/faults"
@@ -11,54 +10,41 @@ import (
 	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/worker"
 )
 
 type LockerFactory func(lockName string) lock.Locker
 
-type FeederFactory func(partitionLow, partitionHi uint32) store.Feeder
+type TaskerFactory func(partitionLow, partitionHi uint32) worker.Tasker
 
 // EventForwarderWorkers create workers responsible to forward events to their managed topic partition
 // each worker is responsible to forward a range of partitions
-func EventForwarderWorkers(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, feederFactory FeederFactory, sinker sink.Sinker, partitionSlots []worker.PartitionSlot) []worker.Worker {
+func EventForwarderWorkers(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, taskerFactory TaskerFactory, partitionSlots []worker.PartitionSlot) []worker.Worker {
 	workers := make([]worker.Worker, len(partitionSlots))
 	for i, v := range partitionSlots {
-		// feed provider
-		feeder := feederFactory(v.From, v.To)
-
 		slotsName := fmt.Sprintf("%d-%d", v.From, v.To)
 		workers[i] = worker.NewRunWorker(
 			logger,
 			name+"-worker-"+slotsName,
 			lockerFactory(name+"-lock-"+slotsName),
-			store.NewForwarder(
-				logger,
-				name+"-"+slotsName,
-				feeder,
-				sinker,
-			))
+			taskerFactory(v.From, v.To),
+		)
 	}
 
 	return workers
 }
 
 // EventForwarderWorker creates a single worker responsible of forwarding
-func EventForwarderWorker(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, feeder store.Feeder, sinker sink.Sinker) worker.Worker {
+func EventForwarderWorker(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, feeder worker.Tasker) worker.Worker {
 	return worker.NewRunWorker(
 		logger,
 		name+"-worker",
 		lockerFactory(name+"-lock"),
-		store.NewForwarder(
-			logger,
-			name,
-			feeder,
-			sinker,
-		))
+		feeder,
+	)
 }
 
-type ConsumerFactory func(context.Context, StreamResume) (Consumer, error)
+type ConsumerFactory func(context.Context, ResumeKey) (Consumer, error)
 
 type dummyLocker struct {
 	done chan struct{}
@@ -80,6 +66,7 @@ func (d *dummyLocker) Unlock(context.Context) error {
 	defer d.mu.Unlock()
 	if d.done != nil {
 		close(d.done)
+		d.done = nil
 	}
 	return nil
 }
@@ -116,7 +103,8 @@ func ManagedWorker(ctx context.Context, logger log.Logger, streamName string, to
 }
 
 func createWorker(ctx context.Context, logger log.Logger, streamName string, topic string, partition uint32, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
-	sr, err := NewStreamResume(common.TopicWithPartition(topic, 0), streamName)
+	topicWithPartition := common.TopicWithPartition(topic, partition)
+	sr, err := NewStreamResume(topicWithPartition, streamName)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
@@ -124,19 +112,20 @@ func createWorker(ctx context.Context, logger log.Logger, streamName string, top
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	name := streamName + "-lock-" + strconv.Itoa(int(partition))
+	name := streamName + "-lock-" + topicWithPartition
 	worker := worker.NewRunWorker(
 		logger,
 		name,
 		lockerFactory(name),
-		worker.NewTask(func(ctx context.Context) (<-chan struct{}, error) {
-			done, err := consumer.StartConsumer(ctx, handler)
-			if err != nil {
-				return nil, faults.Errorf("Unable to start consumer for %s-%d: %w", streamName, partition, err)
-			}
-
-			return done, nil
-		}),
+		worker.NewTask(
+			func(ctx context.Context) error {
+				err := consumer.StartConsumer(ctx, handler)
+				return faults.Wrapf(err, "Unable to start consumer for %s-%s", streamName, topicWithPartition)
+			},
+			func(ctx context.Context, hard bool) {
+				consumer.StopConsumer(ctx, hard)
+			},
+		),
 	)
 	return worker, nil
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/worker"
 )
 
 const (
@@ -54,6 +55,8 @@ func WithBackoffMaxElapsedTime(duration time.Duration) FeedLogreplOption {
 	}
 }
 
+var _ worker.Tasker = (*FeedLogrepl)(nil)
+
 type FeedLogrepl struct {
 	dburl                 string
 	partitions            uint32
@@ -63,12 +66,13 @@ type FeedLogrepl struct {
 	slotIndex             int
 	totalSlots            int
 	backoffMaxElapsedTime time.Duration
+	sinker                sink.Sinker
 }
 
 // NewFeed creates a new Postgresql 10+ logic replication feed.
 // slotIndex is the index of this feed in a group of feeds. Its value should be between 1 and totalSlots.
 // slotIndex=1 has a special maintenance behaviour of dropping any slot above totalSlots.
-func NewFeed(connString string, slotIndex, totalSlots int, options ...FeedLogreplOption) (FeedLogrepl, error) {
+func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, options ...FeedLogreplOption) (FeedLogrepl, error) {
 	if slotIndex < 1 || slotIndex > totalSlots {
 		return FeedLogrepl{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
 	}
@@ -78,6 +82,7 @@ func NewFeed(connString string, slotIndex, totalSlots int, options ...FeedLogrep
 		slotIndex:             slotIndex,
 		totalSlots:            totalSlots,
 		backoffMaxElapsedTime: 10 * time.Second,
+		sinker:                sinker,
 	}
 
 	for _, o := range options {
@@ -87,11 +92,11 @@ func NewFeed(connString string, slotIndex, totalSlots int, options ...FeedLogrep
 	return f, nil
 }
 
-// Feed listens to replication logs and pushes them to sinker
+// Run listens to replication logs and pushes them to sinker
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
-func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
+func (f FeedLogrepl) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
 		xLogPos, err := pglogrepl.ParseLSN(string(message.ResumeToken))
 		if err != nil {
 			return faults.Errorf("ParseLSN failed: %w", err)
@@ -194,7 +199,7 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 						continue
 					}
 					event.ResumeToken = []byte(clientXLogPos.String())
-					err = sinker.Sink(context.Background(), *event)
+					err = f.sinker.Sink(context.Background(), *event)
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
@@ -207,6 +212,8 @@ func (f FeedLogrepl) Feed(ctx context.Context, sinker sink.Sinker) error {
 		}
 	}, b)
 }
+
+func (FeedLogrepl) Cancel(ctx context.Context, hard bool) {}
 
 func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool) (*eventsourcing.Event, error) {
 	m, err := pgoutput.Parse(WALData)

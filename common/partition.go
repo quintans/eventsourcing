@@ -24,5 +24,5 @@ func TopicWithPartition(topic string, partition uint32) string {
 	if partition == 0 {
 		return topic
 	}
-	return topic + "." + strconv.Itoa(int(partition))
+	return topic + "_" + strconv.Itoa(int(partition))
 }

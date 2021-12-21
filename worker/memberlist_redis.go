@@ -7,9 +7,9 @@ import (
 
 	"github.com/avast/retry-go/v3"
 	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
 	"github.com/quintans/faults"
+	"github.com/teris-io/shortid"
 )
 
 var _ Memberlister = (*RedisMemberList)(nil)
@@ -39,7 +39,7 @@ func NewRedisMemberlist(addresses string, prefix string, expiration time.Duratio
 	return &RedisMemberList{
 		pool:       pool,
 		prefix:     prefix,
-		name:       prefix + "-" + uuid.New().String(),
+		name:       prefix + "-" + shortid.MustGenerate(),
 		expiration: expiration,
 		quorum:     len(pool)/2 + 1,
 	}

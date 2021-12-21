@@ -194,10 +194,10 @@ func feeding(ctx context.Context, dbConfig tmg.DBConfig, partitions uint32, slot
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)
-		listener := mongodb.NewFeed(logger, dbConfig.Url(), dbConfig.Database, mongodb.WithPartitions(partitions, v.low, v.high))
+		listener := mongodb.NewFeed(logger, dbConfig.Url(), dbConfig.Database, sinker, mongodb.WithPartitions(partitions, v.low, v.high))
 		go func() {
 			wg.Done()
-			err := listener.Feed(ctx, sinker)
+			err := listener.Run(ctx)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				errCh <- err
 			} else {

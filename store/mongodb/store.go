@@ -78,6 +78,7 @@ type EsRepository struct {
 	projector               Projector
 	eventsCollectionName    string
 	snapshotsCollectionName string
+	entropy                 *ulid.MonotonicEntropy
 }
 
 // NewStore creates a new instance of MongoEsRepository
@@ -95,6 +96,7 @@ func NewStore(connString, database string, opts ...StoreOption) (*EsRepository, 
 		client:                  client,
 		eventsCollectionName:    defaultEventsCollection,
 		snapshotsCollectionName: defaultSnapshotsCollection,
+		entropy:                 eventid.EntropyFactory(),
 	}
 
 	for _, o := range opts {
@@ -125,8 +127,6 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 		return eventid.Zero, 0, faults.New("No events to be saved")
 	}
 
-	entropy := eventid.EntropyFactory(eRec.CreatedAt)
-
 	var id eventid.EventID
 	version := eRec.Version
 	idempotencyKey := eRec.IdempotencyKey
@@ -134,7 +134,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 		for _, e := range eRec.Details {
 			version++
 			var err error
-			id, err = r.saveEvent(mCtx, entropy, Event{
+			id, err = r.saveEvent(mCtx, Event{
 				ID:               id.String(),
 				AggregateID:      eRec.AggregateID,
 				AggregateIDHash:  common.Hash(eRec.AggregateID),
@@ -166,8 +166,8 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	return id, version, nil
 }
 
-func (r *EsRepository) saveEvent(mCtx mongo.SessionContext, entropy *ulid.MonotonicEntropy, doc Event) (eventid.EventID, error) {
-	id, err := eventid.New(doc.CreatedAt, entropy)
+func (r *EsRepository) saveEvent(mCtx mongo.SessionContext, doc Event) (eventid.EventID, error) {
+	id, err := eventid.New(doc.CreatedAt, r.entropy)
 	if err != nil {
 		return eventid.Zero, faults.Wrap(err)
 	}
@@ -646,12 +646,10 @@ func (r *EsRepository) saveMigration(
 	revision int,
 ) error {
 	version := last.AggregateVersion
-	entropy := eventid.EntropyFactory(time.Now().UTC())
-
 	return r.withTx(ctx, func(mCtx mongo.SessionContext) error {
 		// invalidate event
 		version++
-		_, err := r.saveEvent(mCtx, entropy, Event{
+		_, err := r.saveEvent(mCtx, Event{
 			AggregateID:      last.AggregateID,
 			AggregateIDHash:  last.AggregateIDHash,
 			AggregateVersion: version,
@@ -712,7 +710,7 @@ func (r *EsRepository) saveMigration(
 				Metadata:         metadata,
 				CreatedAt:        time.Now().UTC(),
 			}
-			lastID, err = r.saveEvent(mCtx, entropy, event)
+			lastID, err = r.saveEvent(mCtx, event)
 			if err != nil {
 				return err
 			}

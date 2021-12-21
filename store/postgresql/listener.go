@@ -20,6 +20,7 @@ import (
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/worker"
 )
 
 type FeedEvent struct {
@@ -52,6 +53,8 @@ func (pgt *PgTime) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+var _ worker.Tasker = (*Feed)(nil)
+
 type Feed struct {
 	logger         log.Logger
 	play           player.Player
@@ -65,6 +68,7 @@ type Feed struct {
 	partitions     uint32
 	partitionsLow  uint32
 	partitionsHi   uint32
+	sinker         sink.Sinker
 }
 
 type FeedOption func(*Feed)
@@ -96,7 +100,7 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 
 // NewFeedListenNotify instantiates a new PgListener.
 // important:repo should NOT implement lag
-func NewFeedListenNotify(logger log.Logger, connString string, repository player.Repository, channel string, options ...FeedOption) Feed {
+func NewFeedListenNotify(logger log.Logger, connString string, repository player.Repository, channel string, sinker sink.Sinker, options ...FeedOption) Feed {
 	p := Feed{
 		logger:     logger,
 		offset:     player.TrailingLag,
@@ -104,6 +108,7 @@ func NewFeedListenNotify(logger log.Logger, connString string, repository player
 		repository: repository,
 		dbURL:      connString,
 		channel:    channel,
+		sinker:     sinker,
 	}
 
 	for _, o := range options {
@@ -115,11 +120,11 @@ func NewFeedListenNotify(logger log.Logger, connString string, repository player
 	return p
 }
 
-// Feed will forward messages to the sinker
+// Run will forward messages to the sinker
 // important: sinker.LastMessage should implement lag
-func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
+func (p Feed) Run(ctx context.Context) error {
 	afterEventID := []byte{}
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, p.partitionsLow, p.partitionsHi, func(message *eventsourcing.Event) error {
+	err := store.ForEachResumeTokenInSinkPartitions(ctx, p.sinker, p.partitionsLow, p.partitionsHi, func(message *eventsourcing.Event) error {
 		if bytes.Compare(message.ResumeToken, afterEventID) > 0 {
 			afterEventID = message.ResumeToken
 		}
@@ -147,13 +152,15 @@ func (p Feed) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}
 	return backoff.Retry(func() error {
 		var err error
-		lastID, err = p.forward(ctx, pool, lastID, sinker, b)
+		lastID, err = p.forward(ctx, pool, lastID, p.sinker, b)
 		if errors.Is(err, context.Canceled) {
 			return backoff.Permanent(err)
 		}
 		return err
 	}, b)
 }
+
+func (Feed) Cancel(ctx context.Context, hard bool) {}
 
 func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID eventid.EventID, sinker sink.Sinker, b backoff.BackOff) (eventid.EventID, error) {
 	lastID := afterEventID

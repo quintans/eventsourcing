@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/avast/retry-go/v3"
-	"github.com/google/uuid"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/go-multierror"
 	"github.com/quintans/faults"
+	"github.com/teris-io/shortid"
 )
 
 var _ Memberlister = (*ConsulMemberList)(nil)
@@ -40,7 +40,7 @@ func NewConsulMemberList(address string, family string, expiration time.Duration
 	return &ConsulMemberList{
 		client: client,
 		prefix: family,
-		name:   family + "-" + uuid.New().String(),
+		name:   family + "-" + shortid.MustGenerate(),
 		sID:    sID,
 	}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/quintans/faults"
+	"github.com/teris-io/shortid"
 
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
@@ -15,8 +16,10 @@ import (
 // Tasker is the interface for tasks that need to be balanced among a set of workers
 type Tasker interface {
 	Run(context.Context) error
-	Cancel()
+	Cancel(ctx context.Context, hard bool)
 }
+
+var _ Worker = (*RunWorker)(nil)
 
 // RunWorker is responsible for refreshing the lease
 type RunWorker struct {
@@ -24,11 +27,14 @@ type RunWorker struct {
 	name   string
 	locker lock.Locker
 	runner Tasker
-	cancel context.CancelFunc
+	done   chan struct{}
 	mu     sync.RWMutex
 }
 
 func NewRunWorker(logger log.Logger, name string, locker lock.Locker, runner Tasker) *RunWorker {
+	logger = logger.WithTags(log.Tags{
+		"id": shortid.MustGenerate(),
+	})
 	return &RunWorker{
 		logger: logger,
 		name:   name,
@@ -41,21 +47,10 @@ func (w *RunWorker) Name() string {
 	return w.name
 }
 
-func (w *RunWorker) Stop(ctx context.Context) {
-	w.mu.Lock()
-	if w.cancel != nil {
-		w.locker.Unlock(ctx)
-		w.logger.Infof("Stopping worker %s", w.name)
-		w.cancel()
-		w.cancel = nil
-	}
-	w.mu.Unlock()
-}
-
 func (w *RunWorker) IsRunning() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.cancel != nil
+	return w.done != nil
 }
 
 func (w *RunWorker) Start(ctx context.Context) bool {
@@ -63,42 +58,50 @@ func (w *RunWorker) Start(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
+	done := make(chan struct{})
+	w.mu.Lock()
+	w.done = done
+	w.mu.Unlock()
 	go func() {
-		ctx, cancel := context.WithCancel(ctx)
 		select {
+		case <-done:
+			return
 		case <-release:
 		case <-ctx.Done():
-			w.locker.Unlock(ctx)
 		}
-		cancel()
+		w.Stop(context.Background(), false)
 	}()
-	go w.start(ctx)
+	go w.start(ctx, done)
 
 	return true
 }
 
-func (w *RunWorker) start(ctx context.Context) {
-	w.logger.Infof("Starting worker %s", w.name)
-
-	ctx2, cancel2 := context.WithCancel(ctx)
-
+func (w *RunWorker) Stop(ctx context.Context, hard bool) {
 	w.mu.Lock()
-	w.cancel = cancel2
+	if w.done != nil {
+		w.locker.Unlock(ctx)
+		w.logger.Infof("Stopping worker '%s'", w.name)
+		w.runner.Cancel(ctx, hard)
+		close(w.done)
+		w.done = nil
+	}
 	w.mu.Unlock()
+}
+
+func (w *RunWorker) start(ctx context.Context, done chan struct{}) {
+	w.logger.Infof("Starting worker '%s'", w.name)
 
 	// acquired lock
 	// OnBoot may take some time to finish since it will be doing synchronisation
 	go func() {
-		err := w.runner.Run(ctx2)
+		err := w.runner.Run(ctx)
 		if err != nil {
-			w.logger.Error("Error while running: ", err)
-			cancel2()
+			w.logger.Errorf("Error while running: %+v", err)
+			w.Stop(ctx, false)
 			return
 		}
 	}()
-	<-ctx2.Done()
-	w.runner.Cancel()
-	w.Stop(ctx)
+	<-done
 }
 
 type PartitionSlot struct {
@@ -142,43 +145,24 @@ func ParseSlot(slot string) (PartitionSlot, error) {
 	return s, nil
 }
 
+var _ Tasker = (*Task)(nil)
+
 type Task struct {
-	run    func(ctx context.Context) (<-chan struct{}, error)
-	cancel context.CancelFunc
-	done   <-chan struct{}
-	mu     sync.RWMutex
+	run    func(ctx context.Context) error
+	cancel func(ctx context.Context, hard bool)
 }
 
-func NewTask(run func(ctx context.Context) (<-chan struct{}, error)) *Task {
+func NewTask(run func(ctx context.Context) error, cancel func(ctx context.Context, hard bool)) *Task {
 	return &Task{
-		run: run,
+		run:    run,
+		cancel: cancel,
 	}
 }
 
 func (t *Task) Run(ctx context.Context) error {
-	ctx2, cancel := context.WithCancel(ctx)
-
-	ch, err := t.run(ctx2)
-	if err != nil {
-		cancel()
-		return err
-	}
-
-	t.mu.Lock()
-	t.cancel = cancel
-	t.done = ch
-	t.mu.Unlock()
-
-	return nil
+	return t.run(ctx)
 }
 
-func (t *Task) Cancel() {
-	t.mu.Lock()
-	if t.cancel != nil {
-		t.cancel()
-	}
-	// wait for the closing subscriber
-	<-t.done
-
-	t.mu.Unlock()
+func (t *Task) Cancel(ctx context.Context, hard bool) {
+	t.cancel(ctx, hard)
 }
