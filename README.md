@@ -98,35 +98,37 @@ To avoid duplication and **keep the order of events** we could have only one act
 But this would mean that we would have an idle instance and it is just a waste of resources.
 To take advantage of all the replicas, we can partition the events and balance the different partitions across the existing instances of the forwarder service.
 
+> Partitions are explained below in `Key Partitions`
+
+> Balance is done by this library on the client side. A distributed lock is needed.
+> Implementation for Redis and Consul distributed lock are provided.
+
 **Example**: consider 2 forwarder instances and and we want to partition the events into 12 partitions.
 Each forwarder instance would be responsible 6 partitions.
 
 The code would look similar to the following:
 
 ```go
+lockPool, _ := consullock.NewPool(consulURL)
+lockFact := func(lockName string) lock.Locker {
+    return lockPool.NewLock(lockName, lockExpiry)
+}
+
 partitionSlots, _ := worker.ParseSlots("1-6,7-12")
 partitions := uint32(12)
-lockFact := func(lockName string) lock.Locker {
-    return lockPool.NewLock(lockName, cfg.LockExpiry)
-}
-feederFact := func(partitionLow, partitionHi uint32) store.Feeder {
-    return mongodb.NewFeed(logger, connStr, cfg.EsName, mongodb.WithPartitions(partitions, partitionLow, partitionHi))
-}
-
-const name = "forwarder"
-clientID := name + "-" + uuid.New().String()
 sinker, _ := nats.NewSink(logger, cfg.Topic, partitions, cfg.NatsURL)
-go func() {
-    <-ctx.Done()
-    sinker.Close()
-}()
+taskerFactory := func(partitionLow, partitionHi uint32) worker.Tasker {
+	return mongodb.NewFeed(logger, connStr, eventstoreName, sinker, mongodb.WithPartitions(partitions, partitionLow, partitionHi))
+}
 
 // workers is used down bellow
-workers := projection.EventForwarderWorkers(ctx, logger, name, lockFact, feederFact, sinker, partitionSlots)
+workers := return projection.EventForwarderWorkers(ctx, logger, "forwarder", lockFact, taskerFactory, partitionSlots)
 
 ```
 
-### Projection
+### Projection balancing
+
+For message queues that don't have the capability of delivery messages to only a member of a message group we can use the internal client balancer where only one worker will be responsible for handling messages for a partition.
 
 Since events are being partitioned we use the same approach of spreading the partitions over a set of workers and then balance them over the service instances.
 
@@ -157,6 +159,8 @@ Balancing them, as the instances come online, would happen int the following man
 	replica #2 -> release the lock of 1 workers
 	replica #3 -> locks the 1 unlocked worker and 
     replica #? -> one of the replicas locks the remaining worker.
+
+### Rebuilding a projection
 
 I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection. The process is described as follow:
 
