@@ -36,17 +36,17 @@ type ResumeTokenUpdater interface {
 }
 
 type NotifierLockRebuilder struct {
-	logger       log.Logger
-	lock         lock.Locker
-	notifier     CancelPublisher
-	subscribers  []Subscriber
-	memberLister worker.Memberlister
+	logger              log.Logger
+	lock                lock.Locker
+	projectionCanceller CancelPublisher
+	subscribers         []Subscriber
+	memberLister        worker.Memberlister
 }
 
 func NewNotifierLockRestarter(
 	logger log.Logger,
 	lock lock.Locker,
-	notifier CancelPublisher,
+	projectionCanceller CancelPublisher,
 	subscribers []Subscriber,
 	memberLister worker.Memberlister,
 ) *NotifierLockRebuilder {
@@ -54,11 +54,11 @@ func NewNotifierLockRestarter(
 		"id": shortid.MustGenerate(),
 	})
 	return &NotifierLockRebuilder{
-		logger:       logger,
-		lock:         lock,
-		notifier:     notifier,
-		subscribers:  subscribers,
-		memberLister: memberLister,
+		logger:              logger,
+		lock:                lock,
+		projectionCanceller: projectionCanceller,
+		subscribers:         subscribers,
+		memberLister:        memberLister,
 	}
 }
 
@@ -84,7 +84,7 @@ func (r *NotifierLockRebuilder) Rebuild(
 		return faults.Errorf("failed to members list for projection %s: %w", projection, err)
 	}
 	logger.Infof("Signalling '%d' members to STOP projection listener", len(members))
-	err = r.notifier.PublishCancel(ctx, projection, len(members))
+	err = r.projectionCanceller.PublishCancel(ctx, projection, len(members))
 	if err != nil {
 		logger.WithError(err).Error("Error while freezing projection")
 		r.unlock(ctx, logger)

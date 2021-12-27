@@ -71,6 +71,8 @@ func (d *dummyLocker) Unlock(context.Context) error {
 	return nil
 }
 
+// UnmanagedWorkers creates workers that will always run regardless if a lock was acquired or not.
+// There will be no balancing of workers between the several server instances
 func UnmanagedWorkers(ctx context.Context, logger log.Logger, streamName string, topic string, partitions uint32, consumerFactory ConsumerFactory, handler EventHandlerFunc) ([]worker.Worker, error) {
 	lockerFactory := func(lockName string) lock.Locker {
 		return &dummyLocker{}
@@ -78,6 +80,8 @@ func UnmanagedWorkers(ctx context.Context, logger log.Logger, streamName string,
 	return ManagedWorkers(ctx, logger, streamName, topic, partitions, lockerFactory, consumerFactory, handler)
 }
 
+// ManagedWorkers creates workers that will run depending if a lock was acquired or not.
+// They will be balanced of over the several server instances
 func ManagedWorkers(ctx context.Context, logger log.Logger, streamName string, topic string, partitions uint32, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) ([]worker.Worker, error) {
 	if partitions <= 1 {
 		w, err := createWorker(ctx, logger, streamName, topic, 0, lockerFactory, consumerFactory, handler)
@@ -98,6 +102,7 @@ func ManagedWorkers(ctx context.Context, logger log.Logger, streamName string, t
 	return workers, nil
 }
 
+// ManagedWorker creates a single managed worker
 func ManagedWorker(ctx context.Context, logger log.Logger, streamName string, topic string, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
 	return createWorker(ctx, logger, streamName, topic, 0, lockerFactory, consumerFactory, handler)
 }

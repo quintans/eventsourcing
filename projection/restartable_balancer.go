@@ -16,7 +16,6 @@ import (
 
 // Canceller is the interface for cancelling a running projection
 type Canceller interface {
-	Name() string
 	Cancel(ctx context.Context, hard bool)
 }
 
@@ -98,9 +97,9 @@ type ResumeStore interface {
 
 type EventHandlerFunc func(ctx context.Context, e eventsourcing.Event) error
 
-var _ Canceller = (*StartStopBalancer)(nil)
+var _ Canceller = (*RestartableProjection)(nil)
 
-type StartStopBalancer struct {
+type RestartableProjection struct {
 	logger         log.Logger
 	restartLock    lock.WaitForUnlocker
 	cancelListener CancelListener
@@ -110,14 +109,14 @@ type StartStopBalancer struct {
 	mu   sync.RWMutex
 }
 
-// NewStartStopBalancer creates an instance that manages the lifecycle of a balancer that has the capability of being stopped and restarted on demand.
-func NewStartStopBalancer(
+// NewRestartableProjection creates an instance that manages the lifecycle of a balancer that has the capability of being stopped and restarted on demand.
+func NewRestartableProjection(
 	logger log.Logger,
 	restartLock lock.WaitForUnlocker,
 	cancelListener CancelListener,
 	balancer worker.Balancer,
-) *StartStopBalancer {
-	mc := &StartStopBalancer{
+) *RestartableProjection {
+	mc := &RestartableProjection{
 		logger: logger.WithTags(log.Tags{
 			"balancer": balancer.Name(),
 		}),
@@ -130,12 +129,12 @@ func NewStartStopBalancer(
 }
 
 // Name returns the name of this balancer
-func (b *StartStopBalancer) Name() string {
+func (b *RestartableProjection) Name() string {
 	return b.balancer.Name()
 }
 
-// Run action to be executed on boot
-func (b *StartStopBalancer) Run(ctx context.Context) error {
+// Start runs the action to be executed on boot
+func (b *RestartableProjection) Start(ctx context.Context) error {
 	for {
 		b.logger.Info("Waiting for Unlock")
 		b.restartLock.WaitForUnlock(ctx)
@@ -159,7 +158,10 @@ func (b *StartStopBalancer) Run(ctx context.Context) error {
 	}
 }
 
-func (b *StartStopBalancer) startAndWait(ctx context.Context, done chan struct{}) error {
+func (b *RestartableProjection) startAndWait(ctx context.Context, done chan struct{}) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	err := b.cancelListener.ListenCancel(ctx, b)
 	if err != nil {
 		return err
@@ -171,7 +173,7 @@ func (b *StartStopBalancer) startAndWait(ctx context.Context, done chan struct{}
 	return nil
 }
 
-func (b *StartStopBalancer) Cancel(ctx context.Context, hard bool) {
+func (b *RestartableProjection) Cancel(ctx context.Context, hard bool) {
 	b.mu.Lock()
 	if b.done != nil {
 		b.balancer.Stop(ctx, hard)

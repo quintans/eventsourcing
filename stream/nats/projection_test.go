@@ -529,7 +529,7 @@ func startConsumer(
 
 	latch.Add(1)
 	go func() {
-		startStop.Run(ctx)
+		startStop.Start(ctx)
 		latch.Done()
 	}()
 

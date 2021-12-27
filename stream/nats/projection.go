@@ -31,7 +31,7 @@ type Projector struct {
 	resumeStore       projection.ResumeStore
 	projectionName    string
 	handlers          []ProjectionHandler
-	subscribers       []projection.Subscriber
+	startStop         *projection.RestartableProjection
 }
 
 func NewProjector(
@@ -93,13 +93,14 @@ func (p *Projector) AddTopicHandler(topic string, partitions uint32, handler pro
 	})
 }
 
-func (p *Projector) Projection(ctx context.Context) (*projection.NotifierLockRebuilder, *projection.StartStopBalancer, error) {
+func (p *Projector) Projection(ctx context.Context) (*projection.NotifierLockRebuilder, *projection.RestartableProjection, error) {
 	if len(p.handlers) == 0 {
 		return nil, nil, faults.Errorf("no handlers defined for projector %s", p.projectionName)
 	}
+	var subscribers []projection.Subscriber
 	consumerFactory := func(ctx context.Context, resume projection.ResumeKey) (projection.Consumer, error) {
 		sub := NewSubscriber(p.logger, p.stream, p.resumeStore, resume)
-		p.subscribers = append(p.subscribers, sub)
+		subscribers = append(subscribers, sub)
 		return sub, nil
 	}
 
@@ -113,30 +114,28 @@ func (p *Projector) Projection(ctx context.Context) (*projection.NotifierLockReb
 		workers = append(workers, w...)
 	}
 
-	balancer := worker.NewNoBalancer(p.logger, p.projectionName, p.memberlist, workers)
-
-	natsCanceller, err := NewNotificationListenerWithConn(ctx, p.logger, p.nc, p.projectionName+"_notifications")
+	natsProjectionCanceller, err := NewNotificationListenerWithConn(ctx, p.logger, p.nc, p.projectionName+"_notifications")
 	if err != nil {
 		return nil, nil, faults.Errorf("Error creating NATS canceller subscriber: %w", err)
 	}
 	locker := p.waitLockerFactory(p.projectionName + "-freeze")
-	startStop := projection.NewStartStopBalancer(p.logger, locker, natsCanceller, balancer)
+
+	balancer := worker.NewNoBalancer(p.logger, p.projectionName, p.memberlist, workers)
+	p.startStop = projection.NewRestartableProjection(p.logger, locker, natsProjectionCanceller, balancer)
 
 	rebuilder := projection.NewNotifierLockRestarter(
 		p.logger,
 		locker,
-		natsCanceller,
-		p.subscribers,
+		natsProjectionCanceller,
+		subscribers,
 		p.memberlist,
 	)
 
-	return rebuilder, startStop, nil
+	return rebuilder, p.startStop, nil
 }
 
 func (p *Projector) Shutdown(hard bool) {
-	for _, c := range p.subscribers {
-		c.StopConsumer(context.Background(), hard)
-	}
+	p.startStop.Cancel(context.Background(), hard)
 }
 
 // NewReactor creates workers that listen to events coming through the event bus,

@@ -531,7 +531,8 @@ func NewNotificationListenerWithConn(
 ) (*NotificationListener, error) {
 	cancelID := shortid.MustGenerate()
 	logger = logger.WithTags(log.Tags{
-		"id": cancelID,
+		"id":    cancelID,
+		"topic": managerTopic,
 	})
 	s := &NotificationListener{
 		logger:        logger,
@@ -549,23 +550,15 @@ func NewNotificationListenerWithConn(
 	return s, nil
 }
 
-func (s NotificationListener) GetQueue() *nats.Conn {
-	return s.queue
-}
-
 func (s NotificationListener) ListenCancel(ctx context.Context, canceller projection.Canceller) error {
 	s.logger.Info("listening for cancel")
-	logger := s.logger.WithTags(log.Tags{"topic": s.managerTopic})
 	sub, err := s.queue.Subscribe(
 		s.managerTopic,
 		func(msg *nats.Msg) {
 			n := projection.Notification{}
 			err := json.Unmarshal(msg.Data, &n)
 			if err != nil {
-				logger.Errorf("unable to unmarshal: %+v", faults.Wrap(err))
-				return
-			}
-			if n.Projection != canceller.Name() {
+				s.logger.Errorf("unable to unmarshal: %+v", faults.Wrap(err))
 				return
 			}
 
@@ -574,10 +567,10 @@ func (s NotificationListener) ListenCancel(ctx context.Context, canceller projec
 				canceller.Cancel(context.Background(), true)
 				err = msg.Respond([]byte(s.cancelID))
 				if err != nil {
-					logger.Errorf("unable to publish cancel reply to '%s': %+v", s.managerTopic, faults.Wrap(err))
+					s.logger.Errorf("unable to publish cancel reply to '%s': %+v", s.managerTopic, faults.Wrap(err))
 				}
 			default:
-				logger.WithTags(log.Tags{"notification": n}).Error("Unknown notification")
+				s.logger.WithTags(log.Tags{"notification": n}).Error("Unknown notification")
 			}
 		})
 	if err != nil {
@@ -586,7 +579,7 @@ func (s NotificationListener) ListenCancel(ctx context.Context, canceller projec
 
 	go func() {
 		<-ctx.Done()
-		logger.Info("unsubscribing cancel listener")
+		s.logger.Info("unsubscribing cancel listener")
 		sub.Unsubscribe()
 	}()
 
