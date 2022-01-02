@@ -3,7 +3,6 @@ package projection
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/quintans/faults"
 
@@ -26,6 +25,7 @@ func EventForwarderWorkers(ctx context.Context, logger log.Logger, name string, 
 		workers[i] = worker.NewRunWorker(
 			logger,
 			name+"-worker-"+slotsName,
+			name,
 			lockerFactory(name+"-lock-"+slotsName),
 			taskerFactory(v.From, v.To),
 		)
@@ -39,6 +39,7 @@ func EventForwarderWorker(ctx context.Context, logger log.Logger, name string, l
 	return worker.NewRunWorker(
 		logger,
 		name+"-worker",
+		name,
 		lockerFactory(name+"-lock"),
 		feeder,
 	)
@@ -46,36 +47,11 @@ func EventForwarderWorker(ctx context.Context, logger log.Logger, name string, l
 
 type ConsumerFactory func(context.Context, ResumeKey) (Consumer, error)
 
-type dummyLocker struct {
-	done chan struct{}
-	mu   sync.RWMutex
-}
-
-func (d *dummyLocker) Lock(context.Context) (<-chan struct{}, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.done != nil {
-		return d.done, nil
-	}
-	d.done = make(chan struct{})
-	return d.done, nil
-}
-
-func (d *dummyLocker) Unlock(context.Context) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.done != nil {
-		close(d.done)
-		d.done = nil
-	}
-	return nil
-}
-
 // UnmanagedWorkers creates workers that will always run regardless if a lock was acquired or not.
 // There will be no balancing of workers between the several server instances
 func UnmanagedWorkers(ctx context.Context, logger log.Logger, streamName string, topic string, partitions uint32, consumerFactory ConsumerFactory, handler EventHandlerFunc) ([]worker.Worker, error) {
 	lockerFactory := func(lockName string) lock.Locker {
-		return &dummyLocker{}
+		return nil
 	}
 	return ManagedWorkers(ctx, logger, streamName, topic, partitions, lockerFactory, consumerFactory, handler)
 }
@@ -121,6 +97,7 @@ func createWorker(ctx context.Context, logger log.Logger, streamName string, top
 	worker := worker.NewRunWorker(
 		logger,
 		name,
+		streamName,
 		lockerFactory(name),
 		worker.NewTask(
 			func(ctx context.Context) error {

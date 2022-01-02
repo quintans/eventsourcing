@@ -90,7 +90,11 @@ type Subscriber interface {
 	RecordLastResume(ctx context.Context) error
 }
 
+var ErrResumeTokenNotFound = errors.New("resume token not found")
+
 type ResumeStore interface {
+	// GetStreamResumeToken retrives the resume token for the resume key.
+	// If the a resume key is not found it return ErrResumeTokenNotFound as an error
 	GetStreamResumeToken(ctx context.Context, key ResumeKey) (string, error)
 	SetStreamResumeToken(ctx context.Context, key ResumeKey, token string) error
 }
@@ -101,9 +105,10 @@ var _ Canceller = (*RestartableProjection)(nil)
 
 type RestartableProjection struct {
 	logger         log.Logger
+	name           string
 	restartLock    lock.WaitForUnlocker
 	cancelListener CancelListener
-	balancer       worker.Balancer
+	workers        []worker.Worker
 
 	done chan struct{}
 	mu   sync.RWMutex
@@ -112,17 +117,19 @@ type RestartableProjection struct {
 // NewRestartableProjection creates an instance that manages the lifecycle of a balancer that has the capability of being stopped and restarted on demand.
 func NewRestartableProjection(
 	logger log.Logger,
+	name string,
 	restartLock lock.WaitForUnlocker,
 	cancelListener CancelListener,
-	balancer worker.Balancer,
+	workers []worker.Worker,
 ) *RestartableProjection {
 	mc := &RestartableProjection{
 		logger: logger.WithTags(log.Tags{
-			"balancer": balancer.Name(),
+			"projection": name,
 		}),
+		name:           name,
 		restartLock:    restartLock,
 		cancelListener: cancelListener,
-		balancer:       balancer,
+		workers:        workers,
 	}
 
 	return mc
@@ -130,7 +137,7 @@ func NewRestartableProjection(
 
 // Name returns the name of this balancer
 func (b *RestartableProjection) Name() string {
-	return b.balancer.Name()
+	return b.name
 }
 
 // Start runs the action to be executed on boot
@@ -141,7 +148,6 @@ func (b *RestartableProjection) Start(ctx context.Context) error {
 		b.mu.Lock()
 		b.done = make(chan struct{})
 		b.mu.Unlock()
-		b.balancer.Start(ctx)
 
 		err := b.startAndWait(ctx, b.done)
 		if err != nil {
@@ -162,6 +168,10 @@ func (b *RestartableProjection) startAndWait(ctx context.Context, done chan stru
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	for _, v := range b.workers {
+		v.Start(ctx)
+	}
+
 	err := b.cancelListener.ListenCancel(ctx, b)
 	if err != nil {
 		return err
@@ -176,7 +186,13 @@ func (b *RestartableProjection) startAndWait(ctx context.Context, done chan stru
 func (b *RestartableProjection) Cancel(ctx context.Context, hard bool) {
 	b.mu.Lock()
 	if b.done != nil {
-		b.balancer.Stop(ctx, hard)
+		for _, w := range b.workers {
+			if hard {
+				w.Pause(ctx, true)
+			} else {
+				w.Stop(ctx)
+			}
+		}
 		close(b.done)
 		b.done = nil
 	}

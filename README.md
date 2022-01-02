@@ -14,6 +14,16 @@ We could write the read model into the same database in the same transaction as 
 
 Other than the event store and the event streaming I also implemented an orchestration layer for the event consumer on the read side.
 
+**Components**:
+- utility to read/write to/from an event store
+- database change listeners to propagate changes into a message stream
+- message stream listeners to build read models (Projection)
+- message stream listeners to react to domain events (Reactors)
+
+> **Projections**: can be rebuild since the beginning of time and can group several stream topics
+
+> **Reactors**: start from the oldest available event and cannot replay events
+
 I first talk about the several challenges and then about the solutions for those challenges.
 
 ## Pipeline

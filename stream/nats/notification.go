@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -100,7 +101,7 @@ func (s *ResumeableSubscriber) StartConsumer(ctx context.Context, handler projec
 	saveResume := make(chan uint64, 100)
 	var err error
 	token, err = s.resumeStore.GetStreamResumeToken(ctx, s.resumeKey)
-	if err != nil {
+	if err != nil && !errors.Is(err, projection.ErrResumeTokenNotFound) {
 		return faults.Errorf("Could not retrieve resume token for '%s': %w", s.resumeKey, err)
 	}
 	if token == "" {
@@ -183,7 +184,7 @@ func (s *ResumeableSubscriber) StartConsumer(ctx context.Context, handler projec
 	return nil
 }
 
-func (s *ResumeableSubscriber) StopConsumer(ctx context.Context, hard bool) {
+func (s *ResumeableSubscriber) StopConsumer(ctx context.Context, _ bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done == nil {
@@ -283,7 +284,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.Event
 	var startOption nats.SubOpt
 	var err error
 	token, err = s.resumeStore.GetStreamResumeToken(ctx, s.resumeKey)
-	if err != nil {
+	if err != nil && !errors.Is(err, projection.ErrResumeTokenNotFound) {
 		return faults.Errorf("Could not retrieve resume token for '%s': %w", s.resumeKey, err)
 	}
 	if token == "" {

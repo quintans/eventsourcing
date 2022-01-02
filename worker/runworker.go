@@ -23,21 +23,33 @@ var _ Worker = (*RunWorker)(nil)
 
 // RunWorker is responsible for refreshing the lease
 type RunWorker struct {
-	logger log.Logger
-	name   string
-	locker lock.Locker
-	runner Tasker
-	done   chan struct{}
-	mu     sync.RWMutex
+	logger     log.Logger
+	name       string
+	group      string
+	locker     lock.Locker
+	runner     Tasker
+	paused     bool
+	running    bool
+	cancelLock context.CancelFunc
+	mu         sync.RWMutex
 }
 
-func NewRunWorker(logger log.Logger, name string, locker lock.Locker, runner Tasker) *RunWorker {
+func NewUnbalancedRunWorker(logger log.Logger, name string, group string, runner Tasker) *RunWorker {
+	return newRunWorker(logger, name, group, nil, runner)
+}
+
+func NewRunWorker(logger log.Logger, name string, group string, locker lock.Locker, runner Tasker) *RunWorker {
+	return newRunWorker(logger, name, group, locker, runner)
+}
+
+func newRunWorker(logger log.Logger, name string, group string, locker lock.Locker, runner Tasker) *RunWorker {
 	logger = logger.WithTags(log.Tags{
 		"id": shortid.MustGenerate(),
 	})
 	return &RunWorker{
 		logger: logger,
 		name:   name,
+		group:  group,
 		locker: locker,
 		runner: runner,
 	}
@@ -47,61 +59,106 @@ func (w *RunWorker) Name() string {
 	return w.name
 }
 
+func (w *RunWorker) Group() string {
+	return w.group
+}
+
 func (w *RunWorker) IsRunning() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.done != nil
+	return w.running
+}
+
+func (w *RunWorker) IsPaused() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.paused
 }
 
 func (w *RunWorker) Start(ctx context.Context) bool {
-	release, err := w.locker.Lock(ctx)
-	if err != nil {
-		return false
-	}
-	done := make(chan struct{})
 	w.mu.Lock()
-	w.done = done
+	if w.running {
+		w.mu.Unlock()
+		return true
+	}
 	w.mu.Unlock()
-	go func() {
-		select {
-		case <-done:
-			return
-		case <-release:
-		case <-ctx.Done():
+
+	var err error
+	var release <-chan struct{}
+	if w.locker != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		release, err = w.locker.Lock(ctx)
+		if err != nil {
+			cancel()
+			return false
 		}
-		w.Stop(context.Background(), false)
-	}()
-	go w.start(ctx, done)
+		w.mu.Lock()
+		w.cancelLock = cancel
+		w.mu.Unlock()
+		go func() {
+			<-release
+			w.Stop(context.Background())
+		}()
+	} else {
+		release = make(chan struct{})
+	}
+
+	w.mu.Lock()
+	w.start(ctx)
+	w.mu.Unlock()
 
 	return true
 }
 
-func (w *RunWorker) Stop(ctx context.Context, hard bool) {
+func (w *RunWorker) Stop(ctx context.Context) {
 	w.mu.Lock()
-	if w.done != nil {
-		w.locker.Unlock(ctx)
-		w.logger.Infof("Stopping worker '%s'", w.name)
-		w.runner.Cancel(ctx, hard)
-		close(w.done)
-		w.done = nil
-	}
+	w.stop(ctx, false)
 	w.mu.Unlock()
 }
 
-func (w *RunWorker) start(ctx context.Context, done chan struct{}) {
+func (w *RunWorker) stop(ctx context.Context, hard bool) {
+	if w.running {
+		w.logger.Infof("Stopping worker '%s'", w.name)
+		w.runner.Cancel(ctx, hard)
+		if w.locker != nil {
+			err := w.locker.Unlock(ctx)
+			if err != nil {
+				w.logger.WithError(err).Error("Failed to unlock worker '%s'", w.name)
+			}
+			w.cancelLock()
+		}
+		w.running = false
+	}
+}
+
+func (w *RunWorker) start(ctx context.Context) {
 	w.logger.Infof("Starting worker '%s'", w.name)
 
-	// acquired lock
-	// OnBoot may take some time to finish since it will be doing synchronisation
-	go func() {
-		err := w.runner.Run(ctx)
-		if err != nil {
-			w.logger.Errorf("Error while running: %+v", err)
-			w.Stop(ctx, false)
-			return
-		}
-	}()
-	<-done
+	err := w.runner.Run(ctx)
+	if err != nil {
+		w.logger.Errorf("Error while running: %+v", err)
+		w.Stop(context.Background())
+		return
+	}
+	w.running = true
+	w.paused = false
+}
+
+func (w *RunWorker) Pause(ctx context.Context, pause bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if pause {
+		w.stop(ctx, true)
+	}
+	w.paused = pause
+}
+
+func (w *RunWorker) IsBalanceable() bool {
+	return !w.paused && w.isBalanceable()
+}
+
+func (w *RunWorker) isBalanceable() bool {
+	return w.locker != nil
 }
 
 type PartitionSlot struct {

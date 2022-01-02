@@ -59,7 +59,7 @@ func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, k
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusNotFound {
-		return "", nil
+		return "", faults.Wrap(projection.ErrResumeTokenNotFound)
 	}
 
 	if res.IsError() {

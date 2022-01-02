@@ -8,6 +8,8 @@ import (
 	"github.com/quintans/eventsourcing/log"
 )
 
+var turbo = time.Second
+
 type MemberWorkers struct {
 	Name    string
 	Workers []string
@@ -27,43 +29,69 @@ type Memberlister interface {
 // Worker represents an execution that can be started or stopped
 type Worker interface {
 	Name() string
+	Group() string
 	IsRunning() bool
+	IsBalanceable() bool
+	Pause(context.Context, bool)
+	IsPaused() bool
 	Start(context.Context) bool
-	Stop(ctx context.Context, hard bool)
+	Stop(ctx context.Context)
 }
 
 type Balancer interface {
 	Name() string
 	Start(ctx context.Context)
-	Stop(ctx context.Context, hard bool)
+	Pause(ctx context.Context, group string)
+	Resume(ctx context.Context, group string)
+	Stop(ctx context.Context)
 }
 
 var _ Balancer = (*MembersBalancer)(nil)
 
+type MembersBalancerOption func(*MembersBalancer)
+
+// MembersBalancer manages the lifecycle of workers as well balance them over all members
 type MembersBalancer struct {
-	name      string
-	logger    log.Logger
-	member    Memberlister
-	workers   []Worker
-	heartbeat time.Duration
+	name             string
+	logger           log.Logger
+	member           Memberlister
+	workers          []Worker
+	heartbeat        time.Duration
+	currentHeartbeat time.Duration
+	turbo            time.Duration
 
 	mu   sync.Mutex
 	done chan struct{}
 }
 
-func NewSingleBalancer(logger log.Logger, name string, worker Worker, heartbeat time.Duration) *MembersBalancer {
-	return NewMembersBalancer(logger, name, NewInMemMemberList(), []Worker{worker}, heartbeat)
-}
-
-func NewMembersBalancer(logger log.Logger, name string, member Memberlister, workers []Worker, heartbeat time.Duration) *MembersBalancer {
-	return &MembersBalancer{
+func NewMembersBalancer(logger log.Logger, name string, member Memberlister, workers []Worker, options ...MembersBalancerOption) *MembersBalancer {
+	mb := &MembersBalancer{
 		name: name,
 		logger: logger.WithTags(log.Tags{
 			"name": name,
 		}),
-		member:    member,
-		workers:   workers,
-		heartbeat: heartbeat,
+		member:           member,
+		workers:          workers,
+		heartbeat:        5 * time.Second,
+		currentHeartbeat: 5 * time.Second,
+		turbo:            turbo,
+	}
+	for _, o := range options {
+		o(mb)
+	}
+	return mb
+}
+
+func WithHeartbeat(heartbeat time.Duration) MembersBalancerOption {
+	return func(b *MembersBalancer) {
+		b.heartbeat = heartbeat
+		b.currentHeartbeat = heartbeat
+	}
+}
+
+func WithTurboHeartbeat(heartbeat time.Duration) MembersBalancerOption {
+	return func(b *MembersBalancer) {
+		b.turbo = heartbeat
 	}
 }
 
@@ -80,16 +108,16 @@ func (b *MembersBalancer) Start(ctx context.Context) {
 		ticker := time.NewTicker(b.heartbeat)
 		defer ticker.Stop()
 		for {
-			err := b.run(ctx)
+			err := b.run(ctx, ticker)
 			if err != nil {
-				b.logger.Warnf("Error while balancing %s's partitions: %v", b.name, err)
+				b.logger.Warnf("Error while balancing %s's partitions: %+v", b.name, err)
 			}
 			select {
 			case <-done:
 				return
 			case <-ctx.Done():
 				// shutdown
-				b.Stop(context.Background(), false)
+				b.Stop(context.Background())
 				return
 			case <-ticker.C:
 			}
@@ -97,28 +125,49 @@ func (b *MembersBalancer) Start(ctx context.Context) {
 	}()
 }
 
-func (b *MembersBalancer) Stop(ctx context.Context, hard bool) {
+func (b *MembersBalancer) Stop(ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.done == nil {
 		return
 	}
+
 	for _, w := range b.workers {
-		w.Stop(ctx, hard)
+		w.Stop(ctx)
 	}
+
 	err := b.member.Unregister(context.Background())
 	if err != nil {
-		b.logger.Warnf("Error while cleaning register for %s on shutdown: %v", b.name, err)
+		b.logger.Warnf("Error while cleaning register for %s: %+v", b.name, err)
 	}
+
 	close(b.done)
 	b.done = nil
 }
 
-func (b *MembersBalancer) run(ctx context.Context) error {
+func (b *MembersBalancer) Pause(ctx context.Context, group string) {
+	for _, w := range b.workers {
+		if w.Group() == group {
+			w.Pause(ctx, true)
+		}
+	}
+}
+
+func (b *MembersBalancer) Resume(ctx context.Context, group string) {
+	for _, w := range b.workers {
+		if w.Group() == group {
+			w.Pause(ctx, false)
+		}
+	}
+}
+
+func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 	members, err := b.member.List(ctx)
 	if err != nil {
 		return err
 	}
+	workers := b.filterBalancedWorkers()
+	members = filterMemberWorkers(members, workers)
 
 	// if current member is not in the list, add it to the member count
 	present := false
@@ -133,8 +182,8 @@ func (b *MembersBalancer) run(ctx context.Context) error {
 		membersCount++
 	}
 
-	monitorsNo := len(b.workers)
-	workersToAcquire := monitorsNo / membersCount
+	monitorsNo := len(workers)
+	minWorkersToAcquire := monitorsNo / membersCount
 
 	// check if all members have the minimum workers. Only after that, any additional can be picked up.
 	allHaveMinWorkers := true
@@ -142,7 +191,7 @@ func (b *MembersBalancer) run(ctx context.Context) error {
 	for _, m := range members {
 		// checking if others have min required workers running.
 		// This member might be included
-		if len(m.Workers) < workersToAcquire {
+		if len(m.Workers) < minWorkersToAcquire {
 			allHaveMinWorkers = false
 		}
 		// map only other members workers
@@ -154,47 +203,111 @@ func (b *MembersBalancer) run(ctx context.Context) error {
 	}
 	// mapping my current workers
 	myRunningWorkers := map[string]bool{}
-	for _, v := range b.workers {
+	for _, v := range workers {
 		if v.IsRunning() {
 			workersInUse[v.Name()] = true
 			myRunningWorkers[v.Name()] = true
 		}
 	}
 	// if my current running workers are less, then not all members have the min workers
-	if len(myRunningWorkers) < workersToAcquire {
+	if len(myRunningWorkers) < minWorkersToAcquire {
 		allHaveMinWorkers = false
 	}
 
 	if allHaveMinWorkers && monitorsNo%membersCount != 0 {
-		workersToAcquire++
+		minWorkersToAcquire++
 	}
 
-	locks := b.balance(ctx, workersToAcquire, workersInUse, myRunningWorkers)
+	locks := b.balance(ctx, workers, minWorkersToAcquire, workersInUse, myRunningWorkers)
+
+	// reset ticker if needed
+	if b.enableTurbo(workers, members, locks, minWorkersToAcquire) {
+		if b.currentHeartbeat != b.turbo {
+			b.currentHeartbeat = b.turbo
+			ticker.Reset(b.turbo)
+		}
+	} else {
+		if b.currentHeartbeat != b.heartbeat {
+			b.currentHeartbeat = b.heartbeat
+			ticker.Reset(b.heartbeat)
+		}
+	}
+
 	return b.member.Register(ctx, locks)
 }
 
-func (b *MembersBalancer) balance(ctx context.Context, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
+func (b *MembersBalancer) enableTurbo(workers []Worker, members []MemberWorkers, myWorkers []string, minWorkersToAcquire int) bool {
+	total := len(workers)
+	acquired := len(myWorkers)
+	if acquired < minWorkersToAcquire {
+		return true
+	}
+	for _, m := range members {
+		if m.Name != b.member.Name() {
+			if len(m.Workers) < minWorkersToAcquire {
+				return true
+			}
+			acquired += len(m.Workers)
+		}
+	}
+	return total != acquired
+}
+
+func (b *MembersBalancer) filterBalancedWorkers() []Worker {
+	var balanceable []Worker
+	for _, w := range b.workers {
+		if w.IsBalanceable() {
+			balanceable = append(balanceable, w)
+		}
+	}
+	return balanceable
+}
+
+func filterMemberWorkers(members []MemberWorkers, workers []Worker) []MemberWorkers {
+	for _, m := range members {
+		newWorkers := []string{}
+		for _, v := range m.Workers {
+			for _, w := range workers {
+				if v == w.Name() {
+					newWorkers = append(newWorkers, v)
+					break
+				}
+			}
+		}
+		m.Workers = newWorkers
+	}
+	return members
+}
+
+func (b *MembersBalancer) balance(ctx context.Context, workers []Worker, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
+	// make sure that all unpaused unbalanced workers are running
+	for _, w := range b.workers {
+		if !w.IsPaused() && !w.IsBalanceable() {
+			w.Start(ctx)
+		}
+	}
+
 	running := len(myRunningWorkers)
 	if running == workersToAcquire {
 		return mapToString(myRunningWorkers)
 	}
 
-	for _, v := range b.workers {
+	for _, w := range workers {
 		if running > workersToAcquire {
-			if !v.IsRunning() {
+			if !w.IsRunning() {
 				continue
 			}
 
-			v.Stop(ctx, false)
-			delete(myRunningWorkers, v.Name())
+			w.Stop(ctx)
+			delete(myRunningWorkers, w.Name())
 			running--
 		} else {
-			if workersInUse[v.Name()] {
+			if workersInUse[w.Name()] {
 				continue
 			}
 
-			if v.Start(ctx) {
-				myRunningWorkers[v.Name()] = true
+			if w.Start(ctx) {
+				myRunningWorkers[w.Name()] = true
 				running++
 			}
 		}
@@ -213,24 +326,75 @@ func mapToString(m map[string]bool) []string {
 	return s
 }
 
-type InMemMemberList struct{}
+var _ Balancer = (*SingleBalancer)(nil)
 
-func NewInMemMemberList() *InMemMemberList {
-	return &InMemMemberList{}
+type SingleBalancer struct {
+	logger    log.Logger
+	name      string
+	worker    Worker
+	heartbeat time.Duration
+
+	mu   sync.Mutex
+	done chan struct{}
 }
 
-func (m InMemMemberList) Name() string {
-	return "InMemMemberList"
+func NewSingleBalancer(logger log.Logger, name string, worker Worker, heartbeat time.Duration) *SingleBalancer {
+	return &SingleBalancer{
+		logger:    logger,
+		name:      name,
+		worker:    worker,
+		heartbeat: heartbeat,
+	}
 }
 
-func (m InMemMemberList) List(context.Context) ([]MemberWorkers, error) {
-	return []MemberWorkers{}, nil
+func (b *SingleBalancer) Name() string {
+	return b.name
 }
 
-func (m *InMemMemberList) Register(context.Context, []string) error {
-	return nil
+func (b *SingleBalancer) Start(ctx context.Context) {
+	done := make(chan struct{})
+	b.mu.Lock()
+	b.done = done
+	b.mu.Unlock()
+	go func() {
+		ticker := time.NewTicker(b.heartbeat)
+		defer ticker.Stop()
+		for {
+			b.worker.Start(ctx)
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				// shutdown
+				b.Stop(context.Background())
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 }
 
-func (m *InMemMemberList) Unregister(context.Context) error {
-	return nil
+func (b *SingleBalancer) Pause(ctx context.Context, group string) {
+	if b.worker.Group() == group {
+		b.worker.Pause(ctx, true)
+	}
+}
+
+func (b *SingleBalancer) Resume(ctx context.Context, group string) {
+	if b.worker.Group() == group {
+		b.worker.Pause(ctx, false)
+	}
+}
+
+func (b *SingleBalancer) Stop(ctx context.Context) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.done == nil {
+		return
+	}
+
+	b.worker.Stop(ctx)
+
+	close(b.done)
+	b.done = nil
 }

@@ -42,7 +42,7 @@ func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.
 	row := StreamResumerRow{}
 	if err := m.collection.FindOne(ctx, bson.D{{"_id", key.String()}}, opts).Decode(&row); err != nil {
 		if err == mongo.ErrNoDocuments {
-			return "", nil
+			return "", faults.Wrap(projection.ErrResumeTokenNotFound)
 		}
 		return "", faults.Errorf("Failed to get resume token for key '%s': %w", key, err)
 	}

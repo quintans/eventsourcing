@@ -10,7 +10,6 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/worker"
 )
 
 type Action int
@@ -40,7 +39,7 @@ type NotifierLockRebuilder struct {
 	lock                lock.Locker
 	projectionCanceller CancelPublisher
 	subscribers         []Subscriber
-	memberLister        worker.Memberlister
+	membersCount        int
 }
 
 func NewNotifierLockRestarter(
@@ -48,7 +47,7 @@ func NewNotifierLockRestarter(
 	lock lock.Locker,
 	projectionCanceller CancelPublisher,
 	subscribers []Subscriber,
-	memberLister worker.Memberlister,
+	membersCount int,
 ) *NotifierLockRebuilder {
 	logger = logger.WithTags(log.Tags{
 		"id": shortid.MustGenerate(),
@@ -58,15 +57,15 @@ func NewNotifierLockRestarter(
 		lock:                lock,
 		projectionCanceller: projectionCanceller,
 		subscribers:         subscribers,
-		memberLister:        memberLister,
+		membersCount:        membersCount,
 	}
 }
 
 func (r *NotifierLockRebuilder) Rebuild(
 	ctx context.Context,
 	projection string,
-	beforeRecordingTokens func(ctx context.Context) (eventid.EventID, error),
-	afterRecordingTokens func(ctx context.Context, afterEventID eventid.EventID) (eventid.EventID, error),
+	catchUp func(ctx context.Context) ([]eventid.EventID, error),
+	afterCatchUp func(ctx context.Context, afterEventID []eventid.EventID) ([]eventid.EventID, error),
 ) error {
 	logger := r.logger.WithTags(log.Tags{
 		"method":     "NotifierLockRebuilder.Rebuild",
@@ -79,12 +78,8 @@ func (r *NotifierLockRebuilder) Rebuild(
 		return faults.Errorf("failed to acquire rebuild lock for projection %s: %w", projection, err)
 	}
 
-	members, err := r.memberLister.List(ctx)
-	if err != nil {
-		return faults.Errorf("failed to members list for projection %s: %w", projection, err)
-	}
-	logger.Infof("Signalling '%d' members to STOP projection listener", len(members))
-	err = r.projectionCanceller.PublishCancel(ctx, projection, len(members))
+	logger.Infof("Signalling '%d' members to STOP projection listener", r.membersCount)
+	err = r.projectionCanceller.PublishCancel(ctx, projection, r.membersCount)
 	if err != nil {
 		logger.WithError(err).Error("Error while freezing projection")
 		r.unlock(ctx, logger)
@@ -96,7 +91,7 @@ func (r *NotifierLockRebuilder) Rebuild(
 		defer r.unlock(ctx, logger)
 
 		logger.Info("Before recording BUS tokens")
-		afterEventID, err := beforeRecordingTokens(ctx)
+		afterEventID, err := catchUp(ctx)
 		if err != nil {
 			logger.
 				WithTags(log.Tags{
@@ -113,7 +108,7 @@ func (r *NotifierLockRebuilder) Rebuild(
 				Errorf("Error while restarting projection when moving subscriptions to last position")
 		}
 		logger.Infof("After recording BUS tokens. Last mile after %s", afterEventID)
-		_, err = afterRecordingTokens(ctx, afterEventID)
+		_, err = afterCatchUp(ctx, afterEventID)
 		if err != nil {
 			logger.
 				WithTags(log.Tags{

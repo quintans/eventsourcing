@@ -68,7 +68,6 @@ func TestRestartProducer(t *testing.T) {
 	startProducer(t, ctxProd, url, latchProd, db)
 
 	resumeStore := test.NewInMemResumeStore()
-	members := &sync.Map{}
 	lockerPool := test.NewInMemLockerPool()
 
 	latchCons := locks.NewCountDownLatch()
@@ -77,7 +76,7 @@ func TestRestartProducer(t *testing.T) {
 	var mu sync.Mutex
 	var actual []eventsourcing.Event
 	delivered := 0
-	_, err = startConsumer(ctxCons, latchCons, url, "account", resumeStore, members, lockerPool, func(ctx context.Context, e eventsourcing.Event) error {
+	_, err = startConsumer(ctxCons, latchCons, url, "account", resumeStore, 1, lockerPool, func(ctx context.Context, e eventsourcing.Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -178,7 +177,7 @@ func TestRestartConsumer(t *testing.T) {
 	startProducer(t, ctxProd, url, latchProd, db)
 
 	resumeStore := test.NewInMemResumeStore()
-	members := &sync.Map{}
+	membersCount := 2
 	lockerPool := test.NewInMemLockerPool()
 
 	var mu sync.Mutex
@@ -198,13 +197,13 @@ func TestRestartConsumer(t *testing.T) {
 	latchCons1 := locks.NewCountDownLatch()
 	ctxCons1, cancelCons1 := context.WithCancel(ctx)
 	defer cancelCons1()
-	_, err = startConsumer(ctxCons1, latchCons1, url, "account", resumeStore, members, lockerPool, handlerFactory("consumer #1"))
+	_, err = startConsumer(ctxCons1, latchCons1, url, "account", resumeStore, membersCount, lockerPool, handlerFactory("consumer #1"))
 	require.NoError(t, err)
 
 	latchCons2 := locks.NewCountDownLatch()
 	ctxCons2, cancelCons2 := context.WithCancel(ctx)
 	defer cancelCons2()
-	_, err = startConsumer(ctxCons2, latchCons2, url, "account", resumeStore, members, lockerPool, handlerFactory("consumer #2"))
+	_, err = startConsumer(ctxCons2, latchCons2, url, "account", resumeStore, membersCount, lockerPool, handlerFactory("consumer #2"))
 	require.NoError(t, err)
 
 	time.Sleep(time.Second)
@@ -239,7 +238,7 @@ func TestRestartConsumer(t *testing.T) {
 	latchCons1 = locks.NewCountDownLatch()
 	ctxCons1, cancelCons1 = context.WithCancel(ctx)
 	defer cancelCons1()
-	_, err = startConsumer(ctxCons1, latchCons1, url, "account", resumeStore, members, lockerPool, handlerFactory("consumer #1"))
+	_, err = startConsumer(ctxCons1, latchCons1, url, "account", resumeStore, membersCount, lockerPool, handlerFactory("consumer #1"))
 	require.NoError(t, err)
 
 	// time.Sleep(time.Second)
@@ -345,32 +344,32 @@ func TestReplayProjection(t *testing.T) {
 		}
 	}
 	resumeStore := test.NewInMemResumeStore()
-	members := &sync.Map{}
+	membersCount := 2
 	lockerPool := test.NewInMemLockerPool()
 
 	projectionHandler := projectionHandlerFactory("projection #1")
-	rebuilder, err := startConsumer(ctxCons, latchCons, url, "account", resumeStore, members, lockerPool, projectionHandler)
+	rebuilder, err := startConsumer(ctxCons, latchCons, url, "account", resumeStore, membersCount, lockerPool, projectionHandler)
 	require.NoError(t, err)
-	_, err = startConsumer(ctxCons, latchCons, url, "account", resumeStore, members, lockerPool, projectionHandlerFactory("projection #2"))
+	_, err = startConsumer(ctxCons, latchCons, url, "account", resumeStore, membersCount, lockerPool, projectionHandlerFactory("projection #2"))
 	require.NoError(t, err)
 
 	time.Sleep(time.Second)
 
-	replay := func(ctx context.Context, afterEventID eventid.EventID) (eventid.EventID, error) {
+	replay := func(ctx context.Context, afterEventIDs []eventid.EventID) ([]eventid.EventID, error) {
 		p := player.New(db)
-		fmt.Printf("===> start replay from '%s'\n", afterEventID)
-		afterEventID, err := p.Replay(ctx, projectionHandler, afterEventID)
+		fmt.Printf("===> start replay from '%s'\n", afterEventIDs)
+		afterEventID, err := p.Replay(ctx, projectionHandler, afterEventIDs[0])
 		if err != nil {
-			return eventid.Zero, faults.Errorf("Unable to replay events after '%s': %w", afterEventID, err)
+			return nil, faults.Errorf("Unable to replay events after '%s': %w", afterEventID, err)
 		}
 		fmt.Println("===> replay done")
-		return afterEventID, nil
+		return []eventid.EventID{afterEventID}, nil
 	}
 
 	err = rebuilder.Rebuild(
 		ctx,
 		"balance",
-		func(ctx context.Context) (eventid.EventID, error) {
+		func(ctx context.Context) ([]eventid.EventID, error) {
 			fmt.Println("===> clear data")
 			mu.Lock()
 			delivered = 0
@@ -378,7 +377,7 @@ func TestReplayProjection(t *testing.T) {
 			mu.Unlock()
 
 			// replay
-			return replay(ctx, eventid.Zero)
+			return replay(ctx, []eventid.EventID{eventid.Zero})
 		},
 		replay,
 	)
@@ -403,7 +402,7 @@ func TestReplayProjection(t *testing.T) {
 func startProducer(t *testing.T, ctx context.Context, url string, latch *locks.CountDownLatch, db *test.InMemDB) {
 	lockerPool := test.NewInMemLockerPool()
 
-	w, err := eventForwarderWorkers(ctx, logger, latch, url, "account", lockerPool, db)
+	w, err := eventForwarderWorker(ctx, logger, latch, url, "account", lockerPool, db)
 	require.NoError(t, err)
 	balancer := worker.NewSingleBalancer(logger, "account", w, 2*time.Second)
 
@@ -411,7 +410,7 @@ func startProducer(t *testing.T, ctx context.Context, url string, latch *locks.C
 	go func() {
 		balancer.Start(ctx)
 		<-ctx.Done()
-		balancer.Stop(context.Background(), false)
+		balancer.Stop(context.Background())
 		latch.Done()
 	}()
 }
@@ -482,7 +481,7 @@ func setupNATS(ctx context.Context) (NatsConfig, func(), error) {
 	return config, tearDown, nil
 }
 
-func eventForwarderWorkers(ctx context.Context, logger log.Logger, latch *locks.CountDownLatch, natsUrl string, topic string, lockerPool *test.InMemLockerPool, db *test.InMemDB) (worker.Worker, error) {
+func eventForwarderWorker(ctx context.Context, logger log.Logger, latch *locks.CountDownLatch, natsUrl string, topic string, lockerPool *test.InMemLockerPool, db *test.InMemDB) (worker.Worker, error) {
 	lockFact := func(lockName string) lock.Locker {
 		return lockerPool.NewLock(lockName)
 	}
@@ -507,7 +506,7 @@ func startConsumer(
 	natsURL string,
 	topic string,
 	resumeStore projection.ResumeStore,
-	members *sync.Map,
+	membersCount int,
 	lockerPool *test.InMemLockerPool,
 	handler projection.EventHandlerFunc,
 ) (*projection.NotifierLockRebuilder, error) {
@@ -515,9 +514,7 @@ func startConsumer(
 		return lockerPool.NewLock(name)
 	}
 
-	memberlist := test.NewInMemMemberList(ctx, members)
-
-	projector, err := mynats.NewProjector(ctx, logger, natsURL, lockerFactory, memberlist, resumeStore, "balance")
+	projector, err := mynats.NewRestartableProjector(ctx, logger, natsURL, lockerFactory, membersCount, resumeStore, "balance")
 	if err != nil {
 		return nil, faults.Errorf("could not instantiate NATS projector: %w", err)
 	}

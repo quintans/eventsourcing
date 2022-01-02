@@ -119,7 +119,7 @@ func NewInMemResumeStore() *InMemResumeStore {
 func (s *InMemResumeStore) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
 	value, ok := s.tokens.Load(key.String())
 	if !ok {
-		return "", nil
+		return "", projection.ErrResumeTokenNotFound
 	}
 	return value.(string), nil
 }

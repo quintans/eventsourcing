@@ -22,32 +22,32 @@ type ProjectionHandler struct {
 	handler    projection.EventHandlerFunc
 }
 
-type Projector struct {
+type RestartableProjector struct {
 	logger            log.Logger
 	nc                *nats.Conn
 	stream            nats.JetStreamContext
 	waitLockerFactory WaitLockerFactory
-	memberlist        worker.Memberlister
+	membersCount      int
 	resumeStore       projection.ResumeStore
 	projectionName    string
 	handlers          []ProjectionHandler
 	startStop         *projection.RestartableProjection
 }
 
-func NewProjector(
+func NewRestartableProjector(
 	ctx context.Context,
 	logger log.Logger,
 	url string,
 	lockerFactory WaitLockerFactory,
-	memberlist worker.Memberlister,
+	membersCount int,
 	resumeStore projection.ResumeStore,
 	projectionName string,
-) (*Projector, error) {
+) (*RestartableProjector, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
 		return nil, faults.Errorf("Could not instantiate NATS connection: %w", err)
 	}
-	p, err := NewProjectorWithConn(ctx, logger, nc, lockerFactory, memberlist, resumeStore, projectionName)
+	p, err := NewRestartableProjectorWithConn(ctx, logger, nc, lockerFactory, membersCount, resumeStore, projectionName)
 	if err != nil {
 		return nil, err
 	}
@@ -60,32 +60,32 @@ func NewProjector(
 	return p, nil
 }
 
-func NewProjectorWithConn(
+func NewRestartableProjectorWithConn(
 	ctx context.Context,
 	logger log.Logger,
 	nc *nats.Conn,
 	lockerFactory WaitLockerFactory,
-	memberlist worker.Memberlister,
+	membersCount int,
 	resumeStore projection.ResumeStore,
 	projectionName string,
-) (*Projector, error) {
+) (*RestartableProjector, error) {
 	stream, err := nc.JetStream()
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
 
-	return &Projector{
+	return &RestartableProjector{
 		nc:                nc,
 		stream:            stream,
 		logger:            logger,
 		waitLockerFactory: lockerFactory,
-		memberlist:        memberlist,
+		membersCount:      membersCount,
 		projectionName:    projectionName,
 		resumeStore:       resumeStore,
 	}, nil
 }
 
-func (p *Projector) AddTopicHandler(topic string, partitions uint32, handler projection.EventHandlerFunc) {
+func (p *RestartableProjector) AddTopicHandler(topic string, partitions uint32, handler projection.EventHandlerFunc) {
 	p.handlers = append(p.handlers, ProjectionHandler{
 		topic:      topic,
 		partitions: partitions,
@@ -93,7 +93,7 @@ func (p *Projector) AddTopicHandler(topic string, partitions uint32, handler pro
 	})
 }
 
-func (p *Projector) Projection(ctx context.Context) (*projection.NotifierLockRebuilder, *projection.RestartableProjection, error) {
+func (p *RestartableProjector) Projection(ctx context.Context) (*projection.NotifierLockRebuilder, *projection.RestartableProjection, error) {
 	if len(p.handlers) == 0 {
 		return nil, nil, faults.Errorf("no handlers defined for projector %s", p.projectionName)
 	}
@@ -120,28 +120,26 @@ func (p *Projector) Projection(ctx context.Context) (*projection.NotifierLockReb
 	}
 	locker := p.waitLockerFactory(p.projectionName + "-freeze")
 
-	balancer := worker.NewNoBalancer(p.logger, p.projectionName, p.memberlist, workers)
-	p.startStop = projection.NewRestartableProjection(p.logger, locker, natsProjectionCanceller, balancer)
+	p.startStop = projection.NewRestartableProjection(p.logger, p.projectionName, locker, natsProjectionCanceller, workers)
 
 	rebuilder := projection.NewNotifierLockRestarter(
 		p.logger,
 		locker,
 		natsProjectionCanceller,
 		subscribers,
-		p.memberlist,
+		p.membersCount,
 	)
 
 	return rebuilder, p.startStop, nil
 }
 
-func (p *Projector) Shutdown(hard bool) {
+func (p *RestartableProjector) Shutdown(hard bool) {
 	p.startStop.Cancel(context.Background(), hard)
 }
 
 // NewReactor creates workers that listen to events coming through the event bus,
 // forwarding them to an handler. This is the same approache used for projections
-// but where we don't care about replays, usually for the write side of things.
-// The number of workers will be equal to the number of partitions.
+// but where we don't care about replays.
 func NewReactor(
 	ctx context.Context,
 	logger log.Logger,
@@ -197,7 +195,7 @@ func NewReactorWithConn(
 	go func() {
 		<-ctx.Done()
 		for _, w := range workers {
-			w.Stop(context.Background(), false)
+			w.Stop(context.Background())
 		}
 		close(done)
 	}()
