@@ -10,9 +10,12 @@ The goal of this project is to implement an event store and how this event store
 This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS.
 
 To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
-We could write the read model into the same database in the same transaction as the write model (dual write), by adding adding an event handler for that but unfortunately this approach does not allow us to rebuild a projection or introduce new projections.
+We could write the read model into the same database in the same transaction as the write model (dual write), by adding adding an event handler for that but unfortunately this approach does not allow us to rebuild a projection or introduce new projections later on.
 
-Other than the event store and the event streaming I also implemented an orchestration layer for the event consumer on the read side.
+Other than the event store and the event streaming I also implemented an orchestration layer for the event consumer on the read side
+to be able to rebuild a projection on request.
+
+> Rebuild a projection may take minutes or hours so it may not be a good idea to do it for a projection that is being used.
 
 **Components**:
 - utility to read/write to/from an event store
@@ -30,7 +33,7 @@ I first talk about the several challenges and then about the solutions for those
 
 This library implements the following pipeline:
 
-A service **writes** to a **database** (the event store), a **forwarder** component (can be an external service) listens to inserts into the database and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary views.
+A service **writes** to a **database** (the event store), a **forwarder** component (can be on the write service or it can be an external service) listens to inserts into the database (change stream) and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary read models.
 
 ![Design](eventstore-design.png)
 
@@ -45,13 +48,13 @@ I assume that the reader is familiar with the concepts of event sourcing and CQR
 The aggregate must "extend" `eventsourcing.RootAggregate`, that implements `eventsourcing.Aggregater` interface, and implement `eventsourcing.Typer` and `eventsourcing.EventHandler` interface.
 Any change to the aggregate is recorded as a series of events.
 
-You can find an example [here](./test/aggregate.go#L95)
+You can find an example [here](./test/aggregate.go#L96)
 
 ### Factory
 
 Since we will deserializing events we will need a factory to instantiate the aggregate and also the events. This factory can be reused on the read side, to instantiate the events.
 
-Example [here](./test/aggregate.go#L51)
+Example [here](./test/aggregate.go#L60)
 
 ### Codec
 
@@ -61,13 +64,15 @@ To encode and decode the events to and from binary data we need to provide a `ev
 
 As the application evolves, domain events may change in a way that previously serialized events may no longer be compatible with the current event schema. So when we rehydrate an event, we must transform into an higher version of that event, and this is done by providing an implementation of the `eventsourcing.Upcaster` interface.
 
+> Another option is to use [event migration](./eventstore.go#L105)
+
 ### Events
 
 Events must implement the `eventsourcing.Eventer` interface.
 
 Example [here](./test/aggregate.go#L17)
 
-### Eventstore
+### Event Store
 
 The event data can be stored in any database. Currently we have implementations for:
 * PostgreSQL
@@ -101,95 +106,38 @@ acc2 := a.(*Account)
 ### Forwarder
 
 After storing the events in a database we need to publish them into an event bus.
-This is done with a `store.Feeder` and a `sink.Sinker`
 
-In a distributed system where we can have multiple instance replicas of a service, we need to avoid duplication of events being forwarded to the message bus.
-To avoid duplication and **keep the order of events** we could have only one active instance using a distributed lock to elect the leader.
-But this would mean that we would have an idle instance and it is just a waste of resources.
-To take advantage of all the replicas, we can partition the events and balance the different partitions across the existing instances of the forwarder service.
-
-> Partitions are explained below in `Key Partitions`
-
-> Balance is done by this library on the client side. A distributed lock is needed.
-> Implementation for Redis and Consul distributed lock are provided.
-
-**Example**: consider 2 forwarder instances and and we want to partition the events into 12 partitions.
-Each forwarder instance would be responsible 6 partitions.
-
-The code would look similar to the following:
-
-```go
-lockPool, _ := consullock.NewPool(consulURL)
-lockFact := func(lockName string) lock.Locker {
-    return lockPool.NewLock(lockName, lockExpiry)
-}
-
-partitionSlots, _ := worker.ParseSlots("1-6,7-12")
-partitions := uint32(12)
-sinker, _ := nats.NewSink(logger, cfg.Topic, partitions, cfg.NatsURL)
-taskerFactory := func(partitionLow, partitionHi uint32) worker.Tasker {
-	return mongodb.NewFeed(logger, connStr, eventstoreName, sinker, mongodb.WithPartitions(partitions, partitionLow, partitionHi))
-}
-
-// workers is used down bellow
-workers := return projection.EventForwarderWorkers(ctx, logger, "forwarder", lockFact, taskerFactory, partitionSlots)
-
-```
-
-### Projection balancing
-
-For message queues that don't have the capability of delivery messages to only a member of a message group we can use the internal client balancer where only one worker will be responsible for handling messages for a partition.
-
-Since events are being partitioned we use the same approach of spreading the partitions over a set of workers and then balance them over the service instances.
-
-![Balancing Projection Partitioning](balancing-projection-partitions.png)
-
-The above picture depicts balancing over several server instances.
-
-Consider a Projection that consumes messages coming from topic X and Y.
-If messages are partitioned into 2 partitions for X and 3 partitions for Y, we create a worker for each partition and have their life cycle be managed by a Balancer. Each worker has an associated lock and a service instance can only run a worker for which it has a lock for.
-The image above depicts the situation where the server instance #1 is consuming messages from topic partitions `Y1`, `Y2` and `X1` and server instance #2 is consuming messages from topic partitions `X2` and `Y3`.
-
-To avoid a an instance to lock all the workers, we rely on a balancer with a distributed member list.
-This way a specific instance will only attempt to lock its share of workers.
-For example, if we have 2 instances and 4 workers, one instance will only attempt to lock 2 workers as per the formula `locks = workers / instances`.
-If the remainder is non zero, then every instance will attempt to lock one more worker, but only after all the instances have locked their share.
-This is to avoid the following scenario.
-
-Consider that we have 4 workers and an increasing number of replica service instances and eagerly lock the extra worker.
-Balancing them, as the instances come online, would happen int the following manner:
-
-    replica #1 -> comes online
-    replica #1 -> locks the 4 workers
-	replica #2 -> comes online
-	replica #1 -> release the lock of 2 workers
-	replica #2 -> locks the 2 unlocked workers
-	replica #3 -> comes online
-	replica #1 -> release the lock of 1 workers
-	replica #2 -> release the lock of 1 workers
-	replica #3 -> locks the 1 unlocked worker and 
-    replica #? -> one of the replicas locks the remaining worker.
+In a distributed system where we can have multiple instance replicas of a service, we need to avoid duplication of events being forwarded to the message bus, for performance reasons.
+To avoid duplication and **keep the order of events** we can have only one active instance of the forwarding process/service using a distributed lock to elect the leader.
 
 ### Rebuilding a projection
 
-I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection. The process is described as follow:
+I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection.
+To types are provided. One that allows to recreate the projection with the system up and running, and another that creates a projection on boot time. The latter should be used when introducing new projections.
+
+> For projection migrations that take too long one strategy we can use is to recreate a new projection and switch to it instead of recreating it from scratch. 
+
+The process for rebuilding an existing projection is described as follow:
 
 Rebuild projections
 - Acquire Freeze Lock
 - Emit Cancel projection notification
-- Wait for all balancers listeners to acknowledge stopping (fails with the configurable timeout of 5s)
-- Before rebuild action
+- Wait for all balancers listeners to acknowledge stopping
+- Retrieve resume position
 - Replay all events in the store
-- After rebuild action
+- record resume position
 - Release Freeze Lock
 
 Boot Partitioned Projection
 - Wait for lock release (if any)
-- Every worker boots from the last position for its partition.
+- Every worker boots from the last recorded position for its partition.
 - Start consuming the stream from the last event position
 - Listen to Cancel projection notification
 
 All this balancing and projection rebuilds assumes that a projection is idempotent.
+
+### Event Migration
+TODO
 
 ## Rationale
 
@@ -200,7 +148,7 @@ For example, we could think of publishing the event only if we were able to succ
 
 That being said, first we write to the database and then a second process picks up the database changes.
 
-Below I present to options: Polling and Pushing (reactive)
+Below I present to options: Polling and Pushing (recommended)
 
 *I implemented examples of both :)*
 
@@ -208,14 +156,10 @@ Below I present to options: Polling and Pushing (reactive)
 
 The event IDs are incremental (monotonic). Having monotonic IDs is very important so that we can replay the events in case of a failure or when replaying events to rebuild a projection.
 
-Since events IDs are monotonic, we can use them to implement basic projection idempotency. Basic projection idempotency for a specific aggregate can be implemented by just ignoring events that have lower order than the last one received.
-
-The same basic projection idempotency can be achieved with the aggregate version.
-
 * **So we cannot insert events in the event store with IDs out of order?**
 
   We can, as long as this out of order events happens in different aggregates.
-  For the same aggregate, the events ID must be monotonic. The order only matter for the aggregate.
+  For the same aggregate, the events ID must be monotonic. The order only matter for the same aggregate.
 
 * **If events are inserted out of order how will they impact projections?**
 
@@ -241,6 +185,10 @@ Compensating for clock skews, is easy if the tool allows to set the time, but fo
 
 Luckily, there is an implementation that addresses both of this issues: [oklog/ulid](https://github.com/oklog/ulid)
 
+### Version
+
+Other than the obvious requirement to guarantee optimistic locking when saving an aggregate, basic projection idempotency for a specific aggregate can be achieved by just looking into the aggregate version delivered in the events. We can safely ignore events that have lower aggregate version than the last one received.
+
 ### Change Data Capture Strategies (CDC)
 
 We need to forward the events in the event store to processes building the projections.
@@ -250,7 +198,7 @@ The event store is a database table that stores serialised events. Since events 
 So, when capturing changes, we are only interested in inserts.
 
 The current library implements two types of strategies.
-* Pushing
+* Pushing (recommended)
 * Polling
 
 #### Pushing
@@ -319,13 +267,13 @@ The record would be something like:
 
 `{ _id = 1, aggregate_id = 1, version = 1, events = [ { … }, { … }, { … }, { … } ] }`
 
-The preferred approach is to transactions. This makes it easy to do `In Place Copy-Replace` migrations, to be added in the future.
+The recommended approach is to use transactions. This makes it easy to do `In Place Copy-Replace` migrations, to be added in the future.
 
 ### Snapshots
 
 I will also use the memento pattern, to take snapshots of the current state, every X events.
 
-Snapshots is a technique used to improve the performance of the event store, when retrieving an aggregate, but they don't play any part in keeping the consistency of the event store, therefore if we sporadically fail to save a snapshot, it is not a problem, so they can be saved in a separate transaction and in a go routine.
+Snapshots is a technique used to improve the performance of the event store, when retrieving an aggregate, but they don't play any part in keeping the consistency of the event store, therefore if we sporadically fail to save a snapshot, it is not a problem, so they can be saved in a separate transaction and asynchronously.
 
 ### Write Idempotency
 
@@ -334,7 +282,7 @@ Later, we can check the presence of the idempotency key, to see if we are repeat
 
 In the following example I exemplify a money transfer with rollback actions, leveraging idempotent keys.
 
-Here, Withdraw and Deposit need to be idempotent, but setting the transfer state to complete does not. The latter is idempotent action while the former is not.
+Here, Withdraw and Deposit need to be idempotent, but setting the transfer state to complete does not. The former is idempotent action while the latter is not.
 
 Another interesting thing that the idempotency key allows us is to relate two different aggregates.
 In the pseudo code bellow, when we handle the `TransactionCreated` event, if the withdraw fails we set the transaction as failed.
@@ -344,7 +292,7 @@ Since only one of the operations must be successful, using the same idempotent k
 because internally we check the presence of the key.
 If the events are delivered concurrently, we just have a concurrent error. 
 
-The goal of an idempotency key is not fail an operation but to allow us to skip an operation. 
+The goal of an idempotency key is not to fail an operation but to allow us to skip an operation. 
 
 Some pseudo code:
 
@@ -460,10 +408,10 @@ func (uc Reactor) TransactionFailed(ctx context.Context, aggregateID uuid.UUID, 
 
 ---
 
-## Command Query Responsibility Segregation (CQRS) + Event Sourcing
+## Event Sourcing + Command Query Responsibility Segregation (CQRS)
 
 An event store is where we store the events of an application that follows the event sourcing architecture pattern.
-This pattern essentially is modelling the changes to the application as a series of events. The state of the application, at a given point in time, can always be reconstructed by replaying the events from the begging of time until that point in time.
+This pattern essentially is modelling the changes to the application as a series of events. The state of the application, at a given point in time, can always be reconstructed by replaying the events from the beginning of time until that point in time.
 
 CQRS is an application architecture pattern often used with event sourcing.
 
@@ -483,28 +431,36 @@ The write service writes to the database, the changes are captured by the Forwar
 
 If the Forwarder service fails to write into the event bus, it will try again. If it restarts, it queries the event bus for the last message and start polling the database from there.
 > If it is not possible to get the last published message to the event bus, we can store it in a database.
-> Writing repeated messages to the event bus is not a concern, since the used event bus must guarantee `at least once` delivery. It is the job of the projector to be idempotent, discarding repeated messages.
+> Writing repeated messages to the event bus is not a concern, since it is the job of the projector to be idempotent, discarding repeated messages.
 
-On the projection side we would store the last position in the event bus, so that in the event of a restart, we would know from where to replay the messages.
+### Replay
 
-### Instances
+Considering that the event bus should have a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
+1) Stop the respective consumer
+1) get the position of the last message from the event bus
+1) consume events from the event store until we reach the event matching the previous event bus position
+1) resume listening the event bus from the position of 2)
 
-Depending on the rate of events being written in the event store, the Forwarder service may not be able to keep up and becomes a bottleneck.
-When this happens we need to create more polling services that don't overlap when polling events.
-Overlapping can be avoided by filtering over metadata.
-What this metadata can be and how it is stored will depend in your business case.
-A good example is to have a Forwarder service per set of aggregates types of per aggregate type.
-As an implementation example, for a very broad spectrum of problem, events can be stored with with generic labels, that in turn can be used to filter the events. Each Forwarder service would then be sending events into its own event bus topic.
+### GDPR
 
-> To be honest, if we use a Forwarder service per write service I don't see how this would ever be a bottleneck, but again, we never know.
+According to the GDPR rules, we must completely remove the information that can identify a user. It is not enough to make the information unreadable, for example, by deleting encryption keys.
+
+This means that the data stored in the data store has to change, going against the rule that an event store should only be an append only "log".
+
+Regarding the event-bus, this will not be a problem if we consider a limited retention window for messages (we have 30 days to comply with the GDPR).
+
+## gRPC codegen
+```sh
+./codegen.sh ./api/proto/*.proto
+```
+
+## Performance
 
 ### Key Partition
 
-Since we only have one instance responsible for creating a projection, the read side may become a bottleneck as it handles more aggregates and do more database operations to create a consistent projection. An approach is needed to evenly distribute this load over the existing services instances, and this can be done with key partitioning.
+The read side may become a bottleneck as it handles more aggregates and do more database operations to create a consistent projection. An approach is needed to evenly distribute this load over the existing services instances, and this can be done with key partitioning.
 
-> I could not find any stream messaging solution that would give key partition in dynamic way, where the rebalancing of the partitions would automatically as the nodes come and go.
-
-> Another approach is to distribute projections over the existing instances.
+> I could not find any stream messaging solution that would give key partition in a dynamic way, where the rebalancing of the partitions would automatically as the nodes come and go.
 
 So, on the read side, consider that we are interested in creating 12 partitions (it a good idea to create a reasonable amount of partitions from the start so that when we add more services instances we can spread them easily). In the Forwarder service side we would publish events into 12 topics, `topic.1`, `topic.2` ... `topic.12` each representing a partition. To select what event goes on what topic, we would mod over the hash of the event ID.
 
@@ -545,23 +501,82 @@ instance #3 - 9-12
 
 The idempotency is still guaranteed for each aggregate.
 
-### Replay
+### Event Forwarder Instances
 
-Considering that the event bus should have a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
-1) Stop the respective consumer
-1) get the position of the last message from the event bus
-1) consume events from the event store until we reach the event matching the previous event bus position
-1) resume listening the event bus from the position of 2)
+Depending on the rate of events being written in the event store, the Forwarder service may not be able to keep up and becomes a bottleneck.
+When this happens we need to create more forwarding processes/services and spread the events among them.
 
-### GDPR
+> To be honest, if we use a Forwarder service per write service I don't see how this would ever be a bottleneck, but again, we never know.
 
-According to the GDPR rules, we must completely remove the information that can identify a user. It is not enough to make the information unreadable, for example, by deleting encryption keys.
+#### Metadata
 
-This means that the data stored in the data store has to change, going against the rule that an event store should only be an append only "log".
+Spreading by filtering by metadata.
+What this metadata can be and how it is stored will depend in your business case.
+A good example is to have a Forwarder service per set of aggregates types of per aggregate type.
+As an implementation example, for a very broad spectrum of problem, events can be stored with generic labels, that in turn can be used to filter the events. Each Forwarder service would then be sending events into its own event bus topic.
 
-Regarding the event-bus, this will not be a problem if we consider a limited retention window for messages (we have 30 days to comply with the GDPR).
+### Partitioning
 
-## gRPC codegen
-```sh
-./codegen.sh ./api/proto/*.proto
+Spreading by partitioning the events and balance the different partitions across the existing instances of the forwarder process/service.
+
+> Partitions are explained above in `Key Partitions`
+
+> Balance is done by this library on the client side. A distributed lock is needed.
+> Implementations for Redis and Consul distributed lock are provided.
+
+**Example**: consider 2 forwarder instances and and we want to partition the events into 12 partitions.
+Each forwarder instance would be responsible 6 partitions.
+
+The code would look similar to the following:
+
+```go
+lockPool, _ := consullock.NewPool(consulURL)
+lockFact := func(lockName string) lock.Locker {
+    return lockPool.NewLock(lockName, lockExpiry)
+}
+
+partitionSlots, _ := worker.ParseSlots("1-6,7-12")
+partitions := uint32(12)
+sinker, _ := nats.NewSink(logger, cfg.Topic, partitions, cfg.NatsURL)
+taskerFactory := func(partitionLow, partitionHi uint32) worker.Tasker {
+	return mongodb.NewFeed(logger, connStr, eventstoreName, sinker, mongodb.WithPartitions(partitions, partitionLow, partitionHi))
+}
+
+// workers is used down bellow
+workers := return projection.EventForwarderWorkers(ctx, logger, "forwarder", lockFact, taskerFactory, partitionSlots)
+
 ```
+
+### Projection balancing
+
+Since events can be partitioned when forwarding database changes we provide a client balancer to spread the partitions over a set of workers in different service instances.
+
+For message queues that don't have the capability of delivery messages to only a member of a message group we can use the internal client balancer, where only one worker will be responsible for handling messages for a partition.
+
+![Balancing Projection Partitioning](balancing-projection-partitions.png)
+
+The above picture depicts balancing over several server instances.
+
+Consider a Projection that consumes messages coming from topic X and Y.
+If messages are partitioned into 2 partitions for X and 3 partitions for Y, we create a worker for each partition and have their life cycle be managed by a Balancer. Each worker has an associated lock and a service instance can only run a worker for which it has a lock for.
+The image above depicts the situation where the server instance #1 is consuming messages from topic partitions `Y1`, `Y2` and `X1` and server instance #2 is consuming messages from topic partitions `X2` and `Y3`.
+
+To avoid a an instance to lock all the workers, we rely on a balancer with a distributed member list.
+This way a specific instance will only attempt to lock its share of workers.
+For example, if we have 2 instances and 4 workers, one instance will only attempt to lock 2 workers as per the formula `locks = workers / instances`.
+If the remainder is non zero, then every instance will attempt to lock one more worker, but only after all the instances have locked their share.
+This is to avoid the following scenario.
+
+Consider that we have 4 workers and an increasing number of replica service instances and eagerly lock the extra worker.
+Balancing them, as the instances come online, would happen int the following manner:
+
+    replica #1 -> comes online
+    replica #1 -> locks the 4 workers
+	replica #2 -> comes online
+	replica #1 -> release the lock of 2 random workers
+	replica #2 -> locks the 2 unlocked workers
+	replica #3 -> comes online
+	replica #1 -> release the lock of 1 random worker
+	replica #2 -> release the lock of 1 random worker
+	replica #3 -> locks the 1 unlocked worker and 
+    replica #? -> one of the replicas locks the remaining worker.
