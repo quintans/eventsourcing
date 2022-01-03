@@ -65,7 +65,7 @@ func (s *ResumeableSubscriber) RetrieveLastResume(ctx context.Context) (projecti
 	ch := make(chan projection.Resume)
 	// this will position the stream at the last position+1
 	sub, err := s.jetStream.Subscribe(
-		s.resumeKey.Topic(),
+		s.resumeKey.Topic().String(),
 		func(m *nats.Msg) {
 			evt, err := s.messageCodec.Decode(m.Data)
 			if err != nil {
@@ -167,7 +167,7 @@ func (s *ResumeableSubscriber) StartConsumer(ctx context.Context, handler projec
 		nats.AckExplicit(),
 		nats.AckWait(opts.AckWait),
 	}
-	s.subscription, err = s.jetStream.Subscribe(s.resumeKey.Topic(), callback, natsOpts...)
+	s.subscription, err = s.jetStream.Subscribe(s.resumeKey.Topic().String(), callback, natsOpts...)
 	if err != nil {
 		return faults.Errorf("failed to subscribe to %s: %w", s.resumeKey.Topic(), err)
 	}
@@ -268,7 +268,7 @@ func (s *Subscriber) RetrieveLastResume(ctx context.Context) (projection.Resume,
 	ch := make(chan projection.Resume)
 	// this will position the stream at the last position+1
 	sub, err := s.jetStream.Subscribe(
-		s.resumeKey.Topic(),
+		s.resumeKey.Topic().String(),
 		func(m *nats.Msg) {
 			evt, err := s.messageCodec.Decode(m.Data)
 			if err != nil {
@@ -369,7 +369,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.Event
 		nats.AckExplicit(),
 		nats.AckWait(opts.AckWait),
 	}
-	s.subscription, err = s.jetStream.QueueSubscribe(s.resumeKey.Topic(), groupName, callback, natsOpts...)
+	s.subscription, err = s.jetStream.QueueSubscribe(s.resumeKey.Topic().String(), groupName, callback, natsOpts...)
 	if err != nil {
 		return faults.Errorf("failed to subscribe to %s: %w", s.resumeKey.Topic(), err)
 	}
@@ -458,7 +458,7 @@ func (s *ReactorSubscriber) StartConsumer(ctx context.Context, handler projectio
 
 	groupName := s.resumeKey.String()
 	_, err := s.jetStream.QueueSubscribe(
-		s.resumeKey.Topic(),
+		s.resumeKey.Topic().String(),
 		groupName,
 		func(m *nats.Msg) {
 			evt, err := s.messageCodec.Decode(m.Data)

@@ -48,12 +48,12 @@ func NewSink(logger log.Logger, topic string, partitions uint32, url string, opt
 	p.js = js
 
 	if partitions <= 1 {
-		if err := createStream(logger, js, common.TopicWithPartition(topic, 0)); err != nil {
+		if err := createStream(logger, js, common.NewPartitionedTopic(topic, 0)); err != nil {
 			return nil, faults.Wrap(err)
 		}
 	} else {
 		for p := uint32(1); p <= partitions; p++ {
-			if err := createStream(logger, js, common.TopicWithPartition(topic, p)); err != nil {
+			if err := createStream(logger, js, common.NewPartitionedTopic(topic, p)); err != nil {
 				return nil, faults.Wrap(err)
 			}
 		}
@@ -78,10 +78,10 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsou
 		sequence uint64
 		data     []byte
 	}
-	topic := common.TopicWithPartition(p.topic, partition)
+	topic := common.NewPartitionedTopic(p.topic, partition)
 	ch := make(chan message)
 	_, err := p.js.Subscribe(
-		topic,
+		topic.String(),
 		func(m *nats.Msg) {
 			ch <- message{
 				sequence: sequence(m),
@@ -128,7 +128,7 @@ func (p *NatsSink) Sink(ctx context.Context, e eventsourcing.Event) error {
 	bo.MaxElapsedTime = 10 * time.Second
 
 	err = backoff.Retry(func() error {
-		_, err := p.js.Publish(topic, b)
+		_, err := p.js.Publish(topic.String(), b)
 		if err != nil && p.nc.IsClosed() {
 			return backoff.Permanent(err)
 		}
@@ -140,9 +140,9 @@ func (p *NatsSink) Sink(ctx context.Context, e eventsourcing.Event) error {
 	return nil
 }
 
-func createStream(logger log.Logger, js nats.JetStreamContext, streamName string) error {
+func createStream(logger log.Logger, js nats.JetStreamContext, streamName common.Topic) error {
 	// Check if the ORDERS stream already exists; if not, create it.
-	_, err := js.StreamInfo(streamName)
+	_, err := js.StreamInfo(streamName.String())
 	if err == nil {
 		logger.Infof("stream '%s' found", streamName)
 		return nil
@@ -150,7 +150,7 @@ func createStream(logger log.Logger, js nats.JetStreamContext, streamName string
 
 	logger.Infof("stream '%s' not found. creating.", streamName)
 	_, err = js.AddStream(&nats.StreamConfig{
-		Name: streamName,
+		Name: streamName.String(),
 	})
 	return faults.Wrap(err)
 }

@@ -84,7 +84,7 @@ func ManagedWorker(ctx context.Context, logger log.Logger, streamName string, to
 }
 
 func createWorker(ctx context.Context, logger log.Logger, streamName string, topic string, partition uint32, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
-	topicWithPartition := common.TopicWithPartition(topic, partition)
+	topicWithPartition := common.NewPartitionedTopic(topic, partition)
 	sr, err := NewStreamResume(topicWithPartition, streamName)
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -93,7 +93,7 @@ func createWorker(ctx context.Context, logger log.Logger, streamName string, top
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	name := streamName + "-lock-" + topicWithPartition
+	name := streamName + "-lock-" + topicWithPartition.String()
 	worker := worker.NewRunWorker(
 		logger,
 		name,

@@ -9,6 +9,7 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
@@ -34,16 +35,13 @@ type CancelListener interface {
 // ResumeKey is used to retrieve the last event id to replay messages directly from the event store.
 type ResumeKey struct {
 	// topic identifies the topic. eg: account#3
-	topic string
+	topic common.Topic
 	// stream identifies a stream for a topic.
 	// The same topic can be consumed by different projections and/or reactors.
 	stream string
 }
 
-func NewStreamResume(topic, stream string) (ResumeKey, error) {
-	if topic == "" {
-		faults.New("topic cannot be empty")
-	}
+func NewStreamResume(topic common.Topic, stream string) (ResumeKey, error) {
 	if stream == "" {
 		faults.New("stream cannot be empty")
 	}
@@ -54,12 +52,12 @@ func NewStreamResume(topic, stream string) (ResumeKey, error) {
 	}, nil
 }
 
-func (ts ResumeKey) Topic() string {
+func (ts ResumeKey) Topic() common.Topic {
 	return ts.topic
 }
 
 func (ts ResumeKey) String() string {
-	return ts.topic + ":" + ts.stream
+	return ts.topic.String() + ":" + ts.stream
 }
 
 type ConsumerOptions struct {
@@ -93,7 +91,7 @@ type Subscriber interface {
 }
 
 type Resume struct {
-	Topic   string
+	Topic   common.Topic
 	EventID eventid.EventID
 	Token   string
 }
