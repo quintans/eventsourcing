@@ -515,7 +515,7 @@ What this metadata can be and how it is stored will depend in your business case
 A good example is to have a Forwarder service per set of aggregates types of per aggregate type.
 As an implementation example, for a very broad spectrum of problem, events can be stored with generic labels, that in turn can be used to filter the events. Each Forwarder service would then be sending events into its own event bus topic.
 
-### Partitioning
+#### Partitioning
 
 Spreading by partitioning the events and balance the different partitions across the existing instances of the forwarder process/service.
 
@@ -547,7 +547,7 @@ workers := return projection.EventForwarderWorkers(ctx, logger, "forwarder", loc
 
 ```
 
-### Projection balancing
+### Client Balancing
 
 Since events can be partitioned when forwarding database changes we provide a client balancer to spread the partitions over a set of workers in different service instances.
 
