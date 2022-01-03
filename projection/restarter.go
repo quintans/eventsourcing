@@ -2,7 +2,6 @@ package projection
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/quintans/faults"
 	"github.com/teris-io/shortid"
@@ -64,8 +63,7 @@ func NewNotifierLockRestarter(
 func (r *NotifierLockRebuilder) Rebuild(
 	ctx context.Context,
 	projection string,
-	catchUp func(ctx context.Context) ([]eventid.EventID, error),
-	afterCatchUp func(ctx context.Context, afterEventID []eventid.EventID) ([]eventid.EventID, error),
+	catchUp func(context.Context, []Resume) error,
 ) error {
 	logger := r.logger.WithTags(log.Tags{
 		"method":     "NotifierLockRebuilder.Rebuild",
@@ -90,30 +88,28 @@ func (r *NotifierLockRebuilder) Rebuild(
 		ctx := context.Background()
 		defer r.unlock(ctx, logger)
 
-		logger.Info("Before recording BUS tokens")
-		afterEventID, err := catchUp(ctx)
+		logger.Info("Retrieving subscriptions last position")
+		resumes, err := r.retrieveResumes(ctx)
 		if err != nil {
 			logger.
-				WithTags(log.Tags{
-					"error": fmt.Sprintf("%+v", err),
-				}).Error("Error while restarting projection before recording BUS tokens")
+				WithError(err).
+				Errorf("Error while retrieving subscriptions last position")
 		}
-		logger.Info("Moving subscriptions to last position")
-		err = r.recordResumeTokens(ctx)
+
+		logger.Info("Catching up projection")
+		err = catchUp(ctx, resumes)
 		if err != nil {
 			logger.
-				WithTags(log.Tags{
-					"error": fmt.Sprintf("%+v", err),
-				}).
-				Errorf("Error while restarting projection when moving subscriptions to last position")
+				WithError(err).
+				Error("Error while catching up projection")
 		}
-		logger.Infof("After recording BUS tokens. Last mile after %s", afterEventID)
-		_, err = afterCatchUp(ctx, afterEventID)
+
+		logger.Info("Recording subscriptions positions")
+		err = r.recordResumeTokens(ctx, resumes)
 		if err != nil {
 			logger.
-				WithTags(log.Tags{
-					"error": fmt.Sprintf("%+v", err),
-				}).Error("Error while restarting projection after recording BUS tokens")
+				WithError(err).
+				Error("Error while recording subscriptions positions")
 		}
 	}()
 
@@ -128,9 +124,21 @@ func (r *NotifierLockRebuilder) unlock(ctx context.Context, logger log.Logger) {
 	}
 }
 
-func (r *NotifierLockRebuilder) recordResumeTokens(ctx context.Context) error {
+func (r *NotifierLockRebuilder) retrieveResumes(ctx context.Context) ([]Resume, error) {
+	var resumes []Resume
 	for _, sub := range r.subscribers {
-		if err := sub.RecordLastResume(ctx); err != nil {
+		resume, err := sub.RetrieveLastResume(ctx)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		resumes = append(resumes, resume)
+	}
+	return resumes, nil
+}
+
+func (r *NotifierLockRebuilder) recordResumeTokens(ctx context.Context, resumes []Resume) error {
+	for k, sub := range r.subscribers {
+		if err := sub.RecordLastResume(ctx, resumes[k].Token); err != nil {
 			return faults.Wrap(err)
 		}
 	}

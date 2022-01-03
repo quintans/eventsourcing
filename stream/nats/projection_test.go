@@ -19,7 +19,6 @@ import (
 
 	"github.com/quintans/eventsourcing"
 
-	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
@@ -355,31 +354,28 @@ func TestReplayProjection(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	replay := func(ctx context.Context, afterEventIDs []eventid.EventID) ([]eventid.EventID, error) {
-		p := player.New(db)
-		fmt.Printf("===> start replay from '%s'\n", afterEventIDs)
-		afterEventID, err := p.Replay(ctx, projectionHandler, afterEventIDs[0])
-		if err != nil {
-			return nil, faults.Errorf("Unable to replay events after '%s': %w", afterEventID, err)
-		}
-		fmt.Println("===> replay done")
-		return []eventid.EventID{afterEventID}, nil
-	}
-
 	err = rebuilder.Rebuild(
 		ctx,
 		"balance",
-		func(ctx context.Context) ([]eventid.EventID, error) {
+		func(_ context.Context, resumes []projection.Resume) error {
 			fmt.Println("===> clear data")
 			mu.Lock()
 			delivered = 0
 			actual = nil
 			mu.Unlock()
 
+			resume := resumes[0]
 			// replay
-			return replay(ctx, []eventid.EventID{eventid.Zero})
+			p := player.New(db)
+			fmt.Println("===> start replay")
+			_, err := p.ReplayUntil(ctx, projectionHandler, resume.EventID)
+			if err != nil {
+				return faults.Errorf("Unable to replay events for '%s': %w", resume.Topic, err)
+			}
+			fmt.Println("===> replay done")
+
+			return nil
 		},
-		replay,
 	)
 	require.NoError(t, err)
 

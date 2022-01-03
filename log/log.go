@@ -2,6 +2,7 @@ package log
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/sirupsen/logrus"
 )
@@ -74,7 +75,7 @@ func (l LogrusWrap) Fatalf(format string, args ...interface{}) {
 }
 
 func (l LogrusWrap) WithError(err error) Logger {
-	return l.WithTags(Tags{"error": err})
+	return l.WithTags(Tags{"error": fmt.Sprintf("%+v", err)})
 }
 
 func (l LogrusWrap) WithTags(vals Tags) Logger {
@@ -83,13 +84,18 @@ func (l LogrusWrap) WithTags(vals Tags) Logger {
 	}
 }
 
-func EmbellishFromContext(ctx context.Context, logger Logger, keys ...string) Logger {
-	tags := Tags{}
-	for _, k := range keys {
-		v := ctx.Value(k)
-		if v != nil {
-			tags[k] = v
-		}
+var logKeys struct{}
+
+func EnrichFromContext(ctx context.Context, logger Logger) Logger {
+	v := ctx.Value(logKeys)
+	if v == nil {
+		return logger
 	}
+
+	tags := v.(Tags)
 	return logger.WithTags(tags)
+}
+
+func SetTags(ctx context.Context, tags Tags) context.Context {
+	return context.WithValue(ctx, logKeys, tags)
 }

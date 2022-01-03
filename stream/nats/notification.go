@@ -61,29 +61,48 @@ func NewResumeableSubscriber(
 	return s
 }
 
-func (s *ResumeableSubscriber) RecordLastResume(ctx context.Context) error {
-	ch := make(chan uint64)
+func (s *ResumeableSubscriber) RetrieveLastResume(ctx context.Context) (projection.Resume, error) {
+	ch := make(chan projection.Resume)
 	// this will position the stream at the last position+1
 	sub, err := s.jetStream.Subscribe(
 		s.resumeKey.Topic(),
 		func(m *nats.Msg) {
-			ch <- sequence(m)
+			evt, err := s.messageCodec.Decode(m.Data)
+			if err != nil {
+				s.logger.WithError(err).Errorf("unable to unmarshal event '%s'", string(m.Data))
+				m.Nak()
+				return
+			}
+
+			seq := sequence(m)
+			token := strconv.FormatUint(seq, 10)
+
+			ch <- projection.Resume{
+				Topic:   s.resumeKey.Topic(),
+				EventID: evt.ID,
+				Token:   token,
+			}
+			m.Ack()
 		},
 		nats.DeliverLast(),
+		nats.MaxDeliver(2),
 	)
 	if err != nil {
-		return faults.Wrap(err)
+		return projection.Resume{}, faults.Wrap(err)
 	}
 	defer sub.Unsubscribe()
 	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
-	var sequence uint64
+	var resume projection.Resume
 	select {
-	case sequence = <-ch:
+	case resume = <-ch:
 	case <-ctx.Done():
-		return faults.New("failed to move subscription to last position")
+		return projection.Resume{}, faults.New("failed to move subscription to last position")
 	}
-	token := strconv.FormatUint(sequence, 10)
+	return resume, nil
+}
+
+func (s *ResumeableSubscriber) RecordLastResume(ctx context.Context, token string) error {
 	return s.resumeStore.SetStreamResumeToken(ctx, s.resumeKey, token)
 }
 
@@ -245,29 +264,48 @@ func sequence(m *nats.Msg) uint64 {
 	return md.Sequence.Stream
 }
 
-func (s *Subscriber) RecordLastResume(ctx context.Context) error {
-	ch := make(chan uint64)
+func (s *Subscriber) RetrieveLastResume(ctx context.Context) (projection.Resume, error) {
+	ch := make(chan projection.Resume)
 	// this will position the stream at the last position+1
 	sub, err := s.jetStream.Subscribe(
 		s.resumeKey.Topic(),
 		func(m *nats.Msg) {
-			ch <- sequence(m)
+			evt, err := s.messageCodec.Decode(m.Data)
+			if err != nil {
+				s.logger.WithError(err).Errorf("unable to unmarshal event '%s'", string(m.Data))
+				m.Nak()
+				return
+			}
+
+			seq := sequence(m)
+			token := strconv.FormatUint(seq, 10)
+
+			ch <- projection.Resume{
+				Topic:   s.resumeKey.Topic(),
+				EventID: evt.ID,
+				Token:   token,
+			}
+			m.Ack()
 		},
 		nats.DeliverLast(),
+		nats.MaxDeliver(2),
 	)
 	if err != nil {
-		return faults.Wrap(err)
+		return projection.Resume{}, faults.Wrap(err)
 	}
 	defer sub.Unsubscribe()
-	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	var sequence uint64
+	var resume projection.Resume
 	select {
-	case sequence = <-ch:
+	case resume = <-ch:
 	case <-ctx.Done():
-		return faults.New("failed to move subscription to last position")
+		return projection.Resume{}, faults.New("failed to get subscription to last event ID")
 	}
-	token := strconv.FormatUint(sequence, 10)
+	return resume, nil
+}
+
+func (s *Subscriber) RecordLastResume(ctx context.Context, token string) error {
 	return s.resumeStore.SetStreamResumeToken(ctx, s.resumeKey, token)
 }
 

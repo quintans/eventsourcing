@@ -8,7 +8,6 @@ import (
 
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/worker"
@@ -80,12 +79,11 @@ func (p *Projector) AddTopicHandler(topic string, partitions uint32, handler pro
 }
 
 // Project creates subscribes to all all events streams and process them.
-// When executed the first time it will synchronously call the catchUp and the afterCatchUp functions
-// for the projection initialisation. These functions should replay of events can be from different event stores.
+// When executed the first time it will synchronously call the catchUp function
+// for the projection initialisation. This function should replay all events from all event stores needed for this projection.
 func (p *Projector) Project(
 	ctx context.Context,
-	catchUp func(ctx context.Context) ([]eventid.EventID, error),
-	afterCatchUp func(ctx context.Context, afterEventID []eventid.EventID) ([]eventid.EventID, error),
+	catchUp func(context.Context, []projection.Resume) error,
 ) (<-chan struct{}, error) {
 	if len(p.handlers) == 0 {
 		return nil, faults.Errorf("no handlers defined for projector %s", p.projectionName)
@@ -109,7 +107,7 @@ func (p *Projector) Project(
 
 	done := make(chan struct{})
 
-	err := p.catchUp(ctx, subscribers, catchUp, afterCatchUp)
+	err := p.catchUp(ctx, subscribers, catchUp)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
@@ -120,8 +118,7 @@ func (p *Projector) Project(
 func (p *Projector) catchUp(
 	ctx context.Context,
 	subscribers []*Subscriber,
-	catchUp func(ctx context.Context) ([]eventid.EventID, error),
-	afterCatchUp func(ctx context.Context, afterEventIDs []eventid.EventID) ([]eventid.EventID, error),
+	catchUp func(context.Context, []projection.Resume) error,
 ) error {
 	ok, err := p.shouldCatchup(ctx, subscribers)
 	if err != nil {
@@ -135,20 +132,22 @@ func (p *Projector) catchUp(
 		"method": "Projector.catchUp",
 	})
 
-	logger.Info("Before recording BUS tokens")
-	afterEventIDs, err := catchUp(ctx)
+	logger.Info("Retrieving subscriptions last position")
+	resumes, err := retrieveResumes(ctx, subscribers)
 	if err != nil {
-		return faults.Errorf("failed while restarting projection before recording BUS tokens: %w", err)
+		return faults.Wrap(err)
 	}
-	logger.Info("Moving subscriptions to last position")
-	err = recordResumeTokens(ctx, subscribers)
+
+	logger.Info("Catching up projection")
+	err = catchUp(ctx, resumes)
 	if err != nil {
-		return faults.Errorf("failed while restarting projection when moving subscriptions to last position: %w", err)
+		return faults.Errorf("failed while catching up projection: %w", err)
 	}
-	logger.Infof("After recording BUS tokens. Last mile after %s", afterEventIDs)
-	_, err = afterCatchUp(ctx, afterEventIDs)
+
+	logger.Info("Recording subscriptions positions")
+	err = recordResumeTokens(ctx, subscribers, resumes)
 	if err != nil {
-		return faults.Errorf("failed while restarting projection after recording BUS tokens: %w", err)
+		return faults.Wrap(err)
 	}
 
 	return nil
@@ -186,9 +185,21 @@ func (p *Projector) boot(ctx context.Context, done chan struct{}) error {
 	return nil
 }
 
-func recordResumeTokens(ctx context.Context, subscribers []*Subscriber) error {
+func retrieveResumes(ctx context.Context, subscribers []*Subscriber) ([]projection.Resume, error) {
+	var resumes []projection.Resume
 	for _, sub := range subscribers {
-		if err := sub.RecordLastResume(ctx); err != nil {
+		resume, err := sub.RetrieveLastResume(ctx)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		resumes = append(resumes, resume)
+	}
+	return resumes, nil
+}
+
+func recordResumeTokens(ctx context.Context, subscribers []*Subscriber, resumes []projection.Resume) error {
+	for k, sub := range subscribers {
+		if err := sub.RecordLastResume(ctx, resumes[k].Token); err != nil {
 			return faults.Wrap(err)
 		}
 	}

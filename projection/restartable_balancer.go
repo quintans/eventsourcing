@@ -9,6 +9,7 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/worker"
@@ -32,7 +33,7 @@ type CancelListener interface {
 
 // ResumeKey is used to retrieve the last event id to replay messages directly from the event store.
 type ResumeKey struct {
-	// topic identifies the topic. eg: account.3
+	// topic identifies the topic. eg: account#3
 	topic string
 	// stream identifies a stream for a topic.
 	// The same topic can be consumed by different projections and/or reactors.
@@ -87,7 +88,14 @@ type Consumer interface {
 
 type Subscriber interface {
 	Consumer
-	RecordLastResume(ctx context.Context) error
+	RetrieveLastResume(ctx context.Context) (Resume, error)
+	RecordLastResume(ctx context.Context, token string) error
+}
+
+type Resume struct {
+	Topic   string
+	EventID eventid.EventID
+	Token   string
 }
 
 var ErrResumeTokenNotFound = errors.New("resume token not found")
