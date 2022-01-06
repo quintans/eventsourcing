@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,10 +15,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/store/mongodb"
-	"github.com/quintans/eventsourcing/store/poller"
+	"github.com/quintans/eventsourcing/stream/poller"
 	"github.com/quintans/eventsourcing/test"
 )
 
@@ -59,7 +60,7 @@ func TestSaveAndGet(t *testing.T) {
 
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := uuid.New()
+	id := common.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Withdraw(5)
@@ -106,7 +107,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.Error(t, err)
 }
 
-func getEvents(ctx context.Context, dbConfig DBConfig, id uuid.UUID) ([]mongodb.Event, error) {
+func getEvents(ctx context.Context, dbConfig DBConfig, id ulid.ULID) ([]mongodb.Event, error) {
 	db, err := connect(dbConfig)
 	if err != nil {
 		return nil, err
@@ -141,7 +142,7 @@ func TestPollListener(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := uuid.New()
+	id := common.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Withdraw(5)
@@ -203,7 +204,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := uuid.New()
+	id := common.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -260,7 +261,7 @@ func TestListenerWithLabels(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := uuid.New()
+	id := common.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -318,7 +319,7 @@ func TestForget(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := uuid.New()
+	id := common.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
@@ -450,7 +451,7 @@ func TestMigration(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := uuid.MustParse("cd67a139-521f-479e-ad94-431e4b23226f")
+	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
 	acc := test.CreateAccount("Paulo Pereira", id, 100)
 	acc.Deposit(20)
 	acc.Withdraw(15)
@@ -500,7 +501,7 @@ func TestMigration(t *testing.T) {
 	evt := evts[0]
 	assert.Equal(t, "AccountCreated", evt.Kind.String())
 	assert.Equal(t, 1, int(evt.AggregateVersion))
-	assert.Equal(t, `{"id":"cd67a139-521f-479e-ad94-431e4b23226f","money":100,"owner":"Paulo Pereira"}`, string(evt.Body))
+	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"owner":"Paulo Pereira"}`, string(evt.Body))
 	assert.Equal(t, 1, evt.Migrated)
 
 	evt = evts[1]
@@ -528,7 +529,7 @@ func TestMigration(t *testing.T) {
 	evt = evts[5]
 	assert.Equal(t, "AccountCreated_V2", evt.Kind.String())
 	assert.Equal(t, 6, int(evt.AggregateVersion))
-	assert.Equal(t, `{"id":"cd67a139-521f-479e-ad94-431e4b23226f","money":100,"first_name":"Paulo","last_name":"Pereira"}`, string(evt.Body))
+	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"first_name":"Paulo","last_name":"Pereira"}`, string(evt.Body))
 	assert.Equal(t, 0, evt.Migrated)
 
 	evt = evts[6]

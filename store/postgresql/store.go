@@ -83,15 +83,15 @@ type StoreOption func(*EsRepository)
 
 type Projector func(context.Context, *sql.Tx, eventsourcing.Event) error
 
-func ProjectorOption(fn Projector) StoreOption {
+func WithProjector(fn Projector) StoreOption {
 	return func(r *EsRepository) {
-		r.projector = fn
+		r.projector = append(r.projector, fn)
 	}
 }
 
 type EsRepository struct {
 	db        *sqlx.DB
-	projector Projector
+	projector []Projector
 	entropy   *ulid.MonotonicEntropy
 }
 
@@ -169,11 +169,13 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) (
 		return eventid.Zero, faults.Errorf("unable to insert event: %w", err)
 	}
 
-	if r.projector != nil {
+	if len(r.projector) > 0 {
 		e := toEventsourcingEvent(event)
-		err := r.projector(ctx, tx, e)
-		if err != nil {
-			return eventid.Zero, err
+		for _, p := range r.projector {
+			err := p(ctx, tx, e)
+			if err != nil {
+				return eventid.Zero, err
+			}
 		}
 	}
 
@@ -231,6 +233,7 @@ type sqlExecuter interface {
 }
 
 func saveSnapshot(ctx context.Context, x sqlExecuter, s Snapshot) error {
+	// TODO instead of adding we could replace UPDATE/INSERT
 	_, err := x.ExecContext(ctx,
 		`INSERT INTO snapshots (id, aggregate_id, aggregate_version, aggregate_type, body, created_at)
 	     VALUES ($1, $2, $3, $4, $5, $6)`,

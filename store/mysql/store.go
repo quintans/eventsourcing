@@ -84,7 +84,7 @@ type StoreOption func(*EsRepository)
 
 type Projector func(context.Context, *sql.Tx, eventsourcing.Event) error
 
-func ProjectorOption(fn Projector) StoreOption {
+func WithProjector(fn Projector) StoreOption {
 	return func(r *EsRepository) {
 		r.projector = fn
 	}
@@ -231,6 +231,7 @@ type sqlExecuter interface {
 }
 
 func saveSnapshot(ctx context.Context, x sqlExecuter, s Snapshot) error {
+	// TODO instead of adding we could replace UPDATE/INSERT
 	_, err := x.ExecContext(ctx,
 		`INSERT INTO snapshots (id, aggregate_id, aggregate_version, aggregate_type, body, created_at)
 	     VALUES (?, ?, ?, ?, ?, ?)`,

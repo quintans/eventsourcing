@@ -2,6 +2,7 @@ package projection
 
 import (
 	"context"
+	"time"
 
 	"github.com/quintans/faults"
 	"github.com/teris-io/shortid"
@@ -125,14 +126,30 @@ func (r *NotifierLockRebuilder) unlock(ctx context.Context, logger log.Logger) {
 }
 
 func (r *NotifierLockRebuilder) retrieveResumes(ctx context.Context) ([]Resume, error) {
+	var max time.Time
 	var resumes []Resume
 	for _, sub := range r.subscribers {
 		resume, err := sub.RetrieveLastResume(ctx)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
+		// add offset to compensate clock skews
+		resume.EventID = resume.EventID.OffsetTime(time.Second)
 		resumes = append(resumes, resume)
+
+		// max time
+		t := resume.EventID.Time()
+		if t.After(max) {
+			max = t
+		}
 	}
+
+	// wait for the safety offset to have passed
+	now := time.Now()
+	if max.After(now) {
+		time.Sleep(max.Sub(now))
+	}
+
 	return resumes, nil
 }
 

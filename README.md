@@ -103,21 +103,55 @@ a, _ = es.GetByID(ctx, id)
 acc2 := a.(*Account)
 ```
 
-### Forwarder
+### Projections
+
+Two types of projections are implemented.
+Consistent Projections and Eventually Consistent Projections
+
+#### Consistent Projections
+
+Consistent projections are created in the same transaction when saving the events in the event store,
+therefore they are created in the same event store database.
+
+This is the easiest to implement and the projection data is immediately available but as an impact in performance since new write needs to be done.
+
+##### Migration
+
+**Not yet implemented**
+
+Consider that we want to migrate a projection for a table called `users` that stores all users in the system.
+
+Here are the steps to migrate:
+
+1) create the new `users2` table. The `users` table is still used to process incoming events
+
+2) when a new event is processed, we update `users` and the new `users2` will only be updated if the given aggregate already exists
+
+3) if a new aggregate is being created, we insert it both in `users` and `users2`
+
+4) finally, for each aggregate (user) in the system, we calculate the new state from all events of the aggregate, and save the result to `users2`. In each transaction which updates the state for a single aggregate, we additionally insert a **no-op** event for that aggregate with an incremented version number. This blocks the update process of any commands that might produce events for this aggregate concurrently. By inserting an event with the next version number, we ensure that we won’t miss any events during the snapshot reconstruction.
+
+5) once this is done, we can remove any logic that updated or used `users` and drop it from the database.
+
+#### Eventually Consistent Projections
+
+Eventually consistent projections makes use of an additional piece of software, and event bus, responsible to propagate the events to another part of the system.
+
+##### Forwarder
 
 After storing the events in a database we need to publish them into an event bus.
 
 In a distributed system where we can have multiple instance replicas of a service, we need to avoid duplication of events being forwarded to the message bus, for performance reasons.
 To avoid duplication and **keep the order of events** we can have only one active instance of the forwarding process/service using a distributed lock to elect the leader.
 
-### Rebuilding a projection
+##### Rebuilding a projection
 
 I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection.
 To types are provided. One that allows to recreate the projection with the system up and running, and another that creates a projection on boot time. The latter should be used when introducing new projections.
 
 > For projection migrations that take too long one strategy we can use is to recreate a new projection and switch to it instead of recreating it from scratch. 
 
-The process for rebuilding an existing projection is described as follow:
+The process for rebuilding an existing projection, when the system is up, is described as follow:
 
 Rebuild projections
 - Acquire Freeze Lock

@@ -254,6 +254,7 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.
 }
 
 func (r *EsRepository) saveSnapshot(ctx context.Context, snapshot Snapshot) error {
+	// TODO instead of adding we could replace UPDATE/INSERT
 	_, err := r.snapshotCollection().InsertOne(ctx, snapshot)
 
 	return faults.Wrap(err)

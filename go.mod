@@ -30,7 +30,7 @@ require (
 	github.com/quintans/toolkit v0.1.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.7.0
-	github.com/teris-io/shortid v0.0.0-20201117134242-e59966efd125 // indirect
+	github.com/teris-io/shortid v0.0.0-20201117134242-e59966efd125
 	github.com/testcontainers/testcontainers-go v0.12.0
 	go.mongodb.org/mongo-driver v1.7.1
 	google.golang.org/grpc v1.41.0

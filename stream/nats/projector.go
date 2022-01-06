@@ -3,11 +3,13 @@ package nats
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
 	"github.com/quintans/faults"
 
+	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/worker"
@@ -17,6 +19,7 @@ type Projector struct {
 	logger         log.Logger
 	nc             *nats.Conn
 	stream         nats.JetStreamContext
+	locker         lock.WaitLocker
 	resumeStore    projection.ResumeStore
 	projectionName string
 	handlers       []ProjectionHandler
@@ -27,6 +30,7 @@ func NewProjector(
 	ctx context.Context,
 	logger log.Logger,
 	url string,
+	locker lock.WaitLocker,
 	resumeStore projection.ResumeStore,
 	projectionName string,
 ) (*Projector, error) {
@@ -34,7 +38,7 @@ func NewProjector(
 	if err != nil {
 		return nil, faults.Errorf("Could not instantiate NATS connection: %w", err)
 	}
-	p, err := NewProjectorWithConn(ctx, logger, nc, resumeStore, projectionName)
+	p, err := NewProjectorWithConn(ctx, logger, nc, locker, resumeStore, projectionName)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +54,7 @@ func NewProjectorWithConn(
 	ctx context.Context,
 	logger log.Logger,
 	nc *nats.Conn,
+	locker lock.WaitLocker,
 	resumeStore projection.ResumeStore,
 	projectionName string,
 ) (*Projector, error) {
@@ -65,6 +70,7 @@ func NewProjectorWithConn(
 		nc:             nc,
 		stream:         stream,
 		logger:         logger,
+		locker:         locker,
 		projectionName: projectionName,
 		resumeStore:    resumeStore,
 	}, nil
@@ -78,9 +84,20 @@ func (p *Projector) AddTopicHandler(topic string, partitions uint32, handler pro
 	})
 }
 
-// Project creates subscribes to all all events streams and process them.
-// When executed the first time it will synchronously call the catchUp function
-// for the projection initialisation. This function should replay all events from all event stores needed for this projection.
+/*
+	Project creates subscribes to all events streams and process them.
+
+	It will check if it needs to do a catch up.
+	If so, it will try acquire a lock and run a projection catchup.
+	If it is unable to acquire the lock because it is held by another process, it will wait for its release.
+	In the end it will fire up the subscribers.
+	All this will happen in a separate go routine allowing the service to completely to start up.
+
+	After a successfull projection creation, subsequent start up will no longer execute the catch up function. This can be used to migrate projections,
+	where a completely new projection will be populated.
+
+	The catch up function should replay all events from all event stores needed for this projection.
+*/
 func (p *Projector) Project(
 	ctx context.Context,
 	catchUp func(context.Context, []projection.Resume) error,
@@ -107,12 +124,14 @@ func (p *Projector) Project(
 
 	done := make(chan struct{})
 
-	err := p.catchUp(ctx, subscribers, catchUp)
-	if err != nil {
-		return nil, faults.Wrap(err)
-	}
-	err = p.boot(ctx, done)
-	return done, faults.Wrap(err)
+	go func() {
+		err := p.catchUp(ctx, subscribers, catchUp)
+		if err != nil {
+			p.logger.WithError(err).Error("Failed to catchup projection '%s'", p.projectionName)
+		}
+		p.boot(ctx, done)
+	}()
+	return done, nil
 }
 
 func (p *Projector) catchUp(
@@ -120,9 +139,31 @@ func (p *Projector) catchUp(
 	subscribers []*Subscriber,
 	catchUp func(context.Context, []projection.Resume) error,
 ) error {
+	// check if it should catch up
 	ok, err := p.shouldCatchup(ctx, subscribers)
 	if err != nil {
-		return err
+		return faults.Wrap(err)
+	}
+	if !ok {
+		return nil
+	}
+	// lock
+	for {
+		_, err = p.locker.Lock(ctx)
+		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+			p.locker.WaitForUnlock(ctx)
+			continue
+		} else if err != nil {
+			faults.Wrap(err)
+		}
+
+		defer p.locker.Unlock(context.Background())
+		break
+	}
+	// recheck if it should catch up
+	ok, err = p.shouldCatchup(ctx, subscribers)
+	if err != nil {
+		return faults.Wrap(err)
 	}
 	if !ok {
 		return nil
@@ -141,7 +182,7 @@ func (p *Projector) catchUp(
 	logger.Info("Catching up projection")
 	err = catchUp(ctx, resumes)
 	if err != nil {
-		return faults.Errorf("failed while catching up projection: %w", err)
+		return faults.Errorf("failed executing catch up function for projection '%s': %w", p.projectionName, err)
 	}
 
 	logger.Info("Recording subscriptions positions")
@@ -169,7 +210,7 @@ func (p *Projector) shouldCatchup(ctx context.Context, subscribers []*Subscriber
 	return false, nil
 }
 
-func (p *Projector) boot(ctx context.Context, done chan struct{}) error {
+func (p *Projector) boot(ctx context.Context, done chan struct{}) {
 	for _, w := range p.workers {
 		w.Start(ctx)
 	}
@@ -181,19 +222,33 @@ func (p *Projector) boot(ctx context.Context, done chan struct{}) error {
 		}
 		close(done)
 	}()
-
-	return nil
 }
 
 func retrieveResumes(ctx context.Context, subscribers []*Subscriber) ([]projection.Resume, error) {
+	var max time.Time
 	var resumes []projection.Resume
 	for _, sub := range subscribers {
 		resume, err := sub.RetrieveLastResume(ctx)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
+		// add offset to compensate clock skews
+		resume.EventID = resume.EventID.OffsetTime(time.Second)
 		resumes = append(resumes, resume)
+
+		// max time
+		t := resume.EventID.Time()
+		if t.After(max) {
+			max = t
+		}
 	}
+
+	// wait for the safety offset to have passed
+	now := time.Now()
+	if max.After(now) {
+		time.Sleep(max.Sub(now))
+	}
+
 	return resumes, nil
 }
 

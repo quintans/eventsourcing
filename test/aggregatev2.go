@@ -3,7 +3,7 @@ package test
 import (
 	"strings"
 
-	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -18,7 +18,7 @@ var (
 )
 
 type AccountCreatedV2 struct {
-	ID        uuid.UUID `json:"id,omitempty"`
+	ID        ulid.ULID `json:"id,omitempty"`
 	Money     int64     `json:"money,omitempty"`
 	FirstName string    `json:"first_name,omitempty"`
 	LastName  string    `json:"last_name,omitempty"`
@@ -73,7 +73,7 @@ func (EventFactoryV2) NewEvent(kind eventsourcing.EventKind) (eventsourcing.Type
 	return e, nil
 }
 
-func CreateAccountV2(firstName string, lastName string, id uuid.UUID, money int64) *AccountV2 {
+func CreateAccountV2(firstName string, lastName string, id ulid.ULID, money int64) *AccountV2 {
 	a := &AccountV2{}
 	a.RootAggregate = eventsourcing.NewRootAggregate(a)
 	a.ID = id
@@ -94,7 +94,7 @@ func NewAccountV2() *AccountV2 {
 
 type AccountV2 struct {
 	eventsourcing.RootAggregate
-	ID        uuid.UUID `json:"id"`
+	ID        ulid.ULID `json:"id"`
 	Status    Status    `json:"status,omitempty"`
 	Balance   int64     `json:"balance,omitempty"`
 	FirstName string    `json:"first_name,omitempty"`

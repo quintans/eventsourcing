@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
@@ -94,7 +94,7 @@ func TestListener(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			errs := feeding(ctx, cfg, partitions, tt.partitionSlots, s)
 
-			id := uuid.New()
+			id := common.MustNewULID()
 			acc := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			acc.Deposit(20)
@@ -114,7 +114,7 @@ func TestListener(t *testing.T) {
 			}
 			ctx, cancel = context.WithCancel(context.Background())
 
-			id = uuid.New()
+			id = common.MustNewULID()
 			acc = test.CreateAccount("Quintans", id, 100)
 			acc.Deposit(30)
 			// acc.Withdraw(5)

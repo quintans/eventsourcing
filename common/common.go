@@ -2,7 +2,11 @@ package common
 
 import (
 	"hash/fnv"
+	"math/rand"
 	"reflect"
+	"time"
+
+	"github.com/oklog/ulid/v2"
 )
 
 // Dereference returns the underlying struct dereference
@@ -29,4 +33,19 @@ func In(test string, values ...string) bool {
 		}
 	}
 	return false
+}
+
+func MustNewULID() ulid.ULID {
+	id, err := NewULID()
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func NewULID() (ulid.ULID, error) {
+	t := time.Now().UTC()
+	entropy := ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
+
+	return ulid.New(ulid.Timestamp(t), entropy)
 }

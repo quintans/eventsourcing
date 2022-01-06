@@ -155,6 +155,7 @@ type Options struct {
 	IdempotencyKey string
 	// Labels tags the event. eg: {"geo": "EU"}
 	Labels map[string]interface{}
+	clock  common.Clocker
 }
 
 type SaveOption func(*Options)
@@ -168,6 +169,13 @@ func WithIdempotencyKey(key string) SaveOption {
 func WithMetadata(metadata map[string]interface{}) SaveOption {
 	return func(o *Options) {
 		o.Labels = metadata
+	}
+}
+
+// WithClock allows to set a logical clock and time relate two aggregates
+func WithClock(clock common.Clocker) SaveOption {
+	return func(o *Options) {
+		o.clock = clock
 	}
 }
 
@@ -315,22 +323,14 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 		return nil
 	}
 
-	opts := Options{}
+	opts := Options{
+		clock: common.NewClock(),
+	}
 	for _, fn := range options {
 		fn(&opts)
 	}
 
-	now := time.Now().UTC()
-	// we only need millisecond precision
-	now = now.Truncate(time.Millisecond)
-	// due to clock skews, 'now' can be less or equal than the last aggregate update
-	// so we make sure that it will be at least 1ms after.
-	// In practice this guard may not be necessary,
-	// since the time passed between rehydrating and persisting the aggregate,
-	// will usually be greater than any clock skew.
-	if now.Before(aggregate.GetUpdatedAt()) || now.Equal(aggregate.GetUpdatedAt()) {
-		now = aggregate.GetUpdatedAt().Add(time.Millisecond)
-	}
+	now := opts.clock.After(aggregate.GetUpdatedAt())
 
 	tName := aggregate.GetType()
 	details := make([]EventRecordDetail, eventsLen)
@@ -375,10 +375,9 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 			AggregateVersion: aggregate.GetVersion(),
 			AggregateType:    AggregateType(aggregate.GetType()),
 			Body:             body,
-			CreatedAt:        time.Now().UTC(),
+			CreatedAt:        now,
 		}
 
-		// TODO this could be done asynchronously.
 		err = es.store.SaveSnapshot(ctx, snap)
 		if err != nil {
 			return err
@@ -440,8 +439,8 @@ func (es EventStore) MigrateInPlaceCopyReplace(
 	eventTypeCriteria ...EventKind,
 ) error {
 	return es.store.MigrateInPlaceCopyReplace(ctx,
-		1,
-		3,
+		revision,
+		snapshotThreshold,
 		func() (Aggregater, error) {
 			return es.factory.NewAggregate(aggregateType)
 		},

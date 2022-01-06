@@ -19,16 +19,18 @@ type WaitLocker interface {
 type Locker interface {
 	/*
 		Lock acquires a lock.
-		The return channel will be closed when the lock is released.
+
+		The returned channel will be closed when the lock is released.
 			The following errors can occur:
 			* ErrLockAlreadyHeld: it already had the lock
 			* ErrLockAlreadyAcquired: the lock is already held by another lock
 	*/
 	Lock(context.Context) (<-chan struct{}, error)
-	// Unlock releases the lock, leading to the closing the channel returned in Lock()
 	/*
-		The following errors can occur:
-		* ErrLockNotHeld: releasing a lock that it was not previously acquired
+		Unlock releases the lock, leading to the closing the channel returned in Lock()
+
+			The following errors can occur:
+			* ErrLockNotHeld: releasing a lock that it was not previously acquired
 	*/
 	Unlock(context.Context) error
 }

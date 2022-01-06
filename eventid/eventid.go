@@ -80,6 +80,10 @@ func Parse(encoded string) (EventID, error) {
 	return EventID{u}, nil
 }
 
+func (e EventID) Time() time.Time {
+	return ulid.Time(e.u.Time())
+}
+
 func (e EventID) OffsetTime(offset time.Duration) EventID {
 	ut := e.u.Time()
 	t := ulid.Time(ut)
