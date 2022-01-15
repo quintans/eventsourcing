@@ -64,6 +64,7 @@ type Aggregater interface {
 	ClearEvents()
 	ApplyChangeFromHistory(event Eventer)
 	SetUpdatedAt(time.Time)
+	// GetUpdatedAt always return the time of the last event applied
 	GetUpdatedAt() time.Time
 }
 
@@ -130,6 +131,16 @@ func DefaultEventMigration(e *Event) *EventMigration {
 		IdempotencyKey: e.IdempotencyKey,
 		Metadata:       e.Metadata,
 	}
+}
+
+var KindNoOpEvent = EventKind("NoOp")
+
+// NoOpEvent is used as marker for consistent projection migration
+// making sure that no other event was added while recreating the state of an aggregate
+type NoOpEvent struct{}
+
+func (e NoOpEvent) GetType() string {
+	return KindNoOpEvent.String()
 }
 
 // MigrationHandler receives the list of events for a stream and transforms the list of events.

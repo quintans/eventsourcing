@@ -16,6 +16,9 @@ func (JSONCodec) Encode(v interface{}) ([]byte, error) {
 }
 
 func (JSONCodec) Decode(data []byte, v interface{}) error {
+	if len(data) == 0 {
+		return nil
+	}
 	err := json.Unmarshal(data, v)
 	return faults.Wrap(err)
 }
