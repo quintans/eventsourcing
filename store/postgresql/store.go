@@ -78,23 +78,15 @@ type Snapshot struct {
 
 var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
-type StoreOption func(*EsRepository)
-
-type Projector func(context.Context, *sql.Tx, eventsourcing.Event) error
-
-func WithProjector(fn Projector) StoreOption {
-	return func(r *EsRepository) {
-		r.projector = append(r.projector, fn)
-	}
-}
+type Listener func(context.Context, *sql.Tx, eventsourcing.Event) error
 
 type EsRepository struct {
 	db        *sqlx.DB
-	projector []Projector
+	listeners []Listener
 	entropy   *ulid.MonotonicEntropy
 }
 
-func NewStore(connString string, options ...StoreOption) (*EsRepository, error) {
+func NewStore(connString string) (*EsRepository, error) {
 	db, err := sql.Open(driverName, connString)
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -106,11 +98,12 @@ func NewStore(connString string, options ...StoreOption) (*EsRepository, error) 
 		entropy: eventid.EntropyFactory(),
 	}
 
-	for _, o := range options {
-		o(r)
-	}
-
 	return r, nil
+}
+
+// AddListener adds a listener to event sourcing events
+func (r *EsRepository) AddListener(listener Listener) {
+	r.listeners = append(r.listeners, listener)
 }
 
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
@@ -168,9 +161,9 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) (
 		return eventid.Zero, faults.Errorf("unable to insert event: %w", err)
 	}
 
-	if len(r.projector) > 0 {
+	if len(r.listeners) > 0 {
 		e := toEventsourcingEvent(event)
-		for _, p := range r.projector {
+		for _, p := range r.listeners {
 			err := p(ctx, tx, e)
 			if err != nil {
 				return eventid.Zero, err
