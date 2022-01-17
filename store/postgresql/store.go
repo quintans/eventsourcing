@@ -163,8 +163,8 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) (
 
 	if len(r.listeners) > 0 {
 		e := toEventsourcingEvent(event)
-		for _, p := range r.listeners {
-			err := p(ctx, tx, e)
+		for _, listener := range r.listeners {
+			err := listener(ctx, tx, e)
 			if err != nil {
 				return eventid.Zero, err
 			}

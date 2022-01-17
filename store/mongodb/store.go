@@ -52,13 +52,7 @@ var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
 type StoreOption func(*EsRepository)
 
-type Projector func(mongo.SessionContext, eventsourcing.Event) error
-
-func WithProjector(fn Projector) StoreOption {
-	return func(r *EsRepository) {
-		r.projector = fn
-	}
-}
+type Listener func(mongo.SessionContext, eventsourcing.Event) error
 
 func WithEventsCollection(eventsCollection string) StoreOption {
 	return func(r *EsRepository) {
@@ -75,7 +69,7 @@ func WithSnapshotsCollection(snapshotsCollection string) StoreOption {
 type EsRepository struct {
 	dbName                  string
 	client                  *mongo.Client
-	projector               Projector
+	listeners               []Listener
 	eventsCollectionName    string
 	snapshotsCollectionName string
 	entropy                 *ulid.MonotonicEntropy
@@ -104,6 +98,11 @@ func NewStore(connString, database string, opts ...StoreOption) (*EsRepository, 
 	}
 
 	return r, nil
+}
+
+// AddListener adds a listener to event sourcing events
+func (r *EsRepository) AddListener(listener Listener) {
+	r.listeners = append(r.listeners, listener)
 }
 
 func (r *EsRepository) Close(ctx context.Context) {
@@ -177,11 +176,13 @@ func (r *EsRepository) saveEvent(mCtx mongo.SessionContext, doc Event) (eventid.
 		return eventid.Zero, faults.Wrap(err)
 	}
 
-	if r.projector != nil {
+	if r.listeners != nil {
 		evt := toEventsourcingEvent(doc, id)
-		err := r.projector(mCtx, evt)
-		if err != nil {
-			return eventid.Zero, err
+		for _, listener := range r.listeners {
+			err := listener(mCtx, evt)
+			if err != nil {
+				return eventid.Zero, err
+			}
 		}
 	}
 	return id, nil
