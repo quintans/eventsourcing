@@ -17,24 +17,24 @@ type Clock struct {
 }
 
 func NewClock() *Clock {
-	return NewClockFrom(time.Now())
+	return NewClockAfter(time.Now())
 }
 
-func NewClockFrom(t time.Time) *Clock {
+func NewClockAfter(t time.Time) *Clock {
 	return &Clock{
 		last: t.UTC(),
 	}
 }
 
 func (c *Clock) Now() time.Time {
-	t := time.Now()
+	t := time.Now().UTC()
 	t = max(t, c.last)
 	c.last = t
 	return t
 }
 
 func (c *Clock) After(after time.Time) time.Time {
-	t := time.Now()
+	t := time.Now().UTC()
 	t = max(t, c.last)
 	t = max(t, after)
 	c.last = t

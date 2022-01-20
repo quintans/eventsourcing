@@ -1,22 +1,16 @@
 package eventid
 
 import (
-	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func entropyFactory(t time.Time) *ulid.MonotonicEntropy {
-	return ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
-}
-
 func TestMarshal(t *testing.T) {
 	ts := ulid.Time(0x0000f00000000000)
-	entropy := entropyFactory(ts)
+	entropy := EntropyFactory(ts)
 	eid, err := New(ts, entropy)
 	require.NoError(t, err)
 	assert.Equal(t, "7G00000000D0AJ8894M178DT3P", eid.String())
@@ -24,7 +18,7 @@ func TestMarshal(t *testing.T) {
 
 func TestUnmarshalWithCount(t *testing.T) {
 	ts := ulid.Time(0x0000f00000000000)
-	entropy := entropyFactory(ts)
+	entropy := EntropyFactory(ts)
 	eid, err := New(ts, entropy)
 	require.NoError(t, err)
 

@@ -1,4 +1,4 @@
-package postgresql
+package mysql
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/quintans/faults"
 
@@ -32,7 +33,7 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 		return faults.New("if snapshot threshold is greather than zero then aggregate factory, rehydrate function and encoder must be defined.")
 	}
 
-	// loops until it exhausts all streams (aggregates) with the event that we want to migrate
+	// loops until it exhausts all streams with the event that we want to migrate
 	for {
 		// the event to migrate will be replaced by a new one and in this way the migrated aggregate will not be selected in the next loop
 		events, err := r.eventsForMigration(ctx, aggregateType, eventTypeCriteria)
@@ -68,24 +69,24 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eve
 	args := []interface{}{aggregateType}
 	var subquery bytes.Buffer
 	// get the id of the aggregate
-	subquery.WriteString("SELECT aggregate_id FROM events WHERE aggregate_type = $1 AND migrated = 0 AND (")
+	subquery.WriteString("SELECT aggregate_id FROM events WHERE aggregate_type = ? AND migrated = 0 AND (")
 	for k, v := range eventTypeCriteria {
 		if k > 0 {
 			subquery.WriteString(" OR ")
 		}
 		args = append(args, v)
-		subquery.WriteString(fmt.Sprintf("kind = $%d", len(args)))
+		subquery.WriteString("kind = ?")
 	}
 	subquery.WriteString(") ORDER BY id ASC LIMIT 1")
 
-	// TODO should select by batches
 	// get all events for the aggregate id returned by the subquery
 	events := []*Event{}
-	query := fmt.Sprintf("SELECT * FROM events WHERE aggregate_id = (%s) AND migrated = 0 ORDER BY aggregate_version ASC", subquery)
+	query := fmt.Sprintf("SELECT * FROM events WHERE aggregate_id = (%s) AND migrated = 0 ORDER BY aggregate_version ASC", subquery.String())
 	err := r.db.SelectContext(ctx, &events, query, args...)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	} else if err != nil {
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, faults.Errorf("unable to query events: %w\n%s", err, query)
 	}
 
@@ -126,20 +127,20 @@ func (r *EsRepository) saveMigration(
 			AggregateVersion: version,
 			AggregateType:    last.AggregateType,
 			Kind:             eventsourcing.InvalidatedKind,
-			CreatedAt:        t,
+			CreatedAt:        time.Now().UTC(),
 		})
 		if err != nil {
 			return err
 		}
 
 		// invalidate all active events
-		_, err = tx.ExecContext(c, "UPDATE events SET migrated = $1 WHERE aggregate_id = $2 AND migrated = 0", revision, last.AggregateID)
+		_, err = tx.ExecContext(c, "UPDATE events SET migrated = ? WHERE aggregate_id = ? AND migrated = 0", revision, last.AggregateID)
 		if err != nil {
 			return faults.Errorf("failed to invalidate events: %w", err)
 		}
 
 		// delete snapshots
-		_, err = tx.ExecContext(c, "DELETE FROM snapshots WHERE aggregate_id = $1", last.AggregateID)
+		_, err = tx.ExecContext(c, "DELETE FROM snapshots WHERE aggregate_id = ?", last.AggregateID)
 		if err != nil {
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
 		}
@@ -198,7 +199,7 @@ func (r *EsRepository) saveMigration(
 				AggregateVersion: aggregate.GetVersion(),
 				AggregateType:    eventsourcing.AggregateType(aggregate.GetType()),
 				Body:             body,
-				CreatedAt:        clock.Now(),
+				CreatedAt:        time.Now().UTC(),
 			})
 			if err != nil {
 				return err

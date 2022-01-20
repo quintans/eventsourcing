@@ -29,7 +29,7 @@ type InMemDB struct {
 
 func NewInMemDB() *InMemDB {
 	return &InMemDB{
-		entropy: eventid.EntropyFactory(),
+		entropy: eventid.EntropyFactory(time.Now()),
 	}
 }
 

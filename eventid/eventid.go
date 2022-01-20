@@ -25,8 +25,23 @@ type EventID struct {
 	u ulid.ULID
 }
 
-func EntropyFactory() *ulid.MonotonicEntropy {
-	t := time.Now().UTC()
+type Entropy struct {
+	entropy *ulid.MonotonicEntropy
+}
+
+func NewEntropy() *Entropy {
+	t := time.Now()
+	return &Entropy{
+		// beaware that entropy isn't safe for concurrent use.
+		entropy: ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0),
+	}
+}
+
+func (e *Entropy) NewID(t time.Time) (EventID, error) {
+	return New(t, e.entropy)
+}
+
+func EntropyFactory(t time.Time) *ulid.MonotonicEntropy {
 	return ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
 }
 

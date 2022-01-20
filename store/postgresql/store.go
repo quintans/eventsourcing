@@ -12,7 +12,6 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
-	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -83,7 +82,6 @@ type Listener func(context.Context, *sql.Tx, eventsourcing.Event) error
 type EsRepository struct {
 	db        *sqlx.DB
 	listeners []Listener
-	entropy   *ulid.MonotonicEntropy
 }
 
 func NewStore(connString string) (*EsRepository, error) {
@@ -94,8 +92,7 @@ func NewStore(connString string) (*EsRepository, error) {
 
 	dbx := sqlx.NewDb(db, driverName)
 	r := &EsRepository{
-		db:      dbx,
-		entropy: eventid.EntropyFactory(),
+		db: dbx,
 	}
 
 	return r, nil
@@ -112,11 +109,17 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	version := eRec.Version
 	var id eventid.EventID
 	err := r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
+		entropy := eventid.NewEntropy()
 		for _, e := range eRec.Details {
 			version++
 			hash := common.Hash(eRec.AggregateID)
 			var err error
-			id, err = r.saveEvent(c, tx, Event{
+			id, err = entropy.NewID(eRec.CreatedAt)
+			if err != nil {
+				return faults.Wrap(err)
+			}
+			err = r.saveEvent(c, tx, Event{
+				ID:               id,
 				AggregateID:      eRec.AggregateID,
 				AggregateIDHash:  int32ring(hash),
 				AggregateVersion: version,
@@ -128,7 +131,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 				CreatedAt:        eRec.CreatedAt,
 			})
 			if err != nil {
-				return err
+				return faults.Wrap(err)
 			}
 			// for a batch of events, the idempotency key is only applied on the first record
 			idempotencyKey = ""
@@ -143,22 +146,16 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	return id, version, nil
 }
 
-func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) (eventid.EventID, error) {
-	id, err := eventid.New(event.CreatedAt, r.entropy)
-	if err != nil {
-		return eventid.Zero, faults.Wrap(err)
-	}
-	event.ID = id
-	_, err = tx.ExecContext(ctx,
+func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) error {
+	_, err := tx.ExecContext(ctx,
 		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_type, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash)
 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		event.ID.String(), event.AggregateID, event.AggregateVersion, event.AggregateType, event.Kind, event.Body, event.IdempotencyKey, event.Metadata, event.CreatedAt, event.AggregateIDHash)
-
 	if err != nil {
 		if isDup(err) {
-			return eventid.Zero, eventsourcing.ErrConcurrentModification
+			return eventsourcing.ErrConcurrentModification
 		}
-		return eventid.Zero, faults.Errorf("unable to insert event: %w", err)
+		return faults.Errorf("unable to insert event: %w", err)
 	}
 
 	if len(r.listeners) > 0 {
@@ -166,12 +163,12 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) (
 		for _, listener := range r.listeners {
 			err := listener(ctx, tx, e)
 			if err != nil {
-				return eventid.Zero, err
+				return err
 			}
 		}
 	}
 
-	return id, nil
+	return nil
 }
 
 func int32ring(x uint32) int32 {
