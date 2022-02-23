@@ -17,11 +17,11 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
 )
 
@@ -242,7 +242,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		}
 		if f.partitions > 0 {
 			// check if the event is to be forwarded to the sinker
-			part := common.WhichPartition(uint32(aggregateIDHash), f.partitions)
+			part := util.WhichPartition(uint32(aggregateIDHash), f.partitions)
 			if part < f.partitionsLow || part > f.partitionsHi {
 				// we exit the loop because all rows are for the same aggregate
 				return nil, nil

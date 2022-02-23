@@ -13,13 +13,13 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
 )
 
@@ -238,7 +238,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 		}
 
 		// check if the event is to be forwarded to the sinker
-		part := common.WhichPartition(pgEvent.AggregateIDHash, p.partitions)
+		part := util.WhichPartition(pgEvent.AggregateIDHash, p.partitions)
 		if part < p.partitionsLow || part > p.partitionsHi {
 			continue
 		}

@@ -1,6 +1,10 @@
 package store
 
-import "github.com/quintans/eventsourcing"
+import (
+	"context"
+
+	"github.com/quintans/eventsourcing"
+)
 
 type Filter struct {
 	AggregateTypes []eventsourcing.AggregateType
@@ -63,3 +67,5 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption
 		f.PartitionHi = partitionsHi
 	}
 }
+
+type Subscription func(context.Context, eventsourcing.Event) error

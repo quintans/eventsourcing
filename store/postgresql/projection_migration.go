@@ -11,10 +11,10 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/util"
 )
 
 const retries = 3
@@ -211,11 +211,11 @@ func (r *EsRepository) distinctAggregates(
 }
 
 func (r *EsRepository) addNoOp(ctx context.Context, tx *sql.Tx, agg eventsourcing.Aggregater) error {
-	clock := common.NewClock()
+	clock := util.NewClock()
 	t := clock.After(agg.GetUpdatedAt())
 	version := agg.GetVersion() + 1
 	aggID := agg.GetID()
-	hash := common.Hash(aggID)
+	hash := util.Hash(aggID)
 	id, err := eventid.NewEntropy().NewID(t)
 	if err != nil {
 		return faults.Wrap(err)

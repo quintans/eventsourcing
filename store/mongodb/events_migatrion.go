@@ -11,8 +11,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/util"
 )
 
 func (r *EsRepository) MigrateInPlaceCopyReplace(
@@ -131,10 +131,10 @@ func (r *EsRepository) saveMigration(
 	revision int,
 ) error {
 	version := last.AggregateVersion
-	clock := common.NewClockAfter(last.CreatedAt)
+	clock := util.NewClockAfter(last.CreatedAt)
 	entropy := eventid.NewEntropy()
 
-	return r.withTx(ctx, func(mCtx mongo.SessionContext) error {
+	return r.withTx(ctx, func(ctx context.Context) error {
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
 		t := clock.Now()
@@ -143,7 +143,7 @@ func (r *EsRepository) saveMigration(
 			return faults.Wrap(err)
 		}
 		err = r.saveEvent(
-			mCtx,
+			ctx,
 			Event{
 				ID:               id.String(),
 				AggregateID:      last.AggregateID,
@@ -168,13 +168,13 @@ func (r *EsRepository) saveMigration(
 			"$set": bson.M{"migrated": revision},
 		}
 
-		_, err = r.eventsCollection().UpdateMany(mCtx, filter, update)
+		_, err = r.eventsCollection().UpdateMany(ctx, filter, update)
 		if err != nil {
 			return faults.Errorf("failed to invalidate events: %w", err)
 		}
 
 		// delete snapshots
-		_, err = r.snapshotCollection().DeleteMany(mCtx, bson.D{
+		_, err = r.snapshotCollection().DeleteMany(ctx, bson.D{
 			{"aggregate_id", last.AggregateID},
 		})
 		if err != nil {
@@ -214,7 +214,7 @@ func (r *EsRepository) saveMigration(
 				Metadata:         metadata,
 				CreatedAt:        t,
 			}
-			err = r.saveEvent(mCtx, event, id)
+			err = r.saveEvent(ctx, event, id)
 			if err != nil {
 				return err
 			}
@@ -232,7 +232,7 @@ func (r *EsRepository) saveMigration(
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
 			}
 
-			err = r.saveSnapshot(mCtx, Snapshot{
+			err = r.saveSnapshot(ctx, Snapshot{
 				ID:               lastID.String(),
 				AggregateID:      aggregate.GetID(),
 				AggregateVersion: aggregate.GetVersion(),

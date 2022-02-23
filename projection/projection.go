@@ -6,9 +6,9 @@ import (
 
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
 )
 
@@ -60,7 +60,7 @@ func UnmanagedWorkers(ctx context.Context, logger log.Logger, streamName string,
 // They will be balanced of over the several server instances
 func ManagedWorkers(ctx context.Context, logger log.Logger, streamName string, topic string, partitions uint32, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) ([]worker.Worker, error) {
 	if partitions <= 1 {
-		w, err := createWorker(ctx, logger, streamName, common.NewTopic(topic), lockerFactory, consumerFactory, handler)
+		w, err := createWorker(ctx, logger, streamName, util.NewTopic(topic), lockerFactory, consumerFactory, handler)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
@@ -69,7 +69,7 @@ func ManagedWorkers(ctx context.Context, logger log.Logger, streamName string, t
 	workers := make([]worker.Worker, partitions)
 	for x := uint32(0); x < partitions; x++ {
 		var err error
-		workers[x], err = createWorker(ctx, logger, streamName, common.NewPartitionedTopic(topic, x+1), lockerFactory, consumerFactory, handler)
+		workers[x], err = createWorker(ctx, logger, streamName, util.NewPartitionedTopic(topic, x+1), lockerFactory, consumerFactory, handler)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
@@ -80,10 +80,10 @@ func ManagedWorkers(ctx context.Context, logger log.Logger, streamName string, t
 
 // ManagedWorker creates a single managed worker
 func ManagedWorker(ctx context.Context, logger log.Logger, streamName string, topic string, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
-	return createWorker(ctx, logger, streamName, common.NewTopic(topic), lockerFactory, consumerFactory, handler)
+	return createWorker(ctx, logger, streamName, util.NewTopic(topic), lockerFactory, consumerFactory, handler)
 }
 
-func createWorker(ctx context.Context, logger log.Logger, streamName string, topic common.Topic, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
+func createWorker(ctx context.Context, logger log.Logger, streamName string, topic util.Topic, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
 	sr, err := NewStreamResume(topic, streamName)
 	if err != nil {
 		return nil, faults.Wrap(err)

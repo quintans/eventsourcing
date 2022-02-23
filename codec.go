@@ -5,7 +5,7 @@ import (
 
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/util"
 )
 
 type JSONCodec struct{}
@@ -55,7 +55,7 @@ func rehydrate(e Typer, decoder Decoder, upcaster Upcaster, body []byte, derefer
 	}
 
 	if dereference {
-		e2 := common.Dereference(e)
+		e2 := util.Dereference(e)
 		return e2.(Typer), nil
 	}
 

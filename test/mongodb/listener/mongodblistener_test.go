@@ -15,12 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
 	tmg "github.com/quintans/eventsourcing/test/mongodb"
+	"github.com/quintans/eventsourcing/util"
 )
 
 var logger = log.NewLogrus(logrus.StandardLogger())
@@ -93,7 +93,7 @@ func TestMongoListenere(t *testing.T) {
 
 			es := eventsourcing.NewEventStore(repository, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-			id := common.MustNewULID()
+			id := util.MustNewULID()
 			acc := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			acc.Deposit(20)

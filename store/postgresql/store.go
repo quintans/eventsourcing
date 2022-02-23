@@ -15,10 +15,10 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 )
 
 const (
@@ -77,11 +77,9 @@ type Snapshot struct {
 
 var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
-type Listener func(context.Context, *sql.Tx, eventsourcing.Event) error
-
 type EsRepository struct {
-	db        *sqlx.DB
-	listeners []Listener
+	db            *sqlx.DB
+	subscriptions []store.Subscription
 }
 
 func NewStore(connString string) (*EsRepository, error) {
@@ -98,9 +96,9 @@ func NewStore(connString string) (*EsRepository, error) {
 	return r, nil
 }
 
-// AddListener adds a listener to event sourcing events
-func (r *EsRepository) AddListener(listener Listener) {
-	r.listeners = append(r.listeners, listener)
+// Subscribe adds a listener to event sourcing events
+func (r *EsRepository) Subscribe(subscription store.Subscription) {
+	r.subscriptions = append(r.subscriptions, subscription)
 }
 
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
@@ -112,7 +110,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 		entropy := eventid.NewEntropy()
 		for _, e := range eRec.Details {
 			version++
-			hash := common.Hash(eRec.AggregateID)
+			hash := util.Hash(eRec.AggregateID)
 			var err error
 			id, err = entropy.NewID(eRec.CreatedAt)
 			if err != nil {
@@ -158,16 +156,21 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) e
 		return faults.Errorf("unable to insert event: %w", err)
 	}
 
-	if len(r.listeners) > 0 {
-		e := toEventsourcingEvent(event)
-		for _, listener := range r.listeners {
-			err := listener(ctx, tx, e)
-			if err != nil {
-				return err
-			}
-		}
+	return r.publish(ctx, event)
+}
+
+func (r *EsRepository) publish(ctx context.Context, event Event) error {
+	if len(r.subscriptions) == 0 {
+		return nil
 	}
 
+	e := toEventsourcingEvent(event)
+	for _, listener := range r.subscriptions {
+		err := listener(ctx, e)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -249,7 +252,23 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	return events, nil
 }
 
-func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) (err error) {
+type txKey struct{}
+
+func TxFromContext(ctx context.Context) *sql.Tx {
+	tx, _ := ctx.Value(txKey{}).(*sql.Tx) // with _ it will not panic if nil
+	return tx
+}
+
+func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
+	tx := TxFromContext(ctx)
+	if tx != nil {
+		return fn(ctx, tx)
+	}
+
+	return r.wrapWithTx(ctx, fn)
+}
+
+func (r *EsRepository) wrapWithTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return faults.Wrap(err)
@@ -263,6 +282,8 @@ func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql
 			tx.Rollback()
 		}
 	}()
+
+	ctx = context.WithValue(ctx, txKey{}, tx)
 	err = fn(ctx, tx)
 	if err != nil {
 		return err

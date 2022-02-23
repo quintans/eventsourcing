@@ -10,8 +10,8 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/util"
 )
 
 func (r *EsRepository) MigrateInPlaceCopyReplace(
@@ -108,7 +108,7 @@ func (r *EsRepository) saveMigration(
 	revision int,
 ) error {
 	version := last.AggregateVersion
-	clock := common.NewClockAfter(last.CreatedAt)
+	clock := util.NewClockAfter(last.CreatedAt)
 	entropy := eventid.NewEntropy()
 
 	return r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {

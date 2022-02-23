@@ -16,12 +16,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/stream/poller"
 	"github.com/quintans/eventsourcing/test"
+	"github.com/quintans/eventsourcing/util"
 )
 
 const (
@@ -53,7 +53,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := common.MustNewULID()
+	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -116,7 +116,7 @@ func TestPollListener(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := common.MustNewULID()
+	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -168,7 +168,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := common.MustNewULID()
+	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -220,7 +220,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := common.MustNewULID()
+	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -275,7 +275,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := common.MustNewULID()
+	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
@@ -367,7 +367,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(50))
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
-		id := common.MustNewULID()
+		id := util.MustNewULID()
 		acc := test.CreateAccount("Paulo", id, 0)
 
 		for pb.Next() {

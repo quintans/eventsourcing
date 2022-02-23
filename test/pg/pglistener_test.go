@@ -13,11 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
+	"github.com/quintans/eventsourcing/util"
 )
 
 func TestPgListener(t *testing.T) {
@@ -38,7 +38,7 @@ func TestPgListener(t *testing.T) {
 
 	es := eventsourcing.NewEventStore(repository, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
 
-	id := common.MustNewULID()
+	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)

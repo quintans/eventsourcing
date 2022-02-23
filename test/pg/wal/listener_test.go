@@ -14,11 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
 	tpg "github.com/quintans/eventsourcing/test/pg"
+	"github.com/quintans/eventsourcing/util"
 )
 
 type slot struct {
@@ -88,7 +88,7 @@ func TestListener(t *testing.T) {
 			errs, err := feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
 			require.NoError(t, err)
 
-			id := common.MustNewULID()
+			id := util.MustNewULID()
 			acc := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			err = es.Save(ctx, acc)
@@ -111,7 +111,7 @@ func TestListener(t *testing.T) {
 
 			ctx, cancel = context.WithCancel(context.Background())
 
-			id = common.MustNewULID()
+			id = util.MustNewULID()
 			acc = test.CreateAccount("Quintans", id, 100)
 			acc.Deposit(30)
 			err = es.Save(ctx, acc)

@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
+	"github.com/quintans/eventsourcing/util"
 )
 
 type MockSink struct {
@@ -32,7 +32,7 @@ func (s *MockSink) Sink(ctx context.Context, e eventsourcing.Event) error {
 	if s.partitions <= 1 {
 		partition = 1
 	} else {
-		partition = common.WhichPartition(e.AggregateIDHash, s.partitions)
+		partition = util.WhichPartition(e.AggregateIDHash, s.partitions)
 	}
 	s.mu.Lock()
 	events := s.events[partition]

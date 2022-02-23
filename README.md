@@ -173,6 +173,8 @@ All this balancing and projection rebuilds assumes that a projection is idempote
 ### Event Migration
 TODO
 
+https://leanpub.com/esversioning/read#leanpub-auto-copy-and-replace
+
 ## Rationale
 
 ### Event Bus

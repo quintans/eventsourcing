@@ -19,12 +19,12 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
 )
 
@@ -255,7 +255,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		// and for the same aggregate
 		if i == 0 && h.partitions > 0 {
 			// check if the event is to be forwarded to the sinker
-			part := common.WhichPartition(hash, h.partitions)
+			part := util.WhichPartition(hash, h.partitions)
 			if part < h.partitionsLow || part > h.partitionsHi {
 				// we exit the loop because all rows are for the same aggregate
 				return nil

@@ -7,9 +7,9 @@ import (
 
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/util"
 )
 
 const (
@@ -166,7 +166,7 @@ type Options struct {
 	IdempotencyKey string
 	// Labels tags the event. eg: {"geo": "EU"}
 	Labels map[string]interface{}
-	clock  common.Clocker
+	clock  util.Clocker
 }
 
 type SaveOption func(*Options)
@@ -184,7 +184,7 @@ func WithMetadata(metadata map[string]interface{}) SaveOption {
 }
 
 // WithClock allows to set a logical clock and time relate two aggregates
-func WithClock(clock common.Clocker) SaveOption {
+func WithClock(clock util.Clocker) SaveOption {
 	return func(o *Options) {
 		o.clock = clock
 	}
@@ -335,7 +335,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	}
 
 	opts := Options{
-		clock: common.NewClock(),
+		clock: util.NewClock(),
 	}
 	for _, fn := range options {
 		fn(&opts)
@@ -428,7 +428,7 @@ func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget f
 		if err != nil {
 			return nil, err
 		}
-		e2 := common.Dereference(e)
+		e2 := util.Dereference(e)
 		e2 = forget(e2)
 		body, err = es.codec.Encode(e2)
 		if err != nil {

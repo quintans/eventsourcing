@@ -11,10 +11,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/common"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 )
 
 const (
@@ -51,8 +51,6 @@ var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
 type StoreOption func(*EsRepository)
 
-type Listener func(mongo.SessionContext, eventsourcing.Event) error
-
 func WithEventsCollection(eventsCollection string) StoreOption {
 	return func(r *EsRepository) {
 		r.eventsCollectionName = eventsCollection
@@ -68,7 +66,7 @@ func WithSnapshotsCollection(snapshotsCollection string) StoreOption {
 type EsRepository struct {
 	dbName                  string
 	client                  *mongo.Client
-	listeners               []Listener
+	subscriptions           []store.Subscription
 	eventsCollectionName    string
 	snapshotsCollectionName string
 }
@@ -97,9 +95,9 @@ func NewStore(connString, database string, opts ...StoreOption) (*EsRepository, 
 	return r, nil
 }
 
-// AddListener adds a listener to event sourcing events
-func (r *EsRepository) AddListener(listener Listener) {
-	r.listeners = append(r.listeners, listener)
+// Subscribe adds a listener to event sourcing events
+func (r *EsRepository) Subscribe(subscriber store.Subscription) {
+	r.subscriptions = append(r.subscriptions, subscriber)
 }
 
 func (r *EsRepository) Close(ctx context.Context) {
@@ -126,7 +124,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	var id eventid.EventID
 	version := eRec.Version
 	idempotencyKey := eRec.IdempotencyKey
-	err := r.withTx(ctx, func(mCtx mongo.SessionContext) error {
+	err := r.withTx(ctx, func(ctx context.Context) error {
 		entropy := eventid.NewEntropy()
 		for _, e := range eRec.Details {
 			version++
@@ -136,11 +134,11 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 				return faults.Wrap(err)
 			}
 			err = r.saveEvent(
-				mCtx,
+				ctx,
 				Event{
 					ID:               id.String(),
 					AggregateID:      eRec.AggregateID,
-					AggregateIDHash:  common.Hash(eRec.AggregateID),
+					AggregateIDHash:  util.Hash(eRec.AggregateID),
 					AggregateType:    eRec.AggregateType,
 					Kind:             e.Kind,
 					Body:             e.Body,
@@ -170,20 +168,26 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 	return id, version, nil
 }
 
-func (r *EsRepository) saveEvent(mCtx mongo.SessionContext, doc Event, id eventid.EventID) error {
+func (r *EsRepository) saveEvent(ctx context.Context, doc Event, id eventid.EventID) error {
 	doc.ID = id.String()
-	_, err := r.eventsCollection().InsertOne(mCtx, doc)
+	_, err := r.eventsCollection().InsertOne(ctx, doc)
 	if err != nil {
 		return faults.Wrap(err)
 	}
 
-	if r.listeners != nil {
-		evt := toEventsourcingEvent(doc, id)
-		for _, listener := range r.listeners {
-			err := listener(mCtx, evt)
-			if err != nil {
-				return err
-			}
+	return r.publish(ctx, doc, id)
+}
+
+func (r *EsRepository) publish(ctx context.Context, doc Event, id eventid.EventID) error {
+	if len(r.subscriptions) == 0 {
+		return nil
+	}
+
+	e := toEventsourcingEvent(doc, id)
+	for _, listener := range r.subscriptions {
+		err := listener(ctx, e)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -201,7 +205,16 @@ func isMongoDup(err error) bool {
 	return false
 }
 
-func (r *EsRepository) withTx(ctx context.Context, callback func(mongo.SessionContext) error) (err error) {
+func (r *EsRepository) withTx(ctx context.Context, callback func(context.Context) error) (err error) {
+	sess := mongo.SessionFromContext(ctx)
+	if sess != nil {
+		return callback(ctx)
+	}
+
+	return r.wrapWithTx(ctx, callback)
+}
+
+func (r *EsRepository) wrapWithTx(ctx context.Context, callback func(context.Context) error) (err error) {
 	session, err := r.client.StartSession()
 	if err != nil {
 		return faults.Wrap(err)
