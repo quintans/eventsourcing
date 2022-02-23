@@ -93,13 +93,13 @@ id := uuid.New().String()
 acc := test.CreateAccount("Paulo", id, 100)
 acc.Deposit(10)
 acc.Withdraw(20)
-es.Save(ctx, acc)
+es.Create(ctx, acc)
 ```
 
 to get the aggregate
 
 ```go
-a, _ = es.GetByID(ctx, id)
+a, _ = es.Retrieve(ctx, id)
 acc2 := a.(*Account)
 ```
 

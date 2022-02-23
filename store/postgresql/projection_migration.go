@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/avast/retry-go/v3"
 	"github.com/quintans/faults"
@@ -35,13 +36,15 @@ type ProjectionMigrationStep struct {
 	Factory func() eventsourcing.Aggregater
 }
 
+type getByIDFunc func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater, uint32, time.Time, error)
+
 // MigrateConsistentProjection migrates a consistent projection by creating a new one
 func (r *EsRepository) MigrateConsistentProjection(
 	ctx context.Context,
 	logger log.Logger,
 	locker lock.WaitLocker,
 	migrater ProjectionMigrater,
-	getByID func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater, error),
+	getByID getByIDFunc,
 ) error {
 	if err := r.createMigrationTable(ctx); err != nil {
 		return err
@@ -61,7 +64,7 @@ func (r *EsRepository) migrateProjection(
 	ctx context.Context,
 	locker lock.WaitLocker,
 	migrater ProjectionMigrater,
-	getByID func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater, error),
+	getByID getByIDFunc,
 ) error {
 	// check
 	ok, err := r.shouldMigrate(ctx, migrater.Name())
@@ -117,9 +120,9 @@ func (r *EsRepository) processAggregate(
 	c context.Context,
 	migrater ProjectionMigrater,
 	aggregateID string,
-	getByID func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater, error),
+	getByID getByIDFunc,
 ) error {
-	agg, err := getByID(c, aggregateID)
+	agg, version, updatedAt, err := getByID(c, aggregateID)
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -130,7 +133,7 @@ func (r *EsRepository) processAggregate(
 		if err != nil {
 			return faults.Wrap(err)
 		}
-		err = r.addNoOp(c, t, agg)
+		err = r.addNoOp(c, t, agg, version, updatedAt)
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -210,10 +213,10 @@ func (r *EsRepository) distinctAggregates(
 	return nil
 }
 
-func (r *EsRepository) addNoOp(ctx context.Context, tx *sql.Tx, agg eventsourcing.Aggregater) error {
+func (r *EsRepository) addNoOp(ctx context.Context, tx *sql.Tx, agg eventsourcing.Aggregater, version uint32, updatedAt time.Time) error {
 	clock := util.NewClock()
-	t := clock.After(agg.GetUpdatedAt())
-	version := agg.GetVersion() + 1
+	t := clock.After(updatedAt)
+	ver := version + 1
 	aggID := agg.GetID()
 	hash := util.Hash(aggID)
 	id, err := eventid.NewEntropy().NewID(t)
@@ -224,7 +227,7 @@ func (r *EsRepository) addNoOp(ctx context.Context, tx *sql.Tx, agg eventsourcin
 		ID:               id,
 		AggregateID:      aggID,
 		AggregateIDHash:  int32ring(hash),
-		AggregateVersion: version,
+		AggregateVersion: ver,
 		AggregateType:    eventsourcing.AggregateType(agg.GetType()),
 		Kind:             eventsourcing.KindNoOpEvent,
 		CreatedAt:        t,

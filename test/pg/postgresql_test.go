@@ -57,11 +57,19 @@ func TestSaveAndGet(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	acc.Deposit(5)
-	acc.Deposit(1)
-	err = es.Save(ctx, acc, eventsourcing.WithIdempotencyKey("idempotency-key"))
+	err = es.Update(
+		ctx,
+		id.String(),
+		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
+			acc := a.(*test.Account)
+			acc.Deposit(5)
+			acc.Deposit(1)
+			return acc, nil
+		},
+		eventsourcing.WithIdempotencyKey("idempotency-key"),
+	)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -86,14 +94,14 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "idempotency-key", string(evts[3].IdempotencyKey))
 	assert.Equal(t, aggregateType, evts[0].AggregateType)
 	assert.Equal(t, id.String(), evts[0].AggregateID)
-	assert.Equal(t, uint32(1), evts[0].AggregateVersion)
+	for i := 0; i < len(evts); i++ {
+		assert.Equal(t, uint32(i+1), evts[i].AggregateVersion)
+	}
 
-	a, err := es.GetByID(ctx, id.String())
+	a, err := es.Retrieve(ctx, id.String())
 	require.NoError(t, err)
 	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(5), acc2.GetVersion())
-	assert.Equal(t, uint32(2), acc2.GetEventsCounter())
 	assert.Equal(t, int64(136), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 
@@ -101,8 +109,16 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 
-	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventsourcing.WithIdempotencyKey("idempotency-key"))
+	err = es.Update(
+		ctx,
+		id.String(),
+		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
+			acc := a.(*test.Account)
+			acc.Deposit(5)
+			return acc, nil
+		},
+		eventsourcing.WithIdempotencyKey("idempotency-key"),
+	)
 	require.Error(t, err)
 }
 
@@ -120,10 +136,13 @@ func TestPollListener(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	acc.Deposit(5)
-	err = es.Save(ctx, acc)
+	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
+		acc := a.(*test.Account)
+		acc.Deposit(5)
+		return acc, nil
+	})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -152,8 +171,7 @@ func TestPollListener(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, 4, counter)
-	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(4), acc2.GetVersion())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
@@ -172,10 +190,13 @@ func TestListenerWithAggregateType(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	acc.Deposit(5)
-	err = es.Save(ctx, acc)
+	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
+		acc := a.(*test.Account)
+		acc.Deposit(5)
+		return acc, nil
+	})
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -205,7 +226,6 @@ func TestListenerWithAggregateType(t *testing.T) {
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(4), acc2.GetVersion())
 	assert.Equal(t, int64(135), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
@@ -224,10 +244,18 @@ func TestListenerWithMetadata(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
+	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
 	require.NoError(t, err)
-	acc.Deposit(5)
-	err = es.Save(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "US"}))
+	err = es.Update(
+		ctx,
+		id.String(),
+		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
+			acc := a.(*test.Account)
+			acc.Deposit(5)
+			return acc, nil
+		},
+		eventsourcing.WithMetadata(map[string]interface{}{"geo": "US"}),
+	)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
@@ -260,7 +288,6 @@ func TestListenerWithMetadata(t *testing.T) {
 	assert.Equal(t, 3, counter)
 	mu.Unlock()
 	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, uint32(3), acc2.GetVersion())
 	assert.Equal(t, int64(130), acc2.Balance)
 	assert.Equal(t, test.OPEN, acc2.Status)
 }
@@ -280,12 +307,15 @@ func TestForget(t *testing.T) {
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	acc.Deposit(5)
-	acc.Withdraw(15)
-	acc.UpdateOwner("Paulo Quintans Pereira")
-	err = es.Save(ctx, acc)
+	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
+		acc := a.(*test.Account)
+		acc.Deposit(5)
+		acc.Withdraw(15)
+		acc.UpdateOwner("Paulo Quintans Pereira")
+		return acc, nil
+	})
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
@@ -372,7 +402,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 
 		for pb.Next() {
 			acc.Deposit(10)
-			_ = es.Save(ctx, acc)
+			_ = es.Create(ctx, acc)
 		}
 	})
 }
@@ -392,7 +422,7 @@ func TestMigration(t *testing.T) {
 	acc.Deposit(20)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")
-	err = es.Save(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
@@ -487,10 +517,9 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, `{"first_name":"Paulo","last_name":"Quintans Pereira"}`, string(evt.Body))
 	assert.Equal(t, 0, evt.Migrated)
 
-	a, err := es.GetByID(ctx, id.String())
+	a, err := es.Retrieve(ctx, id.String())
 	require.NoError(t, err)
 	acc2 := a.(*test.AccountV2)
-	assert.Equal(t, uint32(9), acc2.GetVersion())
 	assert.Equal(t, "Paulo", acc2.FirstName)
 	assert.Equal(t, "Quintans Pereira", acc2.LastName)
 }

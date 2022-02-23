@@ -97,7 +97,7 @@ func TestMongoListenere(t *testing.T) {
 			acc := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			acc.Deposit(20)
-			err = es.Save(ctx, acc)
+			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 
 			time.Sleep(500 * time.Millisecond)
@@ -125,7 +125,7 @@ func TestMongoListenere(t *testing.T) {
 
 			acc.Withdraw(5)
 			acc.Withdraw(10)
-			err = es.Save(ctx, acc)
+			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 
 			time.Sleep(500 * time.Millisecond)

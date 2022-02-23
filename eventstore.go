@@ -55,17 +55,8 @@ type Decoder interface {
 type Aggregater interface {
 	Typer
 	GetID() string
-	SetVersion(uint32)
-	GetVersion() uint32
-	// GetEventsCounter used to determine snapshots threshold.
-	// It returns the number of events since the last snapshot
-	GetEventsCounter() uint32
-	GetEvents() []Eventer
-	ClearEvents()
+	PopEvents() []Eventer
 	ApplyChangeFromHistory(event Eventer)
-	SetUpdatedAt(time.Time)
-	// GetUpdatedAt always return the time of the last event applied
-	GetUpdatedAt() time.Time
 }
 
 // Event represents the event data
@@ -191,8 +182,9 @@ func WithClock(clock util.Clocker) SaveOption {
 }
 
 type EventStorer interface {
-	GetByID(ctx context.Context, aggregateID string) (Aggregater, error)
-	Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) error
+	Create(ctx context.Context, aggregate Aggregater, options ...SaveOption) error
+	Retrieve(ctx context.Context, aggregateID string) (Aggregater, error)
+	Update(ctx context.Context, id string, do func(Aggregater) (Aggregater, error), options ...SaveOption) error
 	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
 	// Forget erases the values of the specified fields
 	Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error
@@ -243,11 +235,11 @@ func NewEventStore(repo EsRepository, factory Factory, options ...EsOptions) Eve
 	return es
 }
 
-// Exec loads the aggregate from the event store and handles it to the handler function, saving the returning Aggregater in the event store.
+// Update loads the aggregate from the event store and handles it to the handler function, saving the returning Aggregater in the event store.
 // If no aggregate is found for the provided ID the error ErrUnknownAggregateID is returned.
 // If the handler function returns nil for the Aggregater or an error, the save action is ignored.
-func (es EventStore) Exec(ctx context.Context, id string, do func(Aggregater) (Aggregater, error), options ...SaveOption) error {
-	a, err := es.GetByID(ctx, id)
+func (es EventStore) Update(ctx context.Context, id string, do func(Aggregater) (Aggregater, error), options ...SaveOption) error {
+	a, version, updatedAt, eventsCounter, err := es.retrieve(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -262,22 +254,29 @@ func (es EventStore) Exec(ctx context.Context, id string, do func(Aggregater) (A
 		return nil
 	}
 
-	return es.Save(ctx, a, options...)
+	return es.save(ctx, a, version, updatedAt, eventsCounter, options...)
 }
 
-func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregater, error) {
+func (es EventStore) Retrieve(ctx context.Context, aggregateID string) (Aggregater, error) {
+	agg, _, _, _, err := es.retrieve(ctx, aggregateID)
+	return agg, err
+}
+
+func (es EventStore) retrieve(ctx context.Context, aggregateID string) (Aggregater, uint32, time.Time, uint32, error) {
 	snap, err := es.store.GetSnapshot(ctx, aggregateID)
 	if err != nil {
-		return nil, err
+		return nil, 0, time.Time{}, 0, err
 	}
 	var aggregate Aggregater
+	var aggregateVersion uint32
+	var updatedAt time.Time
 	if len(snap.Body) != 0 {
 		aggregate, err = es.RehydrateAggregate(snap.AggregateType, snap.Body)
 		if err != nil {
-			return nil, err
+			return nil, 0, time.Time{}, 0, err
 		}
-		aggregate.SetVersion(snap.AggregateVersion)
-		aggregate.SetUpdatedAt(snap.CreatedAt)
+		aggregateVersion = snap.AggregateVersion
+		updatedAt = snap.CreatedAt
 	}
 
 	var events []Event
@@ -287,23 +286,27 @@ func (es EventStore) GetByID(ctx context.Context, aggregateID string) (Aggregate
 		events, err = es.store.GetAggregateEvents(ctx, aggregateID, int(snap.AggregateVersion))
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, time.Time{}, 0, err
 	}
 
-	for _, v := range events {
+	var eventsCounter uint32
+	for _, event := range events {
 		// if the aggregate was not instantiated because the snap was not found
 		if aggregate == nil {
-			aggregate, err = es.RehydrateAggregate(v.AggregateType, nil)
+			aggregate, err = es.RehydrateAggregate(event.AggregateType, nil)
 			if err != nil {
-				return nil, err
+				return nil, 0, time.Time{}, 0, err
 			}
 		}
-		if err := es.ApplyChangeFromHistory(aggregate, v); err != nil {
-			return nil, err
+		if err := es.ApplyChangeFromHistory(aggregate, event); err != nil {
+			return nil, 0, time.Time{}, 0, err
 		}
+		aggregateVersion = event.AggregateVersion
+		updatedAt = event.CreatedAt
+		eventsCounter++
 	}
 
-	return aggregate, nil
+	return aggregate, aggregateVersion, updatedAt, eventsCounter, nil
 }
 
 func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e Event) error {
@@ -312,8 +315,6 @@ func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e Event) error {
 		return err
 	}
 	agg.ApplyChangeFromHistory(evt)
-	agg.SetVersion(e.AggregateVersion)
-	agg.SetUpdatedAt(e.CreatedAt)
 
 	return nil
 }
@@ -326,9 +327,20 @@ func (es EventStore) RehydrateEvent(kind EventKind, body []byte) (Typer, error) 
 	return RehydrateEvent(es.factory, es.codec, es.upcaster, kind, body)
 }
 
-// Save saves the events of the aggregater into the event store
-func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...SaveOption) (err error) {
-	events := aggregate.GetEvents()
+// Create saves the events of the aggregater into the event store
+func (es EventStore) Create(ctx context.Context, aggregate Aggregater, options ...SaveOption) (err error) {
+	return es.save(ctx, aggregate, 0, time.Now(), 0, options...)
+}
+
+func (es EventStore) save(
+	ctx context.Context,
+	aggregate Aggregater,
+	version uint32,
+	updatedAt time.Time,
+	eventsCounter uint32,
+	options ...SaveOption,
+) (err error) {
+	events := aggregate.PopEvents()
 	eventsLen := len(events)
 	if eventsLen == 0 {
 		return nil
@@ -341,7 +353,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 		fn(&opts)
 	}
 
-	now := opts.clock.After(aggregate.GetUpdatedAt())
+	now := opts.clock.After(updatedAt)
 
 	tName := aggregate.GetType()
 	details := make([]EventRecordDetail, eventsLen)
@@ -359,7 +371,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 
 	rec := EventRecord{
 		AggregateID:    aggregate.GetID(),
-		Version:        aggregate.GetVersion(),
+		Version:        version,
 		AggregateType:  AggregateType(tName),
 		IdempotencyKey: opts.IdempotencyKey,
 		Metadata:       opts.Labels,
@@ -371,9 +383,7 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 	if err != nil {
 		return err
 	}
-	aggregate.SetVersion(lastVersion)
 
-	eventsCounter := aggregate.GetEventsCounter()
 	if eventsCounter >= es.snapshotThreshold {
 		body, err := es.codec.Encode(aggregate)
 		if err != nil {
@@ -383,8 +393,8 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 		snap := Snapshot{
 			ID:               id,
 			AggregateID:      aggregate.GetID(),
-			AggregateVersion: aggregate.GetVersion(),
-			AggregateType:    AggregateType(aggregate.GetType()),
+			AggregateVersion: lastVersion,
+			AggregateType:    AggregateType(tName),
 			Body:             body,
 			CreatedAt:        now,
 		}
@@ -395,7 +405,6 @@ func (es EventStore) Save(ctx context.Context, aggregate Aggregater, options ...
 		}
 	}
 
-	aggregate.ClearEvents()
 	return nil
 }
 
@@ -413,7 +422,7 @@ type ForgetRequest struct {
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
 	fun := func(kind string, body []byte, snapshot bool) ([]byte, error) {
-		var e Typer
+		var e interface{}
 		var err error
 		if snapshot {
 			e, err = es.factory.NewAggregate(AggregateType(kind))

@@ -42,7 +42,7 @@ func TestPgListener(t *testing.T) {
 	acc := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Save(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write

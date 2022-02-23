@@ -91,10 +91,10 @@ func TestListener(t *testing.T) {
 			id := util.MustNewULID()
 			acc := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
-			err = es.Save(ctx, acc)
+			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 			acc.Withdraw(20)
-			err = es.Save(ctx, acc)
+			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
@@ -114,7 +114,7 @@ func TestListener(t *testing.T) {
 			id = util.MustNewULID()
 			acc = test.CreateAccount("Quintans", id, 100)
 			acc.Deposit(30)
-			err = es.Save(ctx, acc)
+			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection

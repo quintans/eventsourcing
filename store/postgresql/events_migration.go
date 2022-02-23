@@ -195,7 +195,7 @@ func (r *EsRepository) saveMigration(
 			err = saveSnapshot(c, tx, Snapshot{
 				ID:               lastID,
 				AggregateID:      aggregate.GetID(),
-				AggregateVersion: aggregate.GetVersion(),
+				AggregateVersion: version,
 				AggregateType:    eventsourcing.AggregateType(aggregate.GetType()),
 				Body:             body,
 				CreatedAt:        clock.Now(),

@@ -98,7 +98,7 @@ func TestListener(t *testing.T) {
 			acc := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			acc.Deposit(20)
-			err = es.Save(ctx, acc)
+			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 
 			time.Sleep(5 * time.Second)
@@ -118,7 +118,7 @@ func TestListener(t *testing.T) {
 			acc = test.CreateAccount("Quintans", id, 100)
 			acc.Deposit(30)
 			// acc.Withdraw(5)
-			err = es.Save(ctx, acc)
+			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
