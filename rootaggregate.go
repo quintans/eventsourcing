@@ -42,12 +42,8 @@ func (a RootAggregate) PopEvents() []Eventer {
 	return evs
 }
 
-func (a *RootAggregate) ApplyChangeFromHistory(event Eventer) {
-	a.eventHandler.HandleEvent(event)
-}
-
 func (a *RootAggregate) ApplyChange(event Eventer) {
-	a.ApplyChangeFromHistory(event)
+	a.eventHandler.HandleEvent(event)
 
 	a.events = append(a.events, event)
 }

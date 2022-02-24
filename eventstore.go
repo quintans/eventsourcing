@@ -56,7 +56,7 @@ type Aggregater interface {
 	Typer
 	GetID() string
 	PopEvents() []Eventer
-	ApplyChangeFromHistory(event Eventer)
+	HandleEvent(event Eventer)
 }
 
 // Event represents the event data
@@ -314,7 +314,7 @@ func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e Event) error {
 	if err != nil {
 		return err
 	}
-	agg.ApplyChangeFromHistory(evt)
+	agg.HandleEvent(evt)
 
 	return nil
 }

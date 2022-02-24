@@ -94,9 +94,7 @@ func (EventFactory) NewEvent(kind eventsourcing.EventKind) (eventsourcing.Typer,
 }
 
 func CreateAccount(owner string, id ulid.ULID, money int64) *Account {
-	a := &Account{}
-	a.RootAggregate = eventsourcing.NewRootAggregate(a)
-	a.ID = id
+	a := NewAccount()
 	a.ApplyChange(AccountCreated{
 		ID:    id,
 		Money: money,

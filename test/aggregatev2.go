@@ -74,9 +74,7 @@ func (EventFactoryV2) NewEvent(kind eventsourcing.EventKind) (eventsourcing.Type
 }
 
 func CreateAccountV2(firstName string, lastName string, id ulid.ULID, money int64) *AccountV2 {
-	a := &AccountV2{}
-	a.RootAggregate = eventsourcing.NewRootAggregate(a)
-	a.ID = id
+	a := NewAccountV2()
 	a.ApplyChange(AccountCreatedV2{
 		ID:        id,
 		Money:     money,
