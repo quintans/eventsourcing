@@ -13,5 +13,6 @@
 # If this is not what you need, feel free to make your own scripts. Again, this
 # script is for demonstration purpose.
 #
+go install github.com/golang/protobuf/protoc-gen-go
 proto=$1
 protoc --go_out=plugins=grpc:. $proto
