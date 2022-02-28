@@ -79,7 +79,7 @@ func TestListener(t *testing.T) {
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-			es := eventsourcing.NewEventStore(repository, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
+			es := eventsourcing.NewEventStore(repository, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 			cfg := mysql.DBConfig{
 				Host:     dbConfig.Host,

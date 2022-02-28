@@ -46,7 +46,7 @@ func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -125,7 +125,7 @@ func TestPollListener(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -187,7 +187,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -244,7 +244,7 @@ func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -310,7 +310,7 @@ func TestForget(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
 	acc := test.CreateAccount("Paulo", id, 100)
@@ -366,7 +366,7 @@ func TestForget(t *testing.T) {
 				t.Owner = ""
 				return t
 			case test.Account:
-				t.Owner = ""
+				t.Forget()
 				return t
 			}
 			return i
@@ -406,7 +406,7 @@ func TestMigration(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.Factory{}, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
 	acc := test.CreateAccount("Paulo Pereira", id, 100)
@@ -419,8 +419,9 @@ func TestMigration(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
+	codec := test.NewJSONCodecV2()
 	// switching the aggregator factory
-	es = eventsourcing.NewEventStore(r, test.FactoryV2{}, eventsourcing.WithSnapshotThreshold(3))
+	es = eventsourcing.NewEventStore(r, codec, eventsourcing.WithSnapshotThreshold(3))
 	err = es.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
@@ -428,7 +429,6 @@ func TestMigration(t *testing.T) {
 			var migration []*eventsourcing.EventMigration
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store
-			codec := eventsourcing.JSONCodec{}
 			for _, e := range events {
 				var err error
 				switch e.Kind {
@@ -511,6 +511,6 @@ func TestMigration(t *testing.T) {
 	a, err := es.Retrieve(ctx, id.String())
 	require.NoError(t, err)
 	acc2 := a.(*test.AccountV2)
-	assert.Equal(t, "Paulo", acc2.FirstName)
-	assert.Equal(t, "Quintans Pereira", acc2.LastName)
+	assert.Equal(t, "Paulo", acc2.Owner().FirstName())
+	assert.Equal(t, "Quintans Pereira", acc2.Owner().LastName())
 }

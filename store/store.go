@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/quintans/eventsourcing"
 )
@@ -69,3 +70,10 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption
 }
 
 type Subscription func(context.Context, eventsourcing.Event) error
+
+type AggregateMetadata struct {
+	Type      eventsourcing.AggregateType
+	ID        string
+	Version   uint32
+	UpdatedAt time.Time
+}

@@ -22,6 +22,7 @@ require (
 	github.com/jackc/pgx v3.6.2+incompatible
 	github.com/jackc/pgx/v4 v4.11.0
 	github.com/jmoiron/sqlx v1.3.3
+	github.com/json-iterator/go v1.1.10
 	github.com/kyleconroy/pgoutput v0.1.0
 	github.com/lib/pq v1.10.4
 	github.com/nats-io/nats.go v1.13.0

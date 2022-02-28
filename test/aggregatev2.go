@@ -1,10 +1,12 @@
 package test
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/oklog/ulid/v2"
-	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing/jsoncodec"
 
 	"github.com/quintans/eventsourcing"
 )
@@ -17,11 +19,36 @@ var (
 	KindOwnerUpdatedV2   = eventsourcing.EventKind("OwnerUpdated_V2")
 )
 
+type NameVO struct {
+	firstName string
+	lastName  string
+}
+
+func NewName(firstName string, lastName string) (NameVO, error) {
+	if firstName == "" {
+		return NameVO{}, errors.New("first name cannot be empty")
+	}
+	if lastName == "" {
+		return NameVO{}, errors.New("last name cannot be empty")
+	}
+	return NameVO{
+		firstName: firstName,
+		lastName:  lastName,
+	}, nil
+}
+
+func (n NameVO) FirstName() string {
+	return n.firstName
+}
+
+func (n NameVO) LastName() string {
+	return n.lastName
+}
+
 type AccountCreatedV2 struct {
-	ID        ulid.ULID `json:"id,omitempty"`
-	Money     int64     `json:"money,omitempty"`
-	FirstName string    `json:"first_name,omitempty"`
-	LastName  string    `json:"last_name,omitempty"`
+	ID    ulid.ULID `json:"id,omitempty"`
+	Money int64     `json:"money,omitempty"`
+	Owner NameVO
 }
 
 func (e AccountCreatedV2) GetType() string {
@@ -29,57 +56,48 @@ func (e AccountCreatedV2) GetType() string {
 }
 
 type OwnerUpdatedV2 struct {
-	FirstName string `json:"first_name,omitempty"`
-	LastName  string `json:"last_name,omitempty"`
+	Owner NameVO `json:"owner,omitempty"`
 }
 
 func (e OwnerUpdatedV2) GetType() string {
 	return "OwnerUpdated_V2"
 }
 
-type FactoryV2 struct {
-	AggregateFactoryV2
-	EventFactoryV2
+func NewJSONCodecV2() *jsoncodec.Codec {
+	c := jsoncodec.New()
+	c.RegisterFactory(TypeAccount.String(), func() interface{} {
+		return NewAccount()
+	})
+	c.RegisterFactory(TypeAccount.String(), func() interface{} {
+		return NewAccountV2()
+	})
+	c.RegisterFactory(KindAccountCreated.String(), func() interface{} {
+		return &AccountCreated{}
+	})
+	c.RegisterFactory(KindAccountCreatedV2.String(), func() interface{} {
+		return &AccountCreatedV2{}
+	})
+	c.RegisterFactory(KindMoneyDeposited.String(), func() interface{} {
+		return &MoneyDeposited{}
+	})
+	c.RegisterFactory(KindMoneyWithdrawn.String(), func() interface{} {
+		return &MoneyWithdrawn{}
+	})
+	c.RegisterFactory(KindOwnerUpdated.String(), func() interface{} {
+		return &OwnerUpdated{}
+	})
+	c.RegisterFactory(KindOwnerUpdatedV2.String(), func() interface{} {
+		return &OwnerUpdatedV2{}
+	})
+	return c
 }
 
-type AggregateFactoryV2 struct{}
-
-func (f AggregateFactoryV2) NewAggregate(typ eventsourcing.AggregateType) (eventsourcing.Aggregater, error) {
-	switch typ {
-	case TypeAccount:
-		return NewAccountV2(), nil
-	default:
-		return nil, faults.Errorf("unknown aggregate type: %s", typ)
-	}
-}
-
-type EventFactoryV2 struct{}
-
-func (EventFactoryV2) NewEvent(kind eventsourcing.EventKind) (eventsourcing.Typer, error) {
-	var e eventsourcing.Typer
-	switch kind {
-	case KindAccountCreatedV2:
-		e = &AccountCreatedV2{}
-	case KindMoneyDeposited:
-		e = &MoneyDeposited{}
-	case KindMoneyWithdrawn:
-		e = &MoneyWithdrawn{}
-	case KindOwnerUpdatedV2:
-		e = &OwnerUpdatedV2{}
-	}
-	if e == nil {
-		return nil, faults.Errorf("Unknown event kind: %s", kind)
-	}
-	return e, nil
-}
-
-func CreateAccountV2(firstName string, lastName string, id ulid.ULID, money int64) *AccountV2 {
+func CreateAccountV2(owner NameVO, id ulid.ULID, money int64) *AccountV2 {
 	a := NewAccountV2()
 	a.ApplyChange(AccountCreatedV2{
-		ID:        id,
-		Money:     money,
-		FirstName: firstName,
-		LastName:  lastName,
+		ID:    id,
+		Money: money,
+		Owner: owner,
 	})
 	return a
 }
@@ -91,16 +109,32 @@ func NewAccountV2() *AccountV2 {
 }
 
 type AccountV2 struct {
-	eventsourcing.RootAggregate
-	ID        ulid.ULID `json:"id"`
-	Status    Status    `json:"status,omitempty"`
-	Balance   int64     `json:"balance,omitempty"`
-	FirstName string    `json:"first_name,omitempty"`
-	LastName  string    `json:"last_name,omitempty"`
+	eventsourcing.RootAggregate `json:"-"`
+
+	id      ulid.ULID
+	status  Status
+	balance int64
+	owner   NameVO
 }
 
 func (a AccountV2) GetID() string {
-	return a.ID.String()
+	return a.id.String()
+}
+
+func (a AccountV2) ID() ulid.ULID {
+	return a.id
+}
+
+func (a AccountV2) Status() Status {
+	return a.status
+}
+
+func (a AccountV2) Balance() int64 {
+	return a.balance
+}
+
+func (a AccountV2) Owner() NameVO {
+	return a.owner
 }
 
 func (a AccountV2) GetType() string {
@@ -108,7 +142,7 @@ func (a AccountV2) GetType() string {
 }
 
 func (a *AccountV2) Withdraw(money int64) bool {
-	if a.Balance >= money {
+	if a.balance >= money {
 		a.ApplyChange(MoneyWithdrawn{Money: money})
 		return true
 	}
@@ -137,39 +171,40 @@ func (a *AccountV2) HandleEvent(event eventsourcing.Eventer) {
 }
 
 func (a *AccountV2) HandleAccountCreatedV2(event AccountCreatedV2) {
-	a.ID = event.ID
-	a.Balance = event.Money
-	a.FirstName = event.FirstName
-	a.LastName = event.LastName
+	a.id = event.ID
+	a.balance = event.Money
+	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events
-	a.Status = OPEN
+	a.status = OPEN
 }
 
 func (a *AccountV2) HandleMoneyDeposited(event MoneyDeposited) {
-	a.Balance += event.Money
+	a.balance += event.Money
 }
 
 func (a *AccountV2) HandleMoneyWithdrawn(event MoneyWithdrawn) {
-	a.Balance -= event.Money
+	a.balance -= event.Money
 }
 
 func (a *AccountV2) HandleOwnerUpdatedV2(event OwnerUpdatedV2) {
-	a.FirstName = event.FirstName
-	a.LastName = event.LastName
+	a.owner = event.Owner
 }
 
 func MigrateAccountCreated(e *eventsourcing.Event, codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
-	oldEvent := AccountCreated{}
-	err := codec.Decode(e.Body, &oldEvent)
+	event, err := codec.Decode(e.Body, string(e.AggregateType))
 	if err != nil {
 		return nil, err
 	}
+	oldEvent := event.(*AccountCreated)
 	first, last := SplitName(oldEvent.Owner)
+	owner, err := NewName(first, last)
+	if err != nil {
+		return nil, err
+	}
 	newEvent := AccountCreatedV2{
-		ID:        oldEvent.ID,
-		Money:     oldEvent.Money,
-		FirstName: first,
-		LastName:  last,
+		ID:    oldEvent.ID,
+		Money: oldEvent.Money,
+		Owner: owner,
 	}
 	body, err := codec.Encode(newEvent)
 	if err != nil {
@@ -184,15 +219,18 @@ func MigrateAccountCreated(e *eventsourcing.Event, codec eventsourcing.Codec) (*
 }
 
 func MigrateOwnerUpdated(e *eventsourcing.Event, codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
-	oldEvent := OwnerUpdated{}
-	err := codec.Decode(e.Body, &oldEvent)
+	event, err := codec.Decode(e.Body, string(e.AggregateType))
 	if err != nil {
 		return nil, err
 	}
+	oldEvent := event.(*OwnerUpdated)
 	first, last := SplitName(oldEvent.Owner)
+	owner, err := NewName(first, last)
+	if err != nil {
+		return nil, err
+	}
 	newEvent := OwnerUpdatedV2{
-		FirstName: first,
-		LastName:  last,
+		Owner: owner,
 	}
 	body, err := codec.Encode(newEvent)
 	if err != nil {

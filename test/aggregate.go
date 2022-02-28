@@ -2,7 +2,8 @@ package test
 
 import (
 	"github.com/oklog/ulid/v2"
-	"github.com/quintans/faults"
+
+	"github.com/quintans/eventsourcing/jsoncodec"
 
 	"github.com/quintans/eventsourcing"
 )
@@ -57,40 +58,24 @@ func (e OwnerUpdated) GetType() string {
 	return "OwnerUpdated"
 }
 
-type Factory struct {
-	AggregateFactory
-	EventFactory
-}
-
-type AggregateFactory struct{}
-
-func (f AggregateFactory) NewAggregate(typ eventsourcing.AggregateType) (eventsourcing.Aggregater, error) {
-	switch typ {
-	case TypeAccount:
-		return NewAccount(), nil
-	default:
-		return nil, faults.Errorf("unknown aggregate type: %s", typ)
-	}
-}
-
-type EventFactory struct{}
-
-func (EventFactory) NewEvent(kind eventsourcing.EventKind) (eventsourcing.Typer, error) {
-	var e eventsourcing.Typer
-	switch kind {
-	case KindAccountCreated:
-		e = &AccountCreated{}
-	case KindMoneyDeposited:
-		e = &MoneyDeposited{}
-	case KindMoneyWithdrawn:
-		e = &MoneyWithdrawn{}
-	case KindOwnerUpdated:
-		e = &OwnerUpdated{}
-	}
-	if e == nil {
-		return nil, faults.Errorf("Unknown event kind: %s", kind)
-	}
-	return e, nil
+func NewJSONCodec() *jsoncodec.Codec {
+	c := jsoncodec.New()
+	c.RegisterFactory(TypeAccount.String(), func() interface{} {
+		return NewAccount()
+	})
+	c.RegisterFactory(KindAccountCreated.String(), func() interface{} {
+		return &AccountCreated{}
+	})
+	c.RegisterFactory(KindMoneyDeposited.String(), func() interface{} {
+		return &MoneyDeposited{}
+	})
+	c.RegisterFactory(KindMoneyWithdrawn.String(), func() interface{} {
+		return &MoneyWithdrawn{}
+	})
+	c.RegisterFactory(KindOwnerUpdated.String(), func() interface{} {
+		return &OwnerUpdated{}
+	})
+	return c
 }
 
 func CreateAccount(owner string, id ulid.ULID, money int64) *Account {
@@ -110,15 +95,36 @@ func NewAccount() *Account {
 }
 
 type Account struct {
-	eventsourcing.RootAggregate
-	ID      ulid.ULID `json:"id"`
-	Status  Status    `json:"status,omitempty"`
-	Balance int64     `json:"balance,omitempty"`
-	Owner   string    `json:"owner,omitempty"`
+	eventsourcing.RootAggregate `json:"-"`
+
+	id      ulid.ULID
+	status  Status
+	balance int64
+	owner   string
 }
 
 func (a Account) GetID() string {
-	return a.ID.String()
+	return a.id.String()
+}
+
+func (a Account) ID() ulid.ULID {
+	return a.id
+}
+
+func (a Account) Status() Status {
+	return a.status
+}
+
+func (a Account) Balance() int64 {
+	return a.balance
+}
+
+func (a Account) Owner() string {
+	return a.owner
+}
+
+func (a *Account) Forget() {
+	a.HandleEvent(OwnerUpdated{})
 }
 
 func (a Account) GetType() string {
@@ -126,7 +132,7 @@ func (a Account) GetType() string {
 }
 
 func (a *Account) Withdraw(money int64) bool {
-	if a.Balance >= money {
+	if a.balance >= money {
 		a.ApplyChange(MoneyWithdrawn{Money: money})
 		return true
 	}
@@ -155,21 +161,21 @@ func (a *Account) HandleEvent(event eventsourcing.Eventer) {
 }
 
 func (a *Account) HandleAccountCreated(event AccountCreated) {
-	a.ID = event.ID
-	a.Balance = event.Money
-	a.Owner = event.Owner
+	a.id = event.ID
+	a.balance = event.Money
+	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events
-	a.Status = OPEN
+	a.status = OPEN
 }
 
 func (a *Account) HandleMoneyDeposited(event MoneyDeposited) {
-	a.Balance += event.Money
+	a.balance += event.Money
 }
 
 func (a *Account) HandleMoneyWithdrawn(event MoneyWithdrawn) {
-	a.Balance -= event.Money
+	a.balance -= event.Money
 }
 
 func (a *Account) HandleOwnerUpdated(event OwnerUpdated) {
-	a.Owner = event.Owner
+	a.owner = event.Owner
 }

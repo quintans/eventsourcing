@@ -22,23 +22,6 @@ var (
 	ErrUnknownAggregateID     = errors.New("unknown aggregate ID")
 )
 
-type Factory interface {
-	AggregateFactory
-	EventFactory
-}
-
-type AggregateFactory interface {
-	NewAggregate(typ AggregateType) (Aggregater, error)
-}
-
-type EventFactory interface {
-	NewEvent(kind EventKind) (Typer, error)
-}
-
-type Upcaster interface {
-	Upcast(Typer) Typer
-}
-
 type Codec interface {
 	Encoder
 	Decoder
@@ -49,7 +32,7 @@ type Encoder interface {
 }
 
 type Decoder interface {
-	Decode(data []byte, v interface{}) error
+	Decode(data []byte, kind string) (interface{}, error)
 }
 
 type Aggregater interface {
@@ -200,12 +183,6 @@ func WithCodec(codec Codec) EsOptions {
 	}
 }
 
-func WithUpcaster(upcaster Upcaster) EsOptions {
-	return func(r *EventStore) {
-		r.upcaster = upcaster
-	}
-}
-
 func WithSnapshotThreshold(snapshotThreshold uint32) EsOptions {
 	return func(r *EventStore) {
 		r.snapshotThreshold = snapshotThreshold
@@ -216,18 +193,15 @@ func WithSnapshotThreshold(snapshotThreshold uint32) EsOptions {
 type EventStore struct {
 	store             EsRepository
 	snapshotThreshold uint32
-	upcaster          Upcaster
-	factory           Factory
 	codec             Codec
 }
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore(repo EsRepository, factory Factory, options ...EsOptions) EventStore {
+func NewEventStore(repo EsRepository, codec Codec, options ...EsOptions) EventStore {
 	es := EventStore{
 		store:             repo,
 		snapshotThreshold: 100,
-		factory:           factory,
-		codec:             JSONCodec{},
+		codec:             codec,
 	}
 	for _, v := range options {
 		v(&es)
@@ -320,11 +294,11 @@ func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e Event) error {
 }
 
 func (es EventStore) RehydrateAggregate(aggregateType AggregateType, body []byte) (Aggregater, error) {
-	return RehydrateAggregate(es.factory, es.codec, es.upcaster, aggregateType, body)
+	return RehydrateAggregate(es.codec, aggregateType, body)
 }
 
 func (es EventStore) RehydrateEvent(kind EventKind, body []byte) (Typer, error) {
-	return RehydrateEvent(es.factory, es.codec, es.upcaster, kind, body)
+	return RehydrateEvent(es.codec, kind, body)
 }
 
 // Create saves the events of the aggregater into the event store
@@ -422,18 +396,7 @@ type ForgetRequest struct {
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
 	fun := func(kind string, body []byte, snapshot bool) ([]byte, error) {
-		var e interface{}
-		var err error
-		if snapshot {
-			e, err = es.factory.NewAggregate(AggregateType(kind))
-		} else {
-			e, err = es.factory.NewEvent(EventKind(kind))
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		err = es.codec.Decode(body, e)
+		e, err := es.codec.Decode(body, kind)
 		if err != nil {
 			return nil, err
 		}
@@ -462,7 +425,11 @@ func (es EventStore) MigrateInPlaceCopyReplace(
 		revision,
 		snapshotThreshold,
 		func() (Aggregater, error) {
-			return es.factory.NewAggregate(aggregateType)
+			v, err := es.codec.Decode(nil, aggregateType.String())
+			if err != nil {
+				return nil, err
+			}
+			return v.(Aggregater), nil
 		},
 		es.ApplyChangeFromHistory,
 		es.codec,

@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
-	"time"
 
 	"github.com/avast/retry-go/v3"
 	"github.com/quintans/faults"
@@ -15,6 +14,7 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
 )
 
@@ -27,7 +27,7 @@ type ProjectionMigrater interface {
 	// Steps returns the order of the aggregate types to process to recreate the projection
 	Steps() []ProjectionMigrationStep
 	// Flush is called for each aggregate with the current state
-	Flush(context.Context, *sql.Tx, eventsourcing.Aggregater) error
+	Flush(context.Context, store.AggregateMetadata, eventsourcing.Aggregater) error
 }
 
 type ProjectionMigrationStep struct {
@@ -36,7 +36,7 @@ type ProjectionMigrationStep struct {
 	Factory func() eventsourcing.Aggregater
 }
 
-type getByIDFunc func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater, uint32, time.Time, error)
+type getByIDFunc func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater, store.AggregateMetadata, error)
 
 // MigrateConsistentProjection migrates a consistent projection by creating a new one
 func (r *EsRepository) MigrateConsistentProjection(
@@ -102,7 +102,7 @@ func (r *EsRepository) migrateProjection(
 		err = r.distinctAggregates(ctx, s.AggregateType, func(c context.Context, aggregateID string) error {
 			return retry.Do(
 				func() error {
-					return r.processAggregate(ctx, migrater, aggregateID, getByID)
+					return r.processAggregate(ctx, migrater, s.AggregateType, aggregateID, getByID)
 				},
 				retry.Attempts(retries),
 				retry.RetryIf(isDup),
@@ -119,21 +119,22 @@ func (r *EsRepository) migrateProjection(
 func (r *EsRepository) processAggregate(
 	c context.Context,
 	migrater ProjectionMigrater,
+	aggregateType eventsourcing.AggregateType,
 	aggregateID string,
 	getByID getByIDFunc,
 ) error {
-	agg, version, updatedAt, err := getByID(c, aggregateID)
+	agg, metadata, err := getByID(c, aggregateID)
 	if err != nil {
 		return faults.Wrap(err)
 	}
 
-	return r.withTx(c, func(c context.Context, t *sql.Tx) error {
+	return r.withTx(c, func(c context.Context, tx *sql.Tx) error {
 		// flush the event to the handler
-		err := migrater.Flush(c, t, agg)
+		err := migrater.Flush(c, metadata, agg)
 		if err != nil {
 			return faults.Wrap(err)
 		}
-		err = r.addNoOp(c, t, agg, version, updatedAt)
+		err = r.addNoOp(c, metadata)
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -213,22 +214,23 @@ func (r *EsRepository) distinctAggregates(
 	return nil
 }
 
-func (r *EsRepository) addNoOp(ctx context.Context, tx *sql.Tx, agg eventsourcing.Aggregater, version uint32, updatedAt time.Time) error {
+func (r *EsRepository) addNoOp(ctx context.Context, metadata store.AggregateMetadata) error {
 	clock := util.NewClock()
-	t := clock.After(updatedAt)
-	ver := version + 1
-	aggID := agg.GetID()
+	t := clock.After(metadata.UpdatedAt)
+	ver := metadata.Version + 1
+	aggID := metadata.ID
 	hash := util.Hash(aggID)
 	id, err := eventid.NewEntropy().NewID(t)
 	if err != nil {
 		return faults.Wrap(err)
 	}
+	tx := TxFromContext(ctx)
 	err = r.saveEvent(ctx, tx, Event{
 		ID:               id,
 		AggregateID:      aggID,
 		AggregateIDHash:  int32ring(hash),
 		AggregateVersion: ver,
-		AggregateType:    eventsourcing.AggregateType(agg.GetType()),
+		AggregateType:    metadata.Type,
 		Kind:             eventsourcing.KindNoOpEvent,
 		CreatedAt:        t,
 	})
