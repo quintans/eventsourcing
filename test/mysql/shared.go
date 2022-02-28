@@ -96,7 +96,7 @@ func dbSchema(dbURL string) error {
 			aggregate_id VARCHAR (50) NOT NULL,
 			aggregate_id_hash INTEGER NOT NULL,
 			aggregate_version INTEGER NOT NULL,
-			aggregate_type VARCHAR (50) NOT NULL,
+			aggregate_kind VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
 			body VARBINARY(60000),
 			idempotency_key VARCHAR (50),
@@ -105,7 +105,7 @@ func dbSchema(dbURL string) error {
 			migrated INTEGER NOT NULL DEFAULT 0
 		)ENGINE=innodb;`,
 		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migrated);`,
-		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_type, migrated);`,
+		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migrated);`,
 		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
 		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migrated);`,
 
@@ -113,7 +113,7 @@ func dbSchema(dbURL string) error {
 			id VARCHAR (50) PRIMARY KEY,
 			aggregate_id VARCHAR (50) NOT NULL,
 			aggregate_version INTEGER NOT NULL,
-			aggregate_type VARCHAR (50) NOT NULL,
+			aggregate_kind VARCHAR (50) NOT NULL,
 			body VARBINARY(60000) NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (id) REFERENCES events (id)

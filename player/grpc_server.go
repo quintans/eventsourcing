@@ -55,7 +55,7 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			AggregateId:      v.AggregateID,
 			AggregateIdHash:  v.AggregateIDHash,
 			AggregateVersion: v.AggregateVersion,
-			AggregateType:    v.AggregateType.String(),
+			AggregateKind:    v.AggregateKind.String(),
 			Kind:             v.Kind.String(),
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
@@ -67,9 +67,9 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 }
 
 func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
-	types := make([]eventsourcing.AggregateType, len(pbFilter.AggregateTypes))
-	for k, v := range pbFilter.AggregateTypes {
-		types[k] = eventsourcing.AggregateType(v)
+	types := make([]eventsourcing.Kind, len(pbFilter.AggregateKinds))
+	for k, v := range pbFilter.AggregateKinds {
+		types[k] = eventsourcing.Kind(v)
 	}
 	metadata := store.Metadata{}
 	for _, v := range pbFilter.Metadata {
@@ -82,7 +82,7 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 		metadata[v.Key] = values
 	}
 	return store.Filter{
-		AggregateTypes: types,
+		AggregateKinds: types,
 		Metadata:       metadata,
 		Partitions:     pbFilter.Partitions,
 		PartitionLow:   pbFilter.PartitionLow,

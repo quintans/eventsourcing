@@ -252,7 +252,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		var id string
 		var aggregateID string
 		var aggregateVersion int32
-		var aggregateType string
+		var aggregateKind string
 		var kind string
 		body := []byte{}
 		var idempotencyKey string
@@ -262,7 +262,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			"id":                &id,
 			"aggregate_id":      &aggregateID,
 			"aggregate_version": &aggregateVersion,
-			"aggregate_type":    &aggregateType,
+			"aggregate_kind":    &aggregateKind,
 			"kind":              &kind,
 			"body":              &body,
 			"idempotency_key":   &idempotencyKey,
@@ -282,8 +282,8 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			AggregateID:      aggregateID,
 			AggregateIDHash:  uint32(aggregateIDHash),
 			AggregateVersion: uint32(aggregateVersion),
-			AggregateType:    eventsourcing.AggregateType(aggregateType),
-			Kind:             eventsourcing.EventKind(kind),
+			AggregateKind:    eventsourcing.Kind(aggregateKind),
+			Kind:             eventsourcing.Kind(kind),
 			Body:             body,
 			Metadata:         encoding.JsonOfString(metadata),
 			IdempotencyKey:   idempotencyKey,

@@ -89,7 +89,7 @@ func TestRestartProducer(t *testing.T) {
 	expected = append(expected, db.Add(eventsourcing.Event{
 		AggregateID:      uuid.NewString(),
 		AggregateVersion: 1,
-		AggregateType:    "Account",
+		AggregateKind:    "Account",
 		Kind:             "Created",
 		Body:             []byte("{}"),
 	}))
@@ -123,14 +123,14 @@ func TestRestartProducer(t *testing.T) {
 	expected = append(expected, db.Add(eventsourcing.Event{
 		AggregateID:      uuid.NewString(),
 		AggregateVersion: 2,
-		AggregateType:    "Account",
+		AggregateKind:    "Account",
 		Kind:             "Created",
 		Body:             []byte("{}"),
 	}))
 	expected = append(expected, db.Add(eventsourcing.Event{
 		AggregateID:      uuid.NewString(),
 		AggregateVersion: 3,
-		AggregateType:    "Account",
+		AggregateKind:    "Account",
 		Kind:             "Created",
 		Body:             []byte("{}"),
 	}))
@@ -211,14 +211,14 @@ func TestRestartConsumer(t *testing.T) {
 	expected = append(expected, db.Add(eventsourcing.Event{
 		AggregateID:      uuid.NewString(),
 		AggregateVersion: 1,
-		AggregateType:    "Account",
+		AggregateKind:    "Account",
 		Kind:             "Created",
 		Body:             []byte("{}"),
 	}))
 	expected = append(expected, db.Add(eventsourcing.Event{
 		AggregateID:      uuid.NewString(),
 		AggregateVersion: 2,
-		AggregateType:    "Account",
+		AggregateKind:    "Account",
 		Kind:             "Created",
 		Body:             []byte("{}"),
 	}))
@@ -249,7 +249,7 @@ func TestRestartConsumer(t *testing.T) {
 			e := db.Add(eventsourcing.Event{
 				AggregateID:      uuid.NewString(),
 				AggregateVersion: uint32(2 + i),
-				AggregateType:    "Account",
+				AggregateKind:    "Account",
 				Kind:             "Created",
 				Body:             []byte("{}"),
 			})
@@ -302,7 +302,7 @@ func TestReplayProjection(t *testing.T) {
 			e := db.Add(eventsourcing.Event{
 				AggregateID:      uuid.NewString(),
 				AggregateVersion: uint32(i),
-				AggregateType:    "Account",
+				AggregateKind:    "Account",
 				Kind:             "Created",
 				Body:             []byte("{}"),
 			})

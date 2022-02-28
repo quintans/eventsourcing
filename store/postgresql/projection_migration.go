@@ -31,7 +31,7 @@ type ProjectionMigrater interface {
 }
 
 type ProjectionMigrationStep struct {
-	AggregateType eventsourcing.AggregateType
+	AggregateKind eventsourcing.Kind
 	// Factory creates a new aggregate instance
 	Factory func() eventsourcing.Aggregater
 }
@@ -99,10 +99,10 @@ func (r *EsRepository) migrateProjection(
 	steps := migrater.Steps()
 	for _, s := range steps {
 		// retrieve events for an aggregate type, aggregate id, event id in batches
-		err = r.distinctAggregates(ctx, s.AggregateType, func(c context.Context, aggregateID string) error {
+		err = r.distinctAggregates(ctx, s.AggregateKind, func(c context.Context, aggregateID string) error {
 			return retry.Do(
 				func() error {
-					return r.processAggregate(ctx, migrater, s.AggregateType, aggregateID, getByID)
+					return r.processAggregate(ctx, migrater, s.AggregateKind, aggregateID, getByID)
 				},
 				retry.Attempts(retries),
 				retry.RetryIf(isDup),
@@ -119,7 +119,7 @@ func (r *EsRepository) migrateProjection(
 func (r *EsRepository) processAggregate(
 	c context.Context,
 	migrater ProjectionMigrater,
-	aggregateType eventsourcing.AggregateType,
+	aggregateKind eventsourcing.Kind,
 	aggregateID string,
 	getByID getByIDFunc,
 ) error {
@@ -176,15 +176,15 @@ const distinctLimit = 100
 
 func (r *EsRepository) distinctAggregates(
 	ctx context.Context,
-	aggregateType eventsourcing.AggregateType,
+	aggregateKind eventsourcing.Kind,
 	handler func(c context.Context, aggregateID string) error,
 ) error {
 	aggregateID := ""
 	for {
-		args := []interface{}{aggregateType}
+		args := []interface{}{aggregateKind}
 		var query bytes.Buffer
 		// get the id of the aggregate
-		query.WriteString("SELECT distinct aggregate_id FROM events WHERE aggregate_type = $1")
+		query.WriteString("SELECT distinct aggregate_id FROM events WHERE aggregate_kind = $1")
 		if aggregateID != "" {
 			args = append(args, aggregateID)
 			query.WriteString("aggregate_id > $" + strconv.Itoa(len(args)))
@@ -230,7 +230,7 @@ func (r *EsRepository) addNoOp(ctx context.Context, metadata store.AggregateMeta
 		AggregateID:      aggID,
 		AggregateIDHash:  int32ring(hash),
 		AggregateVersion: ver,
-		AggregateType:    metadata.Type,
+		AggregateKind:    metadata.Type,
 		Kind:             eventsourcing.KindNoOpEvent,
 		CreatedAt:        t,
 	})

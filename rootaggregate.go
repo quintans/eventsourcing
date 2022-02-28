@@ -1,23 +1,17 @@
 package eventsourcing
 
-type AggregateType string
+type Kind string
 
-func (a AggregateType) String() string {
+func (a Kind) String() string {
 	return string(a)
 }
 
-type EventKind string
-
-func (e EventKind) String() string {
-	return string(e)
-}
-
-type Typer interface {
-	GetType() string
+type Kinder interface {
+	GetType() Kind
 }
 
 type Eventer interface {
-	Typer
+	Kinder
 }
 
 type EventHandler interface {

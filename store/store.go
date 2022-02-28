@@ -8,7 +8,7 @@ import (
 )
 
 type Filter struct {
-	AggregateTypes []eventsourcing.AggregateType
+	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
 	Metadata     Metadata
@@ -21,7 +21,7 @@ type FilterOption func(*Filter)
 
 func WithFilter(filter Filter) FilterOption {
 	return func(f *Filter) {
-		f.AggregateTypes = filter.AggregateTypes
+		f.AggregateKinds = filter.AggregateKinds
 		f.Metadata = filter.Metadata
 		f.Partitions = filter.Partitions
 		f.PartitionLow = filter.PartitionLow
@@ -29,9 +29,9 @@ func WithFilter(filter Filter) FilterOption {
 	}
 }
 
-func WithAggregateTypes(at ...eventsourcing.AggregateType) FilterOption {
+func WithAggregateTypes(at ...eventsourcing.Kind) FilterOption {
 	return func(f *Filter) {
-		f.AggregateTypes = at
+		f.AggregateKinds = at
 	}
 }
 
@@ -72,7 +72,7 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption
 type Subscription func(context.Context, eventsourcing.Event) error
 
 type AggregateMetadata struct {
-	Type      eventsourcing.AggregateType
+	Type      eventsourcing.Kind
 	ID        string
 	Version   uint32
 	UpdatedAt time.Time

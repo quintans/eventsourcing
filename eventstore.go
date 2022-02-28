@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	EmptyIdempotencyKey           = ""
-	InvalidatedKind     EventKind = "Invalidated"
+	EmptyIdempotencyKey      = ""
+	InvalidatedKind     Kind = "Invalidated"
 )
 
 var (
@@ -32,11 +32,11 @@ type Encoder interface {
 }
 
 type Decoder interface {
-	Decode(data []byte, kind string) (interface{}, error)
+	Decode(data []byte, kind Kind) (interface{}, error)
 }
 
 type Aggregater interface {
-	Typer
+	Kinder
 	GetID() string
 	PopEvents() []Eventer
 	HandleEvent(event Eventer)
@@ -49,8 +49,8 @@ type Event struct {
 	AggregateID      string
 	AggregateIDHash  uint32
 	AggregateVersion uint32
-	AggregateType    AggregateType
-	Kind             EventKind
+	AggregateKind    Kind
+	Kind             Kind
 	Body             encoding.Base64
 	IdempotencyKey   string
 	Metadata         *encoding.Json
@@ -65,7 +65,7 @@ type Snapshot struct {
 	ID               eventid.EventID
 	AggregateID      string
 	AggregateVersion uint32
-	AggregateType    AggregateType
+	AggregateKind    Kind
 	Body             []byte
 	CreatedAt        time.Time
 }
@@ -76,7 +76,7 @@ type EsRepository interface {
 	SaveSnapshot(ctx context.Context, snapshot Snapshot) error
 	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
 	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
-	Forget(ctx context.Context, request ForgetRequest, forget func(kind string, body []byte, snapshot bool) ([]byte, error)) error
+	Forget(ctx context.Context, request ForgetRequest, forget func(kind Kind, body []byte, snapshot bool) ([]byte, error)) error
 	MigrateInPlaceCopyReplace(
 		ctx context.Context,
 		revision int,
@@ -85,14 +85,14 @@ type EsRepository interface {
 		rehydrateFunc func(Aggregater, Event) error, // called only if snapshot threshold is reached
 		encoder Encoder,
 		handler MigrationHandler,
-		aggregateType AggregateType,
-		eventTypeCriteria ...EventKind,
+		aggregateKind Kind,
+		eventTypeCriteria ...Kind,
 	) error
 }
 
 // Event is the event data stored in the database
 type EventMigration struct {
-	Kind           EventKind
+	Kind           Kind
 	Body           []byte
 	IdempotencyKey string
 	Metadata       *encoding.Json
@@ -107,7 +107,7 @@ func DefaultEventMigration(e *Event) *EventMigration {
 	}
 }
 
-var KindNoOpEvent = EventKind("NoOp")
+var KindNoOpEvent = Kind("NoOp")
 
 // NoOpEvent is used as marker for consistent projection migration
 // making sure that no other event was added while recreating the state of an aggregate
@@ -124,7 +124,7 @@ type MigrationHandler func(events []*Event) ([]*EventMigration, error)
 type EventRecord struct {
 	AggregateID    string
 	Version        uint32
-	AggregateType  AggregateType
+	AggregateKind  Kind
 	IdempotencyKey string
 	Metadata       map[string]interface{}
 	CreatedAt      time.Time
@@ -132,7 +132,7 @@ type EventRecord struct {
 }
 
 type EventRecordDetail struct {
-	Kind EventKind
+	Kind Kind
 	Body []byte
 }
 
@@ -245,7 +245,7 @@ func (es EventStore) retrieve(ctx context.Context, aggregateID string) (Aggregat
 	var aggregateVersion uint32
 	var updatedAt time.Time
 	if len(snap.Body) != 0 {
-		aggregate, err = es.RehydrateAggregate(snap.AggregateType, snap.Body)
+		aggregate, err = es.RehydrateAggregate(snap.AggregateKind, snap.Body)
 		if err != nil {
 			return nil, 0, time.Time{}, 0, err
 		}
@@ -267,7 +267,7 @@ func (es EventStore) retrieve(ctx context.Context, aggregateID string) (Aggregat
 	for _, event := range events {
 		// if the aggregate was not instantiated because the snap was not found
 		if aggregate == nil {
-			aggregate, err = es.RehydrateAggregate(event.AggregateType, nil)
+			aggregate, err = es.RehydrateAggregate(event.AggregateKind, nil)
 			if err != nil {
 				return nil, 0, time.Time{}, 0, err
 			}
@@ -293,11 +293,11 @@ func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e Event) error {
 	return nil
 }
 
-func (es EventStore) RehydrateAggregate(aggregateType AggregateType, body []byte) (Aggregater, error) {
-	return RehydrateAggregate(es.codec, aggregateType, body)
+func (es EventStore) RehydrateAggregate(aggregateKind Kind, body []byte) (Aggregater, error) {
+	return RehydrateAggregate(es.codec, aggregateKind, body)
 }
 
-func (es EventStore) RehydrateEvent(kind EventKind, body []byte) (Typer, error) {
+func (es EventStore) RehydrateEvent(kind Kind, body []byte) (Kinder, error) {
 	return RehydrateEvent(es.codec, kind, body)
 }
 
@@ -338,7 +338,7 @@ func (es EventStore) save(
 			return err
 		}
 		details[i] = EventRecordDetail{
-			Kind: EventKind(e.GetType()),
+			Kind: e.GetType(),
 			Body: body,
 		}
 	}
@@ -346,7 +346,7 @@ func (es EventStore) save(
 	rec := EventRecord{
 		AggregateID:    aggregate.GetID(),
 		Version:        version,
-		AggregateType:  AggregateType(tName),
+		AggregateKind:  Kind(tName),
 		IdempotencyKey: opts.IdempotencyKey,
 		Metadata:       opts.Labels,
 		CreatedAt:      now,
@@ -368,7 +368,7 @@ func (es EventStore) save(
 			ID:               id,
 			AggregateID:      aggregate.GetID(),
 			AggregateVersion: lastVersion,
-			AggregateType:    AggregateType(tName),
+			AggregateKind:    Kind(tName),
 			Body:             body,
 			CreatedAt:        now,
 		}
@@ -391,11 +391,11 @@ func (es EventStore) HasIdempotencyKey(ctx context.Context, idempotencyKey strin
 
 type ForgetRequest struct {
 	AggregateID string
-	EventKind   EventKind
+	EventKind   Kind
 }
 
 func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
-	fun := func(kind string, body []byte, snapshot bool) ([]byte, error) {
+	fun := func(kind Kind, body []byte, snapshot bool) ([]byte, error) {
 		e, err := es.codec.Decode(body, kind)
 		if err != nil {
 			return nil, err
@@ -418,14 +418,14 @@ func (es EventStore) MigrateInPlaceCopyReplace(
 	revision int,
 	snapshotThreshold uint32,
 	handler MigrationHandler,
-	aggregateType AggregateType,
-	eventTypeCriteria ...EventKind,
+	aggregateKind Kind,
+	eventTypeCriteria ...Kind,
 ) error {
 	return es.store.MigrateInPlaceCopyReplace(ctx,
 		revision,
 		snapshotThreshold,
 		func() (Aggregater, error) {
-			v, err := es.codec.Decode(nil, aggregateType.String())
+			v, err := es.codec.Decode(nil, aggregateKind)
 			if err != nil {
 				return nil, err
 			}
@@ -434,6 +434,6 @@ func (es EventStore) MigrateInPlaceCopyReplace(
 		es.ApplyChangeFromHistory,
 		es.codec,
 		handler,
-		aggregateType,
+		aggregateKind,
 		eventTypeCriteria...)
 }

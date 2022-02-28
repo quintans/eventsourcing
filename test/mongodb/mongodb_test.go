@@ -26,10 +26,10 @@ import (
 var logger = log.NewLogrus(logrus.StandardLogger())
 
 const (
-	AggregateAccount    eventsourcing.AggregateType = "Account"
-	EventAccountCreated eventsourcing.EventKind     = "AccountCreated"
-	EventMoneyDeposited eventsourcing.EventKind     = "MoneyDeposited"
-	EventMoneyWithdrawn eventsourcing.EventKind     = "MoneyWithdrawn"
+	AggregateAccount    eventsourcing.Kind = "Account"
+	EventAccountCreated eventsourcing.Kind = "AccountCreated"
+	EventMoneyDeposited eventsourcing.Kind = "MoneyDeposited"
+	EventMoneyWithdrawn eventsourcing.Kind = "MoneyWithdrawn"
 )
 
 // creates a independent connection
@@ -83,7 +83,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 
 	for k, v := range evts {
-		assert.Equal(t, AggregateAccount, v.AggregateType)
+		assert.Equal(t, AggregateAccount, v.AggregateKind)
 		assert.Equal(t, id.String(), v.AggregateID)
 		assert.Equal(t, uint32(k+1), v.AggregateVersion)
 	}
@@ -380,7 +380,7 @@ func TestForget(t *testing.T) {
 	for _, e := range evts {
 		if e.Kind == "OwnerUpdated" {
 			foundEvent = true
-			event, err := codec.Decode(e.Body, e.Kind.String())
+			event, err := codec.Decode(e.Body, e.Kind)
 			require.NoError(t, err)
 			evt := event.(*test.OwnerUpdated)
 			assert.NotEmpty(t, evt.Owner)
@@ -398,7 +398,7 @@ func TestForget(t *testing.T) {
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		a, err := codec.Decode(v.Body, test.TypeAccount.String())
+		a, err := codec.Decode(v.Body, test.TypeAccount)
 		require.NoError(t, err)
 		snap := a.(*test.Account)
 		assert.NotEmpty(t, snap.Owner)
@@ -442,7 +442,7 @@ func TestForget(t *testing.T) {
 	for _, e := range evts {
 		if e.Kind == "OwnerUpdated" {
 			foundEvent = true
-			event, err := codec.Decode(e.Body, e.Kind.String())
+			event, err := codec.Decode(e.Body, e.Kind)
 			require.NoError(t, err)
 			evt := event.(test.OwnerUpdated)
 			assert.Empty(t, evt.Owner)
@@ -460,7 +460,7 @@ func TestForget(t *testing.T) {
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		s, err := codec.Decode(v.Body, test.TypeAccount.String())
+		s, err := codec.Decode(v.Body, test.TypeAccount)
 		require.NoError(t, err)
 		snap := s.(*test.Account)
 		assert.Empty(t, snap.Owner)

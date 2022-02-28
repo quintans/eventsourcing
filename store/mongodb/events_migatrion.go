@@ -23,8 +23,8 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error, // called only if snapshot threshold is reached
 	encoder eventsourcing.Encoder,
 	handler eventsourcing.MigrationHandler,
-	aggregateType eventsourcing.AggregateType,
-	eventTypeCriteria ...eventsourcing.EventKind,
+	aggregateKind eventsourcing.Kind,
+	eventTypeCriteria ...eventsourcing.Kind,
 ) error {
 	if revision < 1 {
 		return faults.New("revision must be greater than zero")
@@ -35,7 +35,7 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 
 	// loops until it exhausts all streams with the event that we want to migrate
 	for {
-		events, err := r.eventsForMigration(ctx, aggregateType, eventTypeCriteria)
+		events, err := r.eventsForMigration(ctx, aggregateKind, eventTypeCriteria)
 		if err != nil {
 			return err
 		}
@@ -57,8 +57,8 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	}
 }
 
-func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eventsourcing.AggregateType, eventTypeCriteria []eventsourcing.EventKind) ([]*eventsourcing.Event, error) {
-	if aggregateType == "" {
+func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eventsourcing.Kind, eventTypeCriteria []eventsourcing.Kind) ([]*eventsourcing.Event, error) {
+	if aggregateKind == "" {
 		return nil, faults.New("aggregate type needs to be specified")
 	}
 	if len(eventTypeCriteria) == 0 {
@@ -67,7 +67,7 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eve
 
 	// find an aggregate ID to migrate
 	filter := bson.D{
-		{"aggregate_type", bson.D{{"$eq", aggregateType}}},
+		{"aggregate_kind", bson.D{{"$eq", aggregateKind}}},
 		{"migrated", bson.D{{"$eq", 0}}},
 		{"kind", bson.D{{"$in", eventTypeCriteria}}},
 	}
@@ -149,7 +149,7 @@ func (r *EsRepository) saveMigration(
 				AggregateID:      last.AggregateID,
 				AggregateIDHash:  last.AggregateIDHash,
 				AggregateVersion: version,
-				AggregateType:    last.AggregateType,
+				AggregateKind:    last.AggregateKind,
 				Kind:             eventsourcing.InvalidatedKind,
 				CreatedAt:        t,
 			},
@@ -207,7 +207,7 @@ func (r *EsRepository) saveMigration(
 				AggregateID:      last.AggregateID,
 				AggregateIDHash:  last.AggregateIDHash,
 				AggregateVersion: version,
-				AggregateType:    last.AggregateType,
+				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,
 				Body:             mig.Body,
 				IdempotencyKey:   mig.IdempotencyKey,
@@ -236,7 +236,7 @@ func (r *EsRepository) saveMigration(
 				ID:               lastID.String(),
 				AggregateID:      last.AggregateID,
 				AggregateVersion: version,
-				AggregateType:    last.AggregateType,
+				AggregateKind:    last.AggregateKind,
 				Body:             body,
 				CreatedAt:        time.Now().UTC(),
 			})

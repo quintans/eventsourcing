@@ -90,8 +90,8 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 			AggregateID:      v.AggregateId,
 			AggregateIDHash:  v.AggregateIdHash,
 			AggregateVersion: v.AggregateVersion,
-			AggregateType:    eventsourcing.AggregateType(v.AggregateType),
-			Kind:             eventsourcing.EventKind(v.Kind),
+			AggregateKind:    eventsourcing.Kind(v.AggregateKind),
+			Kind:             eventsourcing.Kind(v.Kind),
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         encoding.JsonOfString(v.Metadata),
@@ -102,8 +102,8 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 }
 
 func filterToPbFilter(filter store.Filter) *pb.Filter {
-	types := make([]string, len(filter.AggregateTypes))
-	for k, v := range filter.AggregateTypes {
+	types := make([]string, len(filter.AggregateKinds))
+	for k, v := range filter.AggregateKinds {
 		types[k] = v.String()
 	}
 	metadata := []*pb.Metadata{}
@@ -113,7 +113,7 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 		}
 	}
 	return &pb.Filter{
-		AggregateTypes: types,
+		AggregateKinds: types,
 		Metadata:       metadata,
 		Partitions:     filter.Partitions,
 		PartitionLow:   filter.PartitionLow,

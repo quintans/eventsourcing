@@ -119,7 +119,7 @@ func dbSchema(cli *mongo.Client) error {
 				},
 				{
 					{"key", bson.D{
-						{"aggregate_type", 1},
+						{"aggregate_kind", 1},
 						{"migrated", 1},
 					}},
 					{"name", "evt_type_migrated_idx"},

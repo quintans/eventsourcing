@@ -24,16 +24,16 @@ import (
 )
 
 type FeedEvent struct {
-	ID               eventid.EventID             `json:"id,omitempty"`
-	AggregateID      string                      `json:"aggregate_id,omitempty"`
-	AggregateIDHash  uint32                      `json:"aggregate_id_hash,omitempty"`
-	AggregateVersion uint32                      `json:"aggregate_version,omitempty"`
-	AggregateType    eventsourcing.AggregateType `json:"aggregate_type,omitempty"`
-	Kind             eventsourcing.EventKind     `json:"kind,omitempty"`
-	Body             encoding.Json               `json:"body,omitempty"`
-	IdempotencyKey   string                      `json:"idempotency_key,omitempty"`
-	Metadata         *encoding.Json              `json:"metadata,omitempty"`
-	CreatedAt        PgTime                      `json:"created_at,omitempty"`
+	ID               eventid.EventID    `json:"id,omitempty"`
+	AggregateID      string             `json:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32             `json:"aggregate_id_hash,omitempty"`
+	AggregateVersion uint32             `json:"aggregate_version,omitempty"`
+	AggregateKind    eventsourcing.Kind `json:"aggregate_kind,omitempty"`
+	Kind             eventsourcing.Kind `json:"kind,omitempty"`
+	Body             encoding.Json      `json:"body,omitempty"`
+	IdempotencyKey   string             `json:"idempotency_key,omitempty"`
+	Metadata         *encoding.Json     `json:"metadata,omitempty"`
+	CreatedAt        PgTime             `json:"created_at,omitempty"`
 }
 
 type PgTime time.Time
@@ -63,7 +63,7 @@ type Feed struct {
 	dbURL          string
 	offset         time.Duration
 	channel        string
-	aggregateTypes []eventsourcing.AggregateType
+	aggregateKinds []eventsourcing.Kind
 	metadata       store.Metadata
 	partitions     uint32
 	partitionsLow  uint32
@@ -181,7 +181,7 @@ func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID even
 
 	p.logger.Infof("Replaying events from %s", lastID)
 	filters := []store.FilterOption{
-		store.WithAggregateTypes(p.aggregateTypes...),
+		store.WithAggregateTypes(p.aggregateKinds...),
 		store.WithMetadata(p.metadata),
 		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
 	}
@@ -254,7 +254,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 			AggregateID:      pgEvent.AggregateID,
 			AggregateIDHash:  pgEvent.AggregateIDHash,
 			AggregateVersion: pgEvent.AggregateVersion,
-			AggregateType:    pgEvent.AggregateType,
+			AggregateKind:    pgEvent.AggregateKind,
 			Kind:             pgEvent.Kind,
 			Body:             body,
 			IdempotencyKey:   pgEvent.IdempotencyKey,

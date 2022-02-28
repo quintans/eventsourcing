@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	aggregateType eventsourcing.AggregateType = "Account"
+	aggregateKind eventsourcing.Kind = "Account"
 )
 
 var logger = log.NewLogrus(logrus.StandardLogger())
@@ -92,7 +92,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "MoneyDeposited", evts[2].Kind.String())
 	assert.Equal(t, "MoneyDeposited", evts[3].Kind.String())
 	assert.Equal(t, "idempotency-key", string(evts[3].IdempotencyKey))
-	assert.Equal(t, aggregateType, evts[0].AggregateType)
+	assert.Equal(t, aggregateKind, evts[0].AggregateKind)
 	assert.Equal(t, id.String(), evts[0].AggregateID)
 	for i := 0; i < len(evts); i++ {
 		assert.Equal(t, uint32(i+1), evts[i].AggregateVersion)
@@ -204,7 +204,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithAggregateTypes(aggregateType))
+	p := poller.New(logger, repository, poller.WithAggregateTypes(aggregateKind))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex

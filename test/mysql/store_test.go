@@ -87,7 +87,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "MoneyDeposited", evts[2].Kind.String())
 	assert.Equal(t, "MoneyDeposited", evts[3].Kind.String())
 	assert.Equal(t, "idempotency-key", string(evts[3].IdempotencyKey))
-	assert.Equal(t, test.TypeAccount, evts[0].AggregateType)
+	assert.Equal(t, test.TypeAccount, evts[0].AggregateKind)
 	assert.Equal(t, id.String(), evts[0].AggregateID)
 	for i := 0; i < len(evts); i++ {
 		assert.Equal(t, uint32(i+1), evts[i].AggregateVersion)

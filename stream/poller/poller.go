@@ -26,7 +26,7 @@ type Poller struct {
 	play         player.Player
 	// lag to account for on same millisecond concurrent inserts and clock skews
 	trailingLag    time.Duration
-	aggregateTypes []eventsourcing.AggregateType
+	aggregateKinds []eventsourcing.Kind
 	metadata       store.Metadata
 	partitions     uint32
 	partitionsLow  uint32
@@ -63,9 +63,9 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) Option {
 	}
 }
 
-func WithAggregateTypes(at ...eventsourcing.AggregateType) Option {
+func WithAggregateTypes(at ...eventsourcing.Kind) Option {
 	return func(f *Poller) {
-		f.aggregateTypes = at
+		f.aggregateKinds = at
 	}
 }
 
@@ -127,7 +127,7 @@ func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handle
 func (p Poller) forward(ctx context.Context, after eventid.EventID, handler projection.EventHandlerFunc) error {
 	wait := p.pollInterval
 	filters := []store.FilterOption{
-		store.WithAggregateTypes(p.aggregateTypes...),
+		store.WithAggregateTypes(p.aggregateKinds...),
 		store.WithMetadata(p.metadata),
 		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
 	}

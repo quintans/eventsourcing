@@ -9,11 +9,11 @@ import (
 )
 
 var (
-	TypeAccount        = eventsourcing.AggregateType("Account")
-	KindAccountCreated = eventsourcing.EventKind("AccountCreated")
-	KindMoneyDeposited = eventsourcing.EventKind("MoneyDeposited")
-	KindMoneyWithdrawn = eventsourcing.EventKind("MoneyWithdrawn")
-	KindOwnerUpdated   = eventsourcing.EventKind("OwnerUpdated")
+	TypeAccount        = eventsourcing.Kind("Account")
+	KindAccountCreated = eventsourcing.Kind("AccountCreated")
+	KindMoneyDeposited = eventsourcing.Kind("MoneyDeposited")
+	KindMoneyWithdrawn = eventsourcing.Kind("MoneyWithdrawn")
+	KindOwnerUpdated   = eventsourcing.Kind("OwnerUpdated")
 )
 
 type Status string
@@ -30,7 +30,7 @@ type AccountCreated struct {
 	Owner string    `json:"owner,omitempty"`
 }
 
-func (e AccountCreated) GetType() string {
+func (e AccountCreated) GetType() eventsourcing.Kind {
 	return "AccountCreated"
 }
 
@@ -38,7 +38,7 @@ type MoneyWithdrawn struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func (e MoneyWithdrawn) GetType() string {
+func (e MoneyWithdrawn) GetType() eventsourcing.Kind {
 	return "MoneyWithdrawn"
 }
 
@@ -46,7 +46,7 @@ type MoneyDeposited struct {
 	Money int64 `json:"money,omitempty"`
 }
 
-func (e MoneyDeposited) GetType() string {
+func (e MoneyDeposited) GetType() eventsourcing.Kind {
 	return "MoneyDeposited"
 }
 
@@ -54,25 +54,25 @@ type OwnerUpdated struct {
 	Owner string `json:"owner,omitempty"`
 }
 
-func (e OwnerUpdated) GetType() string {
+func (e OwnerUpdated) GetType() eventsourcing.Kind {
 	return "OwnerUpdated"
 }
 
 func NewJSONCodec() *jsoncodec.Codec {
 	c := jsoncodec.New()
-	c.RegisterFactory(TypeAccount.String(), func() interface{} {
+	c.RegisterFactory(TypeAccount, func() eventsourcing.Kinder {
 		return NewAccount()
 	})
-	c.RegisterFactory(KindAccountCreated.String(), func() interface{} {
+	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
 		return &AccountCreated{}
 	})
-	c.RegisterFactory(KindMoneyDeposited.String(), func() interface{} {
+	c.RegisterFactory(KindMoneyDeposited, func() eventsourcing.Kinder {
 		return &MoneyDeposited{}
 	})
-	c.RegisterFactory(KindMoneyWithdrawn.String(), func() interface{} {
+	c.RegisterFactory(KindMoneyWithdrawn, func() eventsourcing.Kinder {
 		return &MoneyWithdrawn{}
 	})
-	c.RegisterFactory(KindOwnerUpdated.String(), func() interface{} {
+	c.RegisterFactory(KindOwnerUpdated, func() eventsourcing.Kinder {
 		return &OwnerUpdated{}
 	})
 	return c
@@ -127,8 +127,8 @@ func (a *Account) Forget() {
 	a.HandleEvent(OwnerUpdated{})
 }
 
-func (a Account) GetType() string {
-	return TypeAccount.String()
+func (a Account) GetType() eventsourcing.Kind {
+	return TypeAccount
 }
 
 func (a *Account) Withdraw(money int64) bool {

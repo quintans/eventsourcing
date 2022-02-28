@@ -25,26 +25,26 @@ const (
 
 // Event is the event data stored in the database
 type Event struct {
-	ID               string                      `bson:"_id,omitempty"`
-	AggregateID      string                      `bson:"aggregate_id,omitempty"`
-	AggregateIDHash  uint32                      `bson:"aggregate_id_hash,omitempty"`
-	AggregateVersion uint32                      `bson:"aggregate_version,omitempty"`
-	AggregateType    eventsourcing.AggregateType `bson:"aggregate_type,omitempty"`
-	Kind             eventsourcing.EventKind     `bson:"kind,omitempty"`
-	Body             []byte                      `bson:"body,omitempty"`
-	IdempotencyKey   string                      `bson:"idempotency_key,omitempty"`
-	Metadata         bson.M                      `bson:"metadata,omitempty"`
-	CreatedAt        time.Time                   `bson:"created_at,omitempty"`
-	Migrated         int                         `bson:"migrated"`
+	ID               string             `bson:"_id,omitempty"`
+	AggregateID      string             `bson:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32             `bson:"aggregate_id_hash,omitempty"`
+	AggregateVersion uint32             `bson:"aggregate_version,omitempty"`
+	AggregateKind    eventsourcing.Kind `bson:"aggregate_kind,omitempty"`
+	Kind             eventsourcing.Kind `bson:"kind,omitempty"`
+	Body             []byte             `bson:"body,omitempty"`
+	IdempotencyKey   string             `bson:"idempotency_key,omitempty"`
+	Metadata         bson.M             `bson:"metadata,omitempty"`
+	CreatedAt        time.Time          `bson:"created_at,omitempty"`
+	Migrated         int                `bson:"migrated"`
 }
 
 type Snapshot struct {
-	ID               string                      `bson:"_id,omitempty"`
-	AggregateID      string                      `bson:"aggregate_id,omitempty"`
-	AggregateVersion uint32                      `bson:"aggregate_version,omitempty"`
-	AggregateType    eventsourcing.AggregateType `bson:"aggregate_type,omitempty"`
-	Body             []byte                      `bson:"body,omitempty"`
-	CreatedAt        time.Time                   `bson:"created_at,omitempty"`
+	ID               string             `bson:"_id,omitempty"`
+	AggregateID      string             `bson:"aggregate_id,omitempty"`
+	AggregateVersion uint32             `bson:"aggregate_version,omitempty"`
+	AggregateKind    eventsourcing.Kind `bson:"aggregate_kind,omitempty"`
+	Body             []byte             `bson:"body,omitempty"`
+	CreatedAt        time.Time          `bson:"created_at,omitempty"`
 }
 
 var _ eventsourcing.EsRepository = (*EsRepository)(nil)
@@ -139,7 +139,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 					ID:               id.String(),
 					AggregateID:      eRec.AggregateID,
 					AggregateIDHash:  util.Hash(eRec.AggregateID),
-					AggregateType:    eRec.AggregateType,
+					AggregateKind:    eRec.AggregateKind,
 					Kind:             e.Kind,
 					Body:             e.Body,
 					AggregateVersion: version,
@@ -251,7 +251,7 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 		ID:               id,
 		AggregateID:      aggregateID,
 		AggregateVersion: snap.AggregateVersion,
-		AggregateType:    eventsourcing.AggregateType(snap.AggregateType),
+		AggregateKind:    eventsourcing.Kind(snap.AggregateKind),
 		Body:             snap.Body,
 		CreatedAt:        snap.CreatedAt,
 	}, nil
@@ -262,7 +262,7 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot eventsourcing.
 		ID:               snapshot.ID.String(),
 		AggregateID:      snapshot.AggregateID,
 		AggregateVersion: snapshot.AggregateVersion,
-		AggregateType:    snapshot.AggregateType,
+		AggregateKind:    snapshot.AggregateKind,
 		Body:             snapshot.Body,
 		CreatedAt:        snapshot.CreatedAt,
 	})
@@ -312,7 +312,7 @@ func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey str
 	return true, nil
 }
 
-func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetRequest, forget func(kind string, body []byte, snapshot bool) ([]byte, error)) error {
+func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetRequest, forget func(kind eventsourcing.Kind, body []byte, snapshot bool) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// for events
@@ -329,7 +329,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 		return faults.Errorf("unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
 	for _, evt := range events {
-		body, err := forget(evt.Kind.String(), evt.Body, false)
+		body, err := forget(evt.Kind, evt.Body, false)
 		if err != nil {
 			return err
 		}
@@ -360,7 +360,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	}
 
 	for _, s := range snaps {
-		body, err := forget(s.AggregateType.String(), s.Body, true)
+		body, err := forget(s.AggregateKind, s.Body, true)
 		if err != nil {
 			return err
 		}
@@ -445,8 +445,8 @@ func (r *EsRepository) GetEvents(ctx context.Context, afterEventID eventid.Event
 }
 
 func buildFilter(filter store.Filter, flt bson.D) bson.D {
-	if len(filter.AggregateTypes) > 0 {
-		flt = append(flt, bson.E{"aggregate_type", bson.D{{"$in", filter.AggregateTypes}}})
+	if len(filter.AggregateKinds) > 0 {
+		flt = append(flt, bson.E{"aggregate_kind", bson.D{{"$in", filter.AggregateKinds}}})
 	}
 
 	if filter.Partitions > 1 {
@@ -537,7 +537,7 @@ func toEventsourcingEvent(e Event, id eventid.EventID) eventsourcing.Event {
 		AggregateID:      e.AggregateID,
 		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
-		AggregateType:    e.AggregateType,
+		AggregateKind:    e.AggregateKind,
 		IdempotencyKey:   e.IdempotencyKey,
 		Kind:             e.Kind,
 		Body:             e.Body,

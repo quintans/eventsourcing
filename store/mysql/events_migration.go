@@ -23,8 +23,8 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error, // called only if snapshot threshold is reached
 	encoder eventsourcing.Encoder,
 	handler eventsourcing.MigrationHandler,
-	aggregateType eventsourcing.AggregateType,
-	eventTypeCriteria ...eventsourcing.EventKind,
+	aggregateKind eventsourcing.Kind,
+	eventTypeCriteria ...eventsourcing.Kind,
 ) error {
 	if revision < 1 {
 		return faults.New("revision must be greater than zero")
@@ -36,7 +36,7 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	// loops until it exhausts all streams with the event that we want to migrate
 	for {
 		// the event to migrate will be replaced by a new one and in this way the migrated aggregate will not be selected in the next loop
-		events, err := r.eventsForMigration(ctx, aggregateType, eventTypeCriteria)
+		events, err := r.eventsForMigration(ctx, aggregateKind, eventTypeCriteria)
 		if err != nil {
 			return err
 		}
@@ -58,18 +58,18 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	}
 }
 
-func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateType eventsourcing.AggregateType, eventTypeCriteria []eventsourcing.EventKind) ([]*eventsourcing.Event, error) {
-	if aggregateType == "" {
+func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eventsourcing.Kind, eventTypeCriteria []eventsourcing.Kind) ([]*eventsourcing.Event, error) {
+	if aggregateKind == "" {
 		return nil, faults.New("aggregate type needs to be specified")
 	}
 	if len(eventTypeCriteria) == 0 {
 		return nil, faults.New("event type criteria needs to be specified")
 	}
 
-	args := []interface{}{aggregateType}
+	args := []interface{}{aggregateKind}
 	var subquery bytes.Buffer
 	// get the id of the aggregate
-	subquery.WriteString("SELECT aggregate_id FROM events WHERE aggregate_type = ? AND migrated = 0 AND (")
+	subquery.WriteString("SELECT aggregate_id FROM events WHERE aggregate_kind = ? AND migrated = 0 AND (")
 	for k, v := range eventTypeCriteria {
 		if k > 0 {
 			subquery.WriteString(" OR ")
@@ -125,7 +125,7 @@ func (r *EsRepository) saveMigration(
 			AggregateID:      last.AggregateID,
 			AggregateIDHash:  int32ring(last.AggregateIDHash),
 			AggregateVersion: version,
-			AggregateType:    last.AggregateType,
+			AggregateKind:    last.AggregateKind,
 			Kind:             eventsourcing.InvalidatedKind,
 			CreatedAt:        time.Now().UTC(),
 		})
@@ -167,7 +167,7 @@ func (r *EsRepository) saveMigration(
 				AggregateID:      last.AggregateID,
 				AggregateIDHash:  int32ring(last.AggregateIDHash),
 				AggregateVersion: version,
-				AggregateType:    last.AggregateType,
+				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,
 				Body:             mig.Body,
 				IdempotencyKey:   NilString(mig.IdempotencyKey),
@@ -197,7 +197,7 @@ func (r *EsRepository) saveMigration(
 				ID:               lastID,
 				AggregateID:      last.AggregateID,
 				AggregateVersion: version,
-				AggregateType:    last.AggregateType,
+				AggregateKind:    last.AggregateKind,
 				Body:             body,
 				CreatedAt:        time.Now().UTC(),
 			})

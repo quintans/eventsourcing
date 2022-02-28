@@ -101,7 +101,7 @@ func dbSchema(dbConfig DBConfig) error {
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_id_hash INTEGER NOT NULL,
 		aggregate_version INTEGER NOT NULL,
-		aggregate_type VARCHAR (50) NOT NULL,
+		aggregate_kind VARCHAR (50) NOT NULL,
 		kind VARCHAR (50) NOT NULL,
 		body bytea,
 		idempotency_key VARCHAR (50),
@@ -110,7 +110,7 @@ func dbSchema(dbConfig DBConfig) error {
 		migrated INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migrated);
-	CREATE INDEX evt_type_migrated_idx ON events (aggregate_type, migrated);
+	CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migrated);
 	CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);
 	CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migrated);
 	CREATE INDEX evt_metadata_idx ON events USING GIN (metadata jsonb_path_ops);
@@ -119,7 +119,7 @@ func dbSchema(dbConfig DBConfig) error {
 		id VARCHAR (50) PRIMARY KEY,
 		aggregate_id VARCHAR (50) NOT NULL,
 		aggregate_version INTEGER NOT NULL,
-		aggregate_type VARCHAR (50) NOT NULL,
+		aggregate_kind VARCHAR (50) NOT NULL,
 		body bytea NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
 		FOREIGN KEY (id) REFERENCES events (id)

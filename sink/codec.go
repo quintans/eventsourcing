@@ -25,17 +25,17 @@ type Decoder interface {
 }
 
 type Event struct {
-	ID               eventid.EventID             `json:"id,omitempty"`
-	ResumeToken      encoding.Base64             `json:"resume_token,omitempty"`
-	AggregateID      string                      `json:"aggregate_id,omitempty"`
-	AggregateIDHash  uint32                      `json:"aggregate_id_hash,omitempty"`
-	AggregateVersion uint32                      `json:"aggregate_version,omitempty"`
-	AggregateType    eventsourcing.AggregateType `json:"aggregate_type,omitempty"`
-	Kind             eventsourcing.EventKind     `json:"kind,omitempty"`
-	Body             encoding.Base64             `json:"body,omitempty"`
-	IdempotencyKey   string                      `json:"idempotency_key,omitempty"`
-	Metadata         *encoding.Json              `json:"metadata,omitempty"`
-	CreatedAt        time.Time                   `json:"created_at,omitempty"`
+	ID               eventid.EventID    `json:"id,omitempty"`
+	ResumeToken      encoding.Base64    `json:"resume_token,omitempty"`
+	AggregateID      string             `json:"aggregate_id,omitempty"`
+	AggregateIDHash  uint32             `json:"aggregate_id_hash,omitempty"`
+	AggregateVersion uint32             `json:"aggregate_version,omitempty"`
+	AggregateKind    eventsourcing.Kind `json:"aggregate_kind,omitempty"`
+	Kind             eventsourcing.Kind `json:"kind,omitempty"`
+	Body             encoding.Base64    `json:"body,omitempty"`
+	IdempotencyKey   string             `json:"idempotency_key,omitempty"`
+	Metadata         *encoding.Json     `json:"metadata,omitempty"`
+	CreatedAt        time.Time          `json:"created_at,omitempty"`
 }
 
 type JsonCodec struct{}
@@ -47,7 +47,7 @@ func (JsonCodec) Encode(e eventsourcing.Event) ([]byte, error) {
 		AggregateID:      e.AggregateID,
 		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
-		AggregateType:    e.AggregateType,
+		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
 		IdempotencyKey:   e.IdempotencyKey,
@@ -73,7 +73,7 @@ func (JsonCodec) Decode(data []byte) (eventsourcing.Event, error) {
 		AggregateID:      e.AggregateID,
 		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
-		AggregateType:    e.AggregateType,
+		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             []byte(e.Body),
 		IdempotencyKey:   e.IdempotencyKey,

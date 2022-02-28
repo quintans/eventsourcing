@@ -151,7 +151,7 @@ func (f Feed) Run(ctx context.Context) error {
 				AggregateID:      eventDoc.AggregateID,
 				AggregateIDHash:  eventDoc.AggregateIDHash,
 				AggregateVersion: eventDoc.AggregateVersion,
-				AggregateType:    eventDoc.AggregateType,
+				AggregateKind:    eventDoc.AggregateKind,
 				Kind:             eventDoc.Kind,
 				Body:             eventDoc.Body,
 				IdempotencyKey:   eventDoc.IdempotencyKey,

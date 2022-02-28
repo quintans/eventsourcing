@@ -203,7 +203,7 @@ type Filter struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AggregateTypes []string    `protobuf:"bytes,1,rep,name=aggregate_types,json=aggregateTypes,proto3" json:"aggregate_types,omitempty"`
+	AggregateKinds []string    `protobuf:"bytes,1,rep,name=aggregate_kindss,json=aggregateKinds,proto3" json:"aggregate_kindss,omitempty"`
 	Metadata       []*Metadata `protobuf:"bytes,2,rep,name=metadata,proto3" json:"metadata,omitempty"`
 	Partitions     uint32      `protobuf:"varint,3,opt,name=partitions,proto3" json:"partitions,omitempty"`
 	PartitionLow   uint32      `protobuf:"varint,4,opt,name=partitionLow,proto3" json:"partitionLow,omitempty"`
@@ -244,7 +244,7 @@ func (*Filter) Descriptor() ([]byte, []int) {
 
 func (x *Filter) GetAggregateTypes() []string {
 	if x != nil {
-		return x.AggregateTypes
+		return x.AggregateKinds
 	}
 	return nil
 }
@@ -388,7 +388,7 @@ type Event struct {
 	AggregateId      string               `protobuf:"bytes,2,opt,name=aggregate_id,json=aggregateId,proto3" json:"aggregate_id,omitempty"`
 	AggregateVersion uint32               `protobuf:"varint,3,opt,name=aggregate_version,json=aggregateVersion,proto3" json:"aggregate_version,omitempty"`
 	AggregateIdHash  uint32               `protobuf:"varint,4,opt,name=aggregate_id_hash,json=aggregateIdHash,proto3" json:"aggregate_id_hash,omitempty"`
-	AggregateType    string               `protobuf:"bytes,5,opt,name=aggregate_type,json=aggregateType,proto3" json:"aggregate_type,omitempty"`
+	AggregateKind    string               `protobuf:"bytes,5,opt,name=aggregate_kind,json=aggregateKind,proto3" json:"aggregate_kind,omitempty"`
 	Kind             string               `protobuf:"bytes,6,opt,name=kind,proto3" json:"kind,omitempty"`
 	Body             []byte               `protobuf:"bytes,7,opt,name=body,proto3" json:"body,omitempty"`
 	IdempotencyKey   string               `protobuf:"bytes,8,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
@@ -458,7 +458,7 @@ func (x *Event) GetAggregateIdHash() uint32 {
 
 func (x *Event) GetAggregateType() string {
 	if x != nil {
-		return x.AggregateType
+		return x.AggregateKind
 	}
 	return ""
 }
