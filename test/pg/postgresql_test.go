@@ -43,6 +43,8 @@ func connect(dbConfig DBConfig) (*sqlx.DB, error) {
 }
 
 func TestSaveAndGet(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -53,7 +55,7 @@ func TestSaveAndGet(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -122,6 +124,8 @@ func TestSaveAndGet(t *testing.T) {
 }
 
 func TestPollListener(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -132,7 +136,7 @@ func TestPollListener(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -176,6 +180,8 @@ func TestPollListener(t *testing.T) {
 }
 
 func TestListenerWithAggregateType(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -186,7 +192,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -230,6 +236,8 @@ func TestListenerWithAggregateType(t *testing.T) {
 }
 
 func TestListenerWithMetadata(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -240,7 +248,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
@@ -292,6 +300,8 @@ func TestListenerWithMetadata(t *testing.T) {
 }
 
 func TestForget(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -302,7 +312,7 @@ func TestForget(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -399,16 +409,18 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
 		id := util.MustNewULID()
-		acc := test.CreateAccount("Paulo", id, 0)
+		acc, _ := test.CreateAccount("Paulo", id, 0)
 
 		for pb.Next() {
 			acc.Deposit(10)
-			_ = es.Create(ctx, acc)
+			es.Create(ctx, acc)
 		}
 	})
 }
 
 func TestMigration(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -419,7 +431,7 @@ func TestMigration(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
-	acc := test.CreateAccount("Paulo Pereira", id, 100)
+	acc, _ := test.CreateAccount("Paulo Pereira", id, 100)
 	acc.Deposit(20)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")

@@ -70,6 +70,8 @@ func TestListener(t *testing.T) {
 
 	for _, tt := range testcases {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			dbConfig, tearDown, err := setup()
 			require.NoError(t, err)
 			defer tearDown()
@@ -89,12 +91,15 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			id := util.MustNewULID()
-			acc := test.CreateAccount("Paulo", id, 100)
+			acc, _ := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			err = es.Create(ctx, acc)
 			require.NoError(t, err)
-			acc.Withdraw(20)
-			err = es.Create(ctx, acc)
+			err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
+				acc := a.(*test.Account)
+				acc.Withdraw(20)
+				return acc, nil
+			})
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
@@ -112,7 +117,7 @@ func TestListener(t *testing.T) {
 			ctx, cancel = context.WithCancel(context.Background())
 
 			id = util.MustNewULID()
-			acc = test.CreateAccount("Quintans", id, 100)
+			acc, _ = test.CreateAccount("Quintans", id, 100)
 			acc.Deposit(30)
 			err = es.Create(ctx, acc)
 			require.NoError(t, err)

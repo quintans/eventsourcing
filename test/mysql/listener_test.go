@@ -95,7 +95,7 @@ func TestListener(t *testing.T) {
 			errs := feeding(ctx, cfg, partitions, tt.partitionSlots, s)
 
 			id := util.MustNewULID()
-			acc := test.CreateAccount("Paulo", id, 100)
+			acc, _ := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			acc.Deposit(20)
 			err = es.Create(ctx, acc)
@@ -115,7 +115,7 @@ func TestListener(t *testing.T) {
 			ctx, cancel = context.WithCancel(context.Background())
 
 			id = util.MustNewULID()
-			acc = test.CreateAccount("Quintans", id, 100)
+			acc, _ = test.CreateAccount("Quintans", id, 100)
 			acc.Deposit(30)
 			// acc.Withdraw(5)
 			err = es.Create(ctx, acc)

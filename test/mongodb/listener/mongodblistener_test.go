@@ -94,7 +94,7 @@ func TestMongoListenere(t *testing.T) {
 			es := eventsourcing.NewEventStore(repository, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 			id := util.MustNewULID()
-			acc := test.CreateAccount("Paulo", id, 100)
+			acc, _ := test.CreateAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			acc.Deposit(20)
 			err = es.Create(ctx, acc)

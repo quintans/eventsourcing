@@ -58,7 +58,7 @@ func TestSaveAndGet(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Withdraw(5)
 	err = es.Create(ctx, acc)
@@ -178,7 +178,7 @@ func TestPollListener(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Withdraw(5)
 	err = es.Create(ctx, acc)
@@ -242,7 +242,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -301,7 +301,7 @@ func TestListenerWithLabels(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
@@ -366,7 +366,7 @@ func TestForget(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := util.MustNewULID()
-	acc := test.CreateAccount("Paulo", id, 100)
+	acc, _ := test.CreateAccount("Paulo", id, 100)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -504,7 +504,7 @@ func TestMigration(t *testing.T) {
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
-	acc := test.CreateAccount("Paulo Pereira", id, 100)
+	acc, _ := test.CreateAccount("Paulo Pereira", id, 100)
 	acc.Deposit(20)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")

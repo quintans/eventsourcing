@@ -151,7 +151,7 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) e
 		event.ID.String(), event.AggregateID, event.AggregateVersion, event.AggregateKind, event.Kind, event.Body, event.IdempotencyKey, event.Metadata, event.CreatedAt, event.AggregateIDHash)
 	if err != nil {
 		if isDup(err) {
-			return eventsourcing.ErrConcurrentModification
+			return faults.Wrap(eventsourcing.ErrConcurrentModification)
 		}
 		return faults.Errorf("unable to insert event: %w", err)
 	}

@@ -117,14 +117,16 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec {
 	return c
 }
 
-func CreateAccountV2(owner NameVO, id ulid.ULID, money int64) *AccountV2 {
+func CreateAccountV2(owner NameVO, id ulid.ULID, money int64) (*AccountV2, error) {
 	a := NewAccountV2()
-	a.ApplyChange(AccountCreatedV2{
+	if err := a.ApplyChange(AccountCreatedV2{
 		Id:    id,
 		Money: money,
 		Owner: owner,
-	})
-	return a
+	}); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 func NewAccountV2() *AccountV2 {
@@ -166,20 +168,22 @@ func (a AccountV2) GetKind() eventsourcing.Kind {
 	return KindAccountV2
 }
 
-func (a *AccountV2) Withdraw(money int64) bool {
+func (a *AccountV2) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		a.ApplyChange(MoneyWithdrawn{Money: money})
-		return true
+		if err := a.ApplyChange(MoneyWithdrawn{Money: money}); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
-func (a *AccountV2) Deposit(money int64) {
-	a.ApplyChange(MoneyDeposited{Money: money})
+func (a *AccountV2) Deposit(money int64) error {
+	return a.ApplyChange(MoneyDeposited{Money: money})
 }
 
-func (a *AccountV2) UpdateOwner(owner string) {
-	a.ApplyChange(OwnerUpdated{Owner: owner})
+func (a *AccountV2) UpdateOwner(owner string) error {
+	return a.ApplyChange(OwnerUpdated{Owner: owner})
 }
 
 func (a *AccountV2) HandleEvent(event eventsourcing.Eventer) error {

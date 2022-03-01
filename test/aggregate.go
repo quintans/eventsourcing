@@ -80,14 +80,16 @@ func NewJSONCodec() *jsoncodec.Codec {
 	return c
 }
 
-func CreateAccount(owner string, id ulid.ULID, money int64) *Account {
+func CreateAccount(owner string, id ulid.ULID, money int64) (*Account, error) {
 	a := NewAccount()
-	a.ApplyChange(AccountCreated{
+	if err := a.ApplyChange(AccountCreated{
 		Id:    id,
 		Money: money,
 		Owner: owner,
-	})
-	return a
+	}); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 func NewAccount() *Account {
@@ -133,20 +135,23 @@ func (a Account) GetKind() eventsourcing.Kind {
 	return KindAccount
 }
 
-func (a *Account) Withdraw(money int64) bool {
+func (a *Account) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		a.ApplyChange(MoneyWithdrawn{Money: money})
-		return true
+		err := a.ApplyChange(MoneyWithdrawn{Money: money})
+		if err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
-func (a *Account) Deposit(money int64) {
-	a.ApplyChange(MoneyDeposited{Money: money})
+func (a *Account) Deposit(money int64) error {
+	return a.ApplyChange(MoneyDeposited{Money: money})
 }
 
-func (a *Account) UpdateOwner(owner string) {
-	a.ApplyChange(OwnerUpdated{Owner: owner})
+func (a *Account) UpdateOwner(owner string) error {
+	return a.ApplyChange(OwnerUpdated{Owner: owner})
 }
 
 func (a *Account) HandleEvent(event eventsourcing.Eventer) error {
