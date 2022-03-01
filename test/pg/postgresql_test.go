@@ -2,7 +2,6 @@ package pg
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -101,9 +100,9 @@ func TestSaveAndGet(t *testing.T) {
 	a, err := es.Retrieve(ctx, id.String())
 	require.NoError(t, err)
 	acc2 := a.(*test.Account)
-	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, int64(136), acc2.Balance)
-	assert.Equal(t, test.OPEN, acc2.Status)
+	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, int64(136), acc2.Balance())
+	assert.Equal(t, test.OPEN, acc2.Status())
 
 	found, err := es.HasIdempotencyKey(ctx, "idempotency-key")
 	require.NoError(t, err)
@@ -172,8 +171,8 @@ func TestPollListener(t *testing.T) {
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID())
-	assert.Equal(t, int64(135), acc2.Balance)
-	assert.Equal(t, test.OPEN, acc2.Status)
+	assert.Equal(t, int64(135), acc2.Balance())
+	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
 func TestListenerWithAggregateType(t *testing.T) {
@@ -225,9 +224,9 @@ func TestListenerWithAggregateType(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, 4, counter)
-	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, int64(135), acc2.Balance)
-	assert.Equal(t, test.OPEN, acc2.Status)
+	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, int64(135), acc2.Balance())
+	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
 func TestListenerWithMetadata(t *testing.T) {
@@ -287,9 +286,9 @@ func TestListenerWithMetadata(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 3, counter)
 	mu.Unlock()
-	assert.Equal(t, id, acc2.ID)
-	assert.Equal(t, int64(130), acc2.Balance)
-	assert.Equal(t, test.OPEN, acc2.Status)
+	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, int64(130), acc2.Balance())
+	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
 func TestForget(t *testing.T) {
@@ -321,6 +320,8 @@ func TestForget(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
+	codec := test.NewJSONCodec()
+
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
 	evts := [][]byte{}
@@ -328,8 +329,8 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		ou := &test.OwnerUpdated{}
-		err = json.Unmarshal(v, ou)
+		e, err := codec.Decode(v, test.KindOwnerUpdated)
+		ou := e.(*test.OwnerUpdated)
 		require.NoError(t, err)
 		assert.NotEmpty(t, ou.Owner)
 	}
@@ -339,10 +340,10 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
-		a := test.NewAccount()
-		err = json.Unmarshal(v, a)
+		x, err := codec.Decode(v, test.KindAccount)
+		a := x.(*test.Account)
 		require.NoError(t, err)
-		assert.NotEmpty(t, a.Owner)
+		assert.NotEmpty(t, a.Owner())
 	}
 
 	err = es.Forget(ctx,
@@ -350,16 +351,16 @@ func TestForget(t *testing.T) {
 			AggregateID: id.String(),
 			EventKind:   "OwnerUpdated",
 		},
-		func(i interface{}) interface{} {
+		func(i eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 			switch t := i.(type) {
 			case test.OwnerUpdated:
 				t.Owner = ""
-				return t
+				return t, nil
 			case test.Account:
-				t.Forget()
-				return t
+				err := t.Forget()
+				return t, err
 			}
-			return i
+			return i, nil
 		},
 	)
 	require.NoError(t, err)
@@ -369,8 +370,8 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		ou := &test.OwnerUpdated{}
-		err = json.Unmarshal(v, ou)
+		e, err := codec.Decode(v, test.KindOwnerUpdated)
+		ou := e.(*test.OwnerUpdated)
 		require.NoError(t, err)
 		assert.Empty(t, ou.Owner)
 	}
@@ -380,10 +381,10 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
-		a := test.NewAccount()
-		err = json.Unmarshal(v, a)
+		x, err := codec.Decode(v, test.KindAccount)
+		a := x.(*test.Account)
 		require.NoError(t, err)
-		assert.Empty(t, a.Owner)
+		assert.Empty(t, a.Owner())
 		assert.NotEmpty(t, a.ID)
 	}
 }
@@ -415,8 +416,7 @@ func TestMigration(t *testing.T) {
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	codec := test.NewJSONCodecV2()
-	es := eventsourcing.NewEventStore(r, codec, eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
 	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
 	acc := test.CreateAccount("Paulo Pereira", id, 100)
@@ -430,7 +430,8 @@ func TestMigration(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// switching the aggregator factory
-	es = eventsourcing.NewEventStore(r, test.NewJSONCodecV2(), eventsourcing.WithSnapshotThreshold(3))
+	codec := test.NewJSONCodecWithUpcaster()
+	es = eventsourcing.NewEventStore(r, codec, eventsourcing.WithSnapshotThreshold(3))
 	err = es.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
@@ -455,13 +456,25 @@ func TestMigration(t *testing.T) {
 			}
 			return migration, nil
 		},
-		test.TypeAccount,
+		test.KindAccountV2,
+		test.KindAccount,
 		test.KindAccountCreated, test.KindOwnerUpdated,
 	)
 	require.NoError(t, err)
 
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
+
+	snaps := []postgresql.Snapshot{}
+	err = db.Select(&snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER by id ASC", id.String())
+	require.NoError(t, err)
+	require.Equal(t, 1, len(snaps))
+
+	snap := snaps[0]
+	assert.Equal(t, "Account_V2", snap.AggregateKind.String())
+	assert.Equal(t, 9, int(snap.AggregateVersion))
+	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","status":"OPEN","balance":105,"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(snap.Body))
+
 	evts := []postgresql.Event{}
 	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = $1 ORDER by id ASC", id.String())
 	require.NoError(t, err)
@@ -476,11 +489,13 @@ func TestMigration(t *testing.T) {
 	evt = evts[1]
 	assert.Equal(t, "MoneyDeposited", evt.Kind.String())
 	assert.Equal(t, 2, int(evt.AggregateVersion))
+	assert.Equal(t, `{"money":20}`, string(evt.Body))
 	assert.Equal(t, 1, evt.Migrated)
 
 	evt = evts[2]
 	assert.Equal(t, "MoneyWithdrawn", evt.Kind.String())
 	assert.Equal(t, 3, int(evt.AggregateVersion))
+	assert.Equal(t, `{"money":15}`, string(evt.Body))
 	assert.Equal(t, 1, evt.Migrated)
 
 	evt = evts[3]
@@ -498,23 +513,25 @@ func TestMigration(t *testing.T) {
 	evt = evts[5]
 	assert.Equal(t, "AccountCreated_V2", evt.Kind.String())
 	assert.Equal(t, 6, int(evt.AggregateVersion))
-	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"first_name":"Paulo","last_name":"Pereira"}`, string(evt.Body))
+	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"owner":{"firstName":"Paulo","lastName":"Pereira"}}`, string(evt.Body))
 	assert.Equal(t, 0, evt.Migrated)
 
 	evt = evts[6]
 	assert.Equal(t, "MoneyDeposited", evt.Kind.String())
 	assert.Equal(t, 7, int(evt.AggregateVersion))
+	assert.Equal(t, `{"money":20}`, string(evt.Body))
 	assert.Equal(t, 0, evt.Migrated)
 
 	evt = evts[7]
 	assert.Equal(t, "MoneyWithdrawn", evt.Kind.String())
 	assert.Equal(t, 8, int(evt.AggregateVersion))
+	assert.Equal(t, `{"money":15}`, string(evt.Body))
 	assert.Equal(t, 0, evt.Migrated)
 
 	evt = evts[8]
 	assert.Equal(t, "OwnerUpdated_V2", evt.Kind.String())
 	assert.Equal(t, 9, int(evt.AggregateVersion))
-	assert.Equal(t, `{"first_name":"Paulo","last_name":"Quintans Pereira"}`, string(evt.Body))
+	assert.Equal(t, `{"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(evt.Body))
 	assert.Equal(t, 0, evt.Migrated)
 
 	a, err := es.Retrieve(ctx, id.String())

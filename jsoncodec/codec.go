@@ -1,6 +1,8 @@
 package jsoncodec
 
 import (
+	"unicode"
+
 	jsoniter "github.com/json-iterator/go"
 	"github.com/json-iterator/go/extra"
 	"github.com/quintans/faults"
@@ -10,6 +12,10 @@ import (
 
 func init() {
 	extra.SupportPrivateFields()
+	extra.SetNamingStrategy(func(s string) string {
+		first := unicode.ToLower(rune(s[0]))
+		return string(first) + s[1:]
+	})
 }
 
 type Upcaster func(t eventsourcing.Kinder) (eventsourcing.Kinder, error)
@@ -34,12 +40,12 @@ func (j *Codec) RegisterUpcaster(kind eventsourcing.Kind, upcaster Upcaster) {
 	j.upcasters[kind] = upcaster
 }
 
-func (Codec) Encode(v interface{}) ([]byte, error) {
+func (Codec) Encode(v eventsourcing.Kinder) ([]byte, error) {
 	b, err := jsoniter.Marshal(v)
 	return b, faults.Wrap(err)
 }
 
-func (j Codec) Decode(data []byte, kind eventsourcing.Kind) (interface{}, error) {
+func (j Codec) Decode(data []byte, kind eventsourcing.Kind) (eventsourcing.Kinder, error) {
 	factory := j.factories[kind]
 	if factory == nil {
 		return nil, faults.Errorf("no factory registered for kind '%s'", kind)
@@ -61,9 +67,9 @@ func (j Codec) Decode(data []byte, kind eventsourcing.Kind) (interface{}, error)
 	for upcaster != nil {
 		target, err = upcaster(target)
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return nil, faults.Errorf("failed to apply '%s' upcast: %w", k, err)
 		}
-		k = target.GetType()
+		k = target.GetKind()
 		upcaster = j.upcasters[k]
 	}
 

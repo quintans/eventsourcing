@@ -19,18 +19,18 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	ctx context.Context,
 	revision int,
 	snapshotThreshold uint32,
-	aggregateFactory func() (eventsourcing.Aggregater, error), // called only if snapshot threshold is reached
 	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error, // called only if snapshot threshold is reached
-	encoder eventsourcing.Encoder,
+	codec eventsourcing.Codec,
 	handler eventsourcing.MigrationHandler,
+	targetAggregateKind eventsourcing.Kind,
 	aggregateKind eventsourcing.Kind,
 	eventTypeCriteria ...eventsourcing.Kind,
 ) error {
 	if revision < 1 {
 		return faults.New("revision must be greater than zero")
 	}
-	if snapshotThreshold > 0 && (aggregateFactory == nil || rehydrateFunc == nil || encoder == nil) {
-		return faults.New("if snapshot threshold is greather than zero then aggregate factory, rehydrate function and encoder must be defined.")
+	if snapshotThreshold > 0 && (rehydrateFunc == nil || codec == nil) {
+		return faults.New("if snapshot threshold is greather than zero then aggregate factory, rehydrate function and codec must be defined.")
 	}
 
 	// loops until it exhausts all streams with the event that we want to migrate
@@ -51,7 +51,7 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 		}
 
 		last := events[len(events)-1]
-		err = r.saveMigration(ctx, last, migration, snapshotThreshold, aggregateFactory, rehydrateFunc, encoder, revision)
+		err = r.saveMigration(ctx, targetAggregateKind, last, migration, snapshotThreshold, rehydrateFunc, codec, revision)
 		if !errors.Is(err, eventsourcing.ErrConcurrentModification) {
 			return err
 		}
@@ -100,12 +100,12 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 
 func (r *EsRepository) saveMigration(
 	ctx context.Context,
+	targetAggregateKind eventsourcing.Kind,
 	last *eventsourcing.Event,
 	migration []*eventsourcing.EventMigration,
 	snapshotThreshold uint32,
-	aggregateFactory func() (eventsourcing.Aggregater, error),
 	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error,
-	encoder eventsourcing.Encoder,
+	codec eventsourcing.Codec,
 	revision int,
 ) error {
 	version := last.AggregateVersion
@@ -147,10 +147,11 @@ func (r *EsRepository) saveMigration(
 
 		var aggregate eventsourcing.Aggregater
 		if snapshotThreshold > 0 && len(migration) >= int(snapshotThreshold) {
-			aggregate, err = aggregateFactory()
+			t, err := codec.Decode(nil, targetAggregateKind)
 			if err != nil {
 				return faults.Wrap(err)
 			}
+			aggregate = t.(eventsourcing.Aggregater)
 		}
 
 		// insert new events
@@ -188,7 +189,7 @@ func (r *EsRepository) saveMigration(
 		}
 
 		if aggregate != nil {
-			body, err := encoder.Encode(aggregate)
+			body, err := codec.Encode(aggregate)
 			if err != nil {
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
 			}
@@ -197,7 +198,7 @@ func (r *EsRepository) saveMigration(
 				ID:               lastID,
 				AggregateID:      last.AggregateID,
 				AggregateVersion: version,
-				AggregateKind:    last.AggregateKind,
+				AggregateKind:    aggregate.GetKind(),
 				Body:             body,
 				CreatedAt:        time.Now().UTC(),
 			})

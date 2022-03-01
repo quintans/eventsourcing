@@ -28,18 +28,18 @@ type Codec interface {
 }
 
 type Encoder interface {
-	Encode(v interface{}) ([]byte, error)
+	Encode(v Kinder) ([]byte, error)
 }
 
 type Decoder interface {
-	Decode(data []byte, kind Kind) (interface{}, error)
+	Decode(data []byte, kind Kind) (Kinder, error)
 }
 
 type Aggregater interface {
 	Kinder
 	GetID() string
 	PopEvents() []Eventer
-	HandleEvent(event Eventer)
+	HandleEvent(Eventer) error
 }
 
 // Event represents the event data
@@ -81,10 +81,10 @@ type EsRepository interface {
 		ctx context.Context,
 		revision int,
 		snapshotThreshold uint32,
-		aggregateFactory func() (Aggregater, error), // called only if snapshot threshold is reached
 		rehydrateFunc func(Aggregater, Event) error, // called only if snapshot threshold is reached
-		encoder Encoder,
+		codec Codec,
 		handler MigrationHandler,
+		targetAggregateKind Kind,
 		aggregateKind Kind,
 		eventTypeCriteria ...Kind,
 	) error
@@ -113,7 +113,7 @@ var KindNoOpEvent = Kind("NoOp")
 // making sure that no other event was added while recreating the state of an aggregate
 type NoOpEvent struct{}
 
-func (e NoOpEvent) GetType() string {
+func (e NoOpEvent) GetKind() string {
 	return KindNoOpEvent.String()
 }
 
@@ -170,7 +170,7 @@ type EventStorer interface {
 	Update(ctx context.Context, id string, do func(Aggregater) (Aggregater, error), options ...SaveOption) error
 	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
 	// Forget erases the values of the specified fields
-	Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error
+	Forget(ctx context.Context, request ForgetRequest, forget func(Kinder) (Kinder, error)) error
 }
 
 var _ EventStorer = (*EventStore)(nil)
@@ -288,9 +288,7 @@ func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e Event) error {
 	if err != nil {
 		return err
 	}
-	agg.HandleEvent(evt)
-
-	return nil
+	return agg.HandleEvent(evt)
 }
 
 func (es EventStore) RehydrateAggregate(aggregateKind Kind, body []byte) (Aggregater, error) {
@@ -329,7 +327,7 @@ func (es EventStore) save(
 
 	now := opts.clock.After(updatedAt)
 
-	tName := aggregate.GetType()
+	tName := aggregate.GetKind()
 	details := make([]EventRecordDetail, eventsLen)
 	for i := 0; i < eventsLen; i++ {
 		e := events[i]
@@ -338,7 +336,7 @@ func (es EventStore) save(
 			return err
 		}
 		details[i] = EventRecordDetail{
-			Kind: e.GetType(),
+			Kind: e.GetKind(),
 			Body: body,
 		}
 	}
@@ -358,7 +356,7 @@ func (es EventStore) save(
 		return err
 	}
 
-	if eventsCounter >= es.snapshotThreshold {
+	if (eventsCounter + uint32(eventsLen)) >= es.snapshotThreshold {
 		body, err := es.codec.Encode(aggregate)
 		if err != nil {
 			return faults.Errorf("Failed to create serialize snapshot: %w", err)
@@ -394,15 +392,18 @@ type ForgetRequest struct {
 	EventKind   Kind
 }
 
-func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(interface{}) interface{}) error {
+func (es EventStore) Forget(ctx context.Context, request ForgetRequest, forget func(Kinder) (Kinder, error)) error {
 	fun := func(kind Kind, body []byte, snapshot bool) ([]byte, error) {
 		e, err := es.codec.Decode(body, kind)
 		if err != nil {
 			return nil, err
 		}
 		e2 := util.Dereference(e)
-		e2 = forget(e2)
-		body, err = es.codec.Encode(e2)
+		k, err := forget(e2.(Kinder))
+		if err != nil {
+			return nil, err
+		}
+		body, err = es.codec.Encode(k)
 		if err != nil {
 			return nil, err
 		}
@@ -418,22 +419,17 @@ func (es EventStore) MigrateInPlaceCopyReplace(
 	revision int,
 	snapshotThreshold uint32,
 	handler MigrationHandler,
-	aggregateKind Kind,
-	eventTypeCriteria ...Kind,
+	targetAggregateKind Kind,
+	originalAggregateKind Kind,
+	originalEventTypeCriteria ...Kind,
 ) error {
 	return es.store.MigrateInPlaceCopyReplace(ctx,
 		revision,
 		snapshotThreshold,
-		func() (Aggregater, error) {
-			v, err := es.codec.Decode(nil, aggregateKind)
-			if err != nil {
-				return nil, err
-			}
-			return v.(Aggregater), nil
-		},
 		es.ApplyChangeFromHistory,
 		es.codec,
 		handler,
-		aggregateKind,
-		eventTypeCriteria...)
+		targetAggregateKind,
+		originalAggregateKind,
+		originalEventTypeCriteria...)
 }

@@ -7,7 +7,7 @@ func (a Kind) String() string {
 }
 
 type Kinder interface {
-	GetType() Kind
+	GetKind() Kind
 }
 
 type Eventer interface {
@@ -15,7 +15,7 @@ type Eventer interface {
 }
 
 type EventHandler interface {
-	HandleEvent(event Eventer)
+	HandleEvent(Eventer) error
 }
 
 func NewRootAggregate(aggregate EventHandler) RootAggregate {
@@ -36,8 +36,11 @@ func (a RootAggregate) PopEvents() []Eventer {
 	return evs
 }
 
-func (a *RootAggregate) ApplyChange(event Eventer) {
-	a.eventHandler.HandleEvent(event)
+func (a *RootAggregate) ApplyChange(event Eventer) error {
+	if err := a.eventHandler.HandleEvent(event); err != nil {
+		return err
+	}
 
 	a.events = append(a.events, event)
+	return nil
 }

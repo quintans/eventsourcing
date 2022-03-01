@@ -3,13 +3,15 @@ package test
 import (
 	"github.com/oklog/ulid/v2"
 
+	"github.com/quintans/faults"
+
 	"github.com/quintans/eventsourcing/jsoncodec"
 
 	"github.com/quintans/eventsourcing"
 )
 
 var (
-	TypeAccount        = eventsourcing.Kind("Account")
+	KindAccount        = eventsourcing.Kind("Account")
 	KindAccountCreated = eventsourcing.Kind("AccountCreated")
 	KindMoneyDeposited = eventsourcing.Kind("MoneyDeposited")
 	KindMoneyWithdrawn = eventsourcing.Kind("MoneyWithdrawn")
@@ -25,42 +27,42 @@ const (
 )
 
 type AccountCreated struct {
-	ID    ulid.ULID `json:"id,omitempty"`
-	Money int64     `json:"money,omitempty"`
-	Owner string    `json:"owner,omitempty"`
+	Id    ulid.ULID
+	Money int64
+	Owner string
 }
 
-func (e AccountCreated) GetType() eventsourcing.Kind {
+func (e AccountCreated) GetKind() eventsourcing.Kind {
 	return "AccountCreated"
 }
 
 type MoneyWithdrawn struct {
-	Money int64 `json:"money,omitempty"`
+	Money int64
 }
 
-func (e MoneyWithdrawn) GetType() eventsourcing.Kind {
-	return "MoneyWithdrawn"
+func (e MoneyWithdrawn) GetKind() eventsourcing.Kind {
+	return KindMoneyWithdrawn
 }
 
 type MoneyDeposited struct {
-	Money int64 `json:"money,omitempty"`
+	Money int64
 }
 
-func (e MoneyDeposited) GetType() eventsourcing.Kind {
-	return "MoneyDeposited"
+func (e MoneyDeposited) GetKind() eventsourcing.Kind {
+	return KindMoneyDeposited
 }
 
 type OwnerUpdated struct {
-	Owner string `json:"owner,omitempty"`
+	Owner string
 }
 
-func (e OwnerUpdated) GetType() eventsourcing.Kind {
-	return "OwnerUpdated"
+func (e OwnerUpdated) GetKind() eventsourcing.Kind {
+	return KindOwnerUpdated
 }
 
 func NewJSONCodec() *jsoncodec.Codec {
 	c := jsoncodec.New()
-	c.RegisterFactory(TypeAccount, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindAccount, func() eventsourcing.Kinder {
 		return NewAccount()
 	})
 	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
@@ -81,7 +83,7 @@ func NewJSONCodec() *jsoncodec.Codec {
 func CreateAccount(owner string, id ulid.ULID, money int64) *Account {
 	a := NewAccount()
 	a.ApplyChange(AccountCreated{
-		ID:    id,
+		Id:    id,
 		Money: money,
 		Owner: owner,
 	})
@@ -123,12 +125,12 @@ func (a Account) Owner() string {
 	return a.owner
 }
 
-func (a *Account) Forget() {
-	a.HandleEvent(OwnerUpdated{})
+func (a *Account) Forget() error {
+	return a.HandleEvent(OwnerUpdated{})
 }
 
-func (a Account) GetType() eventsourcing.Kind {
-	return TypeAccount
+func (a Account) GetKind() eventsourcing.Kind {
+	return KindAccount
 }
 
 func (a *Account) Withdraw(money int64) bool {
@@ -147,7 +149,7 @@ func (a *Account) UpdateOwner(owner string) {
 	a.ApplyChange(OwnerUpdated{Owner: owner})
 }
 
-func (a *Account) HandleEvent(event eventsourcing.Eventer) {
+func (a *Account) HandleEvent(event eventsourcing.Eventer) error {
 	switch t := event.(type) {
 	case AccountCreated:
 		a.HandleAccountCreated(t)
@@ -157,11 +159,14 @@ func (a *Account) HandleEvent(event eventsourcing.Eventer) {
 		a.HandleMoneyWithdrawn(t)
 	case OwnerUpdated:
 		a.HandleOwnerUpdated(t)
+	default:
+		return faults.Errorf("unknown event '%s' for '%s'", event.GetKind(), a.GetKind())
 	}
+	return nil
 }
 
 func (a *Account) HandleAccountCreated(event AccountCreated) {
-	a.id = event.ID
+	a.id = event.Id
 	a.balance = event.Money
 	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events
