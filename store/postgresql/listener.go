@@ -181,7 +181,7 @@ func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID even
 
 	p.logger.Infof("Replaying events from %s", lastID)
 	filters := []store.FilterOption{
-		store.WithAggregateTypes(p.aggregateKinds...),
+		store.WithAggregateKinds(p.aggregateKinds...),
 		store.WithMetadata(p.metadata),
 		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
 	}

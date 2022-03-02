@@ -69,6 +69,8 @@ func TestListener(t *testing.T) {
 
 	for _, tt := range testcases {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			dbConfig, tearDown, err := setup()
 			require.NoError(t, err)
 			defer tearDown()

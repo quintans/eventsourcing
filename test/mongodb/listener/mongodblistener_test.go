@@ -123,9 +123,12 @@ func TestMongoListenere(t *testing.T) {
 
 			assert.Equal(t, 3, len(events), "event size")
 
-			acc.Withdraw(5)
-			acc.Withdraw(10)
-			err = es.Create(ctx, acc)
+			err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
+				acc := a.(*test.Account)
+				acc.Withdraw(5)
+				acc.Withdraw(10)
+				return acc, nil
+			})
 			require.NoError(t, err)
 
 			time.Sleep(500 * time.Millisecond)

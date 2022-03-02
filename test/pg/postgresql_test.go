@@ -179,7 +179,7 @@ func TestPollListener(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func TestListenerWithAggregateType(t *testing.T) {
+func TestListenerWithAggregateKind(t *testing.T) {
 	t.Parallel()
 
 	dbConfig, tearDown, err := setup()
@@ -209,7 +209,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	repository, err := postgresql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithAggregateTypes(aggregateKind))
+	p := poller.New(logger, repository, poller.WithAggregateKinds(aggregateKind))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
@@ -470,7 +470,7 @@ func TestMigration(t *testing.T) {
 		},
 		test.KindAccountV2,
 		test.KindAccount,
-		test.KindAccountCreated, test.KindOwnerUpdated,
+		[]eventsourcing.Kind{test.KindAccountCreated, test.KindOwnerUpdated},
 	)
 	require.NoError(t, err)
 

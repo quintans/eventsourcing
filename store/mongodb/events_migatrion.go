@@ -215,7 +215,7 @@ func (r *EsRepository) saveMigration(
 				Metadata:         metadata,
 				CreatedAt:        t,
 			}
-			err = r.saveEvent(ctx, event, id)
+			err = r.saveEvent(ctx, event, lastID)
 			if err != nil {
 				return err
 			}

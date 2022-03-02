@@ -311,6 +311,7 @@ func TestReplayProjection(t *testing.T) {
 			records = i
 			select {
 			case <-done:
+				fmt.Printf("===> persisted %d records\n", records)
 				mu.Unlock()
 				return
 			default:
@@ -331,12 +332,21 @@ func TestReplayProjection(t *testing.T) {
 
 	var actual []eventsourcing.Event
 	delivered := 0
+	var lastVersion uint32
 	projectionHandlerFactory := func(name string) projection.EventHandlerFunc {
 		return func(ctx context.Context, e eventsourcing.Event) error {
 			mu.Lock()
 			defer mu.Unlock()
 
 			fmt.Printf("===> [%s] handling %d\n", name, e.AggregateVersion)
+			// when we cut the producer, not all events might have been consumed.
+			// In this case, they will be delivered after the rebuild,
+			// and to avoid counting twice we only count if they are higher that the last one
+			if e.AggregateVersion <= lastVersion {
+				fmt.Printf("===> [%s] ignoring %d\n", name, e.AggregateVersion)
+				return nil
+			}
+			lastVersion = e.AggregateVersion
 			actual = append(actual, e)
 			delivered++
 			return nil
@@ -361,6 +371,7 @@ func TestReplayProjection(t *testing.T) {
 			fmt.Println("===> clear data")
 			mu.Lock()
 			delivered = 0
+			lastVersion = 0
 			actual = nil
 			mu.Unlock()
 

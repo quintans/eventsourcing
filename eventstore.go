@@ -421,7 +421,7 @@ func (es EventStore) MigrateInPlaceCopyReplace(
 	handler MigrationHandler,
 	targetAggregateKind Kind,
 	originalAggregateKind Kind,
-	originalEventTypeCriteria ...Kind,
+	originalEventTypeCriteria []Kind,
 ) error {
 	return es.store.MigrateInPlaceCopyReplace(ctx,
 		revision,

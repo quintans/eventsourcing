@@ -29,7 +29,7 @@ func WithFilter(filter Filter) FilterOption {
 	}
 }
 
-func WithAggregateTypes(at ...eventsourcing.Kind) FilterOption {
+func WithAggregateKinds(at ...eventsourcing.Kind) FilterOption {
 	return func(f *Filter) {
 		f.AggregateKinds = at
 	}

@@ -230,7 +230,7 @@ func TestPollListener(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func TestListenerWithAggregateType(t *testing.T) {
+func TestListenerWithAggregateKind(t *testing.T) {
 	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
 	require.NoError(t, err)
 	defer tearDown()
@@ -260,7 +260,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	p := poller.New(logger, repository, poller.WithAggregateTypes(AggregateAccount))
+	p := poller.New(logger, repository, poller.WithAggregateKinds(AggregateAccount))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
@@ -468,7 +468,7 @@ func TestForget(t *testing.T) {
 			foundEvent = true
 			event, err := codec.Decode(e.Body, e.Kind)
 			require.NoError(t, err)
-			evt := event.(test.OwnerUpdated)
+			evt := event.(*test.OwnerUpdated)
 			assert.Empty(t, evt.Owner)
 		}
 	}
@@ -514,8 +514,8 @@ func TestMigration(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	codec := test.NewJSONCodecWithUpcaster()
 	// switching the aggregator factory
+	codec := test.NewJSONCodecWithUpcaster()
 	es = eventsourcing.NewEventStore(r, codec, eventsourcing.WithSnapshotThreshold(3))
 	err = es.MigrateInPlaceCopyReplace(ctx,
 		1,
@@ -541,8 +541,9 @@ func TestMigration(t *testing.T) {
 			}
 			return migration, nil
 		},
+		test.KindAccountV2,
 		test.KindAccount,
-		test.KindAccountCreated, test.KindOwnerUpdated,
+		[]eventsourcing.Kind{test.KindAccountCreated, test.KindOwnerUpdated},
 	)
 	require.NoError(t, err)
 	snaps, err := getSnapshots(ctx, dbConfig, id)

@@ -38,6 +38,8 @@ func connect(dbConfig DBConfig) (*sqlx.DB, error) {
 }
 
 func TestSaveAndGet(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -117,6 +119,8 @@ func TestSaveAndGet(t *testing.T) {
 }
 
 func TestPollListener(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -178,7 +182,9 @@ func TestPollListener(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func TestListenerWithAggregateType(t *testing.T) {
+func TestListenerWithAggregateKind(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -206,7 +212,7 @@ func TestListenerWithAggregateType(t *testing.T) {
 	counter := 0
 	repository, err := mysql.NewStore(dbConfig.Url())
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithAggregateTypes(test.KindAccount))
+	p := poller.New(logger, repository, poller.WithAggregateKinds(test.KindAccount))
 
 	done := make(chan struct{})
 	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
@@ -236,6 +242,8 @@ func TestListenerWithAggregateType(t *testing.T) {
 }
 
 func TestListenerWithLabels(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -302,6 +310,8 @@ func TestListenerWithLabels(t *testing.T) {
 }
 
 func TestForget(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -400,6 +410,8 @@ func TestForget(t *testing.T) {
 }
 
 func TestMigration(t *testing.T) {
+	t.Parallel()
+
 	dbConfig, tearDown, err := setup()
 	require.NoError(t, err)
 	defer tearDown()
@@ -447,8 +459,9 @@ func TestMigration(t *testing.T) {
 			}
 			return migration, nil
 		},
+		test.KindAccountV2,
 		test.KindAccount,
-		test.KindAccountCreated, test.KindOwnerUpdated,
+		[]eventsourcing.Kind{test.KindAccountCreated, test.KindOwnerUpdated},
 	)
 	require.NoError(t, err)
 

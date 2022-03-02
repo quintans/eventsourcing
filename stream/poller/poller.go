@@ -63,7 +63,7 @@ func WithPartitions(partitions, partitionsLow, partitionsHi uint32) Option {
 	}
 }
 
-func WithAggregateTypes(at ...eventsourcing.Kind) Option {
+func WithAggregateKinds(at ...eventsourcing.Kind) Option {
 	return func(f *Poller) {
 		f.aggregateKinds = at
 	}
@@ -127,7 +127,7 @@ func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handle
 func (p Poller) forward(ctx context.Context, after eventid.EventID, handler projection.EventHandlerFunc) error {
 	wait := p.pollInterval
 	filters := []store.FilterOption{
-		store.WithAggregateTypes(p.aggregateKinds...),
+		store.WithAggregateKinds(p.aggregateKinds...),
 		store.WithMetadata(p.metadata),
 		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
 	}
