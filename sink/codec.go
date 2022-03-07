@@ -36,6 +36,7 @@ type Event struct {
 	IdempotencyKey   string             `json:"idempotency_key,omitempty"`
 	Metadata         *encoding.Json     `json:"metadata,omitempty"`
 	CreatedAt        time.Time          `json:"created_at,omitempty"`
+	Migrated         bool               `json:"migrated,omitempty"`
 }
 
 type JsonCodec struct{}
@@ -53,6 +54,7 @@ func (JsonCodec) Encode(e eventsourcing.Event) ([]byte, error) {
 		IdempotencyKey:   e.IdempotencyKey,
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
+		Migrated:         e.Migrated,
 	}
 	b, err := json.Marshal(event)
 	if err != nil {
@@ -79,6 +81,7 @@ func (JsonCodec) Decode(data []byte) (eventsourcing.Event, error) {
 		IdempotencyKey:   e.IdempotencyKey,
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
+		Migrated:         e.Migrated,
 	}
 	return event, nil
 }

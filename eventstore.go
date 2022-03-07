@@ -55,6 +55,7 @@ type Event struct {
 	IdempotencyKey   string
 	Metadata         *encoding.Json
 	CreatedAt        time.Time
+	Migrated         bool
 }
 
 func (e Event) IsZero() bool {

@@ -157,6 +157,7 @@ func (f Feed) Run(ctx context.Context) error {
 				IdempotencyKey:   eventDoc.IdempotencyKey,
 				Metadata:         encoding.JsonOfMap(eventDoc.Metadata),
 				CreatedAt:        eventDoc.CreatedAt,
+				Migrated:         eventDoc.Migrated,
 			}
 			err = f.sinker.Sink(ctx, event)
 			if err != nil {

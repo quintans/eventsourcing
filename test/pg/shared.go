@@ -107,12 +107,13 @@ func dbSchema(dbConfig DBConfig) error {
 		idempotency_key VARCHAR (50),
 		metadata JSONB,
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
-		migrated INTEGER NOT NULL DEFAULT 0
+		migration INTEGER NOT NULL DEFAULT 0,
+		migrated BOOLEAN NOT NULL DEFAULT false
 	);
-	CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migrated);
-	CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migrated);
+	CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);
+	CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);
 	CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);
-	CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migrated);
+	CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migration);
 	CREATE INDEX evt_metadata_idx ON events USING GIN (metadata jsonb_path_ops);
 
 	CREATE TABLE IF NOT EXISTS snapshots(

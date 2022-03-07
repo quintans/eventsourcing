@@ -35,7 +35,8 @@ type Event struct {
 	IdempotencyKey   string             `bson:"idempotency_key,omitempty"`
 	Metadata         bson.M             `bson:"metadata,omitempty"`
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
-	Migrated         int                `bson:"migrated"`
+	Migration        int                `bson:"migration"`
+	Migrated         bool               `bson:"migrated"`
 }
 
 type Snapshot struct {
@@ -278,7 +279,7 @@ func (r *EsRepository) saveSnapshot(ctx context.Context, snapshot Snapshot) erro
 func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventsourcing.Event, error) {
 	filter := bson.D{
 		{"aggregate_id", bson.D{{"$eq", aggregateID}}},
-		{"migrated", bson.D{{"$eq", 0}}},
+		{"migration", bson.D{{"$eq", 0}}},
 	}
 	if snapVersion > -1 {
 		filter = append(filter, bson.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
@@ -298,7 +299,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
 	filter := bson.D{
 		{"idempotency_key", idempotencyKey},
-		{"migrated", bson.D{{"$eq", 0}}},
+		{"migration", bson.D{{"$eq", 0}}},
 	}
 	opts := options.FindOne().SetProjection(bson.D{{"_id", 1}})
 	evt := Event{}
@@ -543,5 +544,6 @@ func toEventsourcingEvent(e Event, id eventid.EventID) eventsourcing.Event {
 		Body:             e.Body,
 		Metadata:         encoding.JsonOfMap(e.Metadata),
 		CreatedAt:        e.CreatedAt,
+		Migrated:         e.Migrated,
 	}
 }

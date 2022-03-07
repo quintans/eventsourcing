@@ -563,55 +563,64 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, "AccountCreated", evt.Kind.String())
 	assert.Equal(t, 1, int(evt.AggregateVersion))
 	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"owner":"Paulo Pereira"}`, string(evt.Body))
-	assert.Equal(t, 1, evt.Migrated)
+	assert.Equal(t, 1, evt.Migration)
+	assert.False(t, evt.Migrated)
 
 	evt = evts[1]
 	assert.Equal(t, "MoneyDeposited", evt.Kind.String())
 	assert.Equal(t, 2, int(evt.AggregateVersion))
 	assert.Equal(t, `{"money":20}`, string(evt.Body))
-	assert.Equal(t, 1, evt.Migrated)
+	assert.Equal(t, 1, evt.Migration)
+	assert.False(t, evt.Migrated)
 
 	evt = evts[2]
 	assert.Equal(t, "MoneyWithdrawn", evt.Kind.String())
 	assert.Equal(t, 3, int(evt.AggregateVersion))
 	assert.Equal(t, `{"money":15}`, string(evt.Body))
-	assert.Equal(t, 1, evt.Migrated)
+	assert.Equal(t, 1, evt.Migration)
+	assert.False(t, evt.Migrated)
 
 	evt = evts[3]
 	assert.Equal(t, "OwnerUpdated", evt.Kind.String())
 	assert.Equal(t, 4, int(evt.AggregateVersion))
 	assert.Equal(t, `{"owner":"Paulo Quintans Pereira"}`, string(evt.Body))
-	assert.Equal(t, 1, evt.Migrated)
+	assert.Equal(t, 1, evt.Migration)
+	assert.False(t, evt.Migrated)
 
 	evt = evts[4]
 	assert.Equal(t, "Invalidated", evt.Kind.String())
 	assert.Equal(t, 5, int(evt.AggregateVersion))
 	assert.Equal(t, 0, len(evt.Body))
-	assert.Equal(t, 1, evt.Migrated)
+	assert.Equal(t, 1, evt.Migration)
+	assert.False(t, evt.Migrated)
 
 	evt = evts[5]
 	assert.Equal(t, "AccountCreated_V2", evt.Kind.String())
 	assert.Equal(t, 6, int(evt.AggregateVersion))
 	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"owner":{"firstName":"Paulo","lastName":"Pereira"}}`, string(evt.Body))
-	assert.Equal(t, 0, evt.Migrated)
+	assert.Equal(t, 0, evt.Migration)
+	assert.True(t, evt.Migrated)
 
 	evt = evts[6]
 	assert.Equal(t, "MoneyDeposited", evt.Kind.String())
 	assert.Equal(t, 7, int(evt.AggregateVersion))
 	assert.Equal(t, `{"money":20}`, string(evt.Body))
-	assert.Equal(t, 0, evt.Migrated)
+	assert.Equal(t, 0, evt.Migration)
+	assert.True(t, evt.Migrated)
 
 	evt = evts[7]
 	assert.Equal(t, "MoneyWithdrawn", evt.Kind.String())
 	assert.Equal(t, 8, int(evt.AggregateVersion))
 	assert.Equal(t, `{"money":15}`, string(evt.Body))
-	assert.Equal(t, 0, evt.Migrated)
+	assert.Equal(t, 0, evt.Migration)
+	assert.True(t, evt.Migrated)
 
 	evt = evts[8]
 	assert.Equal(t, "OwnerUpdated_V2", evt.Kind.String())
 	assert.Equal(t, 9, int(evt.AggregateVersion))
 	assert.Equal(t, `{"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(evt.Body))
-	assert.Equal(t, 0, evt.Migrated)
+	assert.Equal(t, 0, evt.Migration)
+	assert.True(t, evt.Migrated)
 
 	a, err := es.Retrieve(ctx, id.String())
 	require.NoError(t, err)

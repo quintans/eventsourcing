@@ -34,6 +34,7 @@ type FeedEvent struct {
 	IdempotencyKey   string             `json:"idempotency_key,omitempty"`
 	Metadata         *encoding.Json     `json:"metadata,omitempty"`
 	CreatedAt        PgTime             `json:"created_at,omitempty"`
+	Migrated         bool               `json:"migrated,omitempty"`
 }
 
 type PgTime time.Time
@@ -260,6 +261,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 			IdempotencyKey:   pgEvent.IdempotencyKey,
 			Metadata:         pgEvent.Metadata,
 			CreatedAt:        time.Time(pgEvent.CreatedAt),
+			Migrated:         pgEvent.Migrated,
 		}
 
 		err = sinker.Sink(ctx, event)

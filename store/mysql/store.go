@@ -38,7 +38,8 @@ type Event struct {
 	IdempotencyKey   NilString          `db:"idempotency_key"`
 	Metadata         *encoding.Json     `db:"metadata"`
 	CreatedAt        time.Time          `db:"created_at"`
-	Migrated         int                `db:"migrated"`
+	Migration        int                `db:"migration"`
+	Migrated         bool               `db:"migrated"`
 }
 
 // NilString converts nil to empty string
@@ -147,9 +148,9 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRe
 
 func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_kind, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID.String(), event.AggregateID, event.AggregateVersion, event.AggregateKind, event.Kind, event.Body, event.IdempotencyKey, event.Metadata, event.CreatedAt, event.AggregateIDHash)
+		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_kind, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash, migrated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID.String(), event.AggregateID, event.AggregateVersion, event.AggregateKind, event.Kind, event.Body, event.IdempotencyKey, event.Metadata, event.CreatedAt, event.AggregateIDHash, event.Migrated)
 	if err != nil {
 		if isDup(err) {
 			return faults.Wrap(eventsourcing.ErrConcurrentModification)
@@ -236,7 +237,7 @@ func saveSnapshot(ctx context.Context, x sqlExecuter, s Snapshot) error {
 
 func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]eventsourcing.Event, error) {
 	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = ? AND migrated = 0")
+	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = ? AND migration = 0")
 	args := []interface{}{aggregateID}
 	if snapVersion > -1 {
 		query.WriteString(" AND e.aggregate_version > ?")
@@ -293,7 +294,7 @@ func (r *EsRepository) wrapWithTx(ctx context.Context, fn func(context.Context, 
 
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
 	var exists bool
-	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=? AND migrated = 0) AS "EXISTS"`, idempotencyKey)
+	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=? AND migration = 0) AS "EXISTS"`, idempotencyKey)
 	if err != nil {
 		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
 	}
@@ -474,5 +475,6 @@ func toEventsourcingEvent(e Event) eventsourcing.Event {
 		Body:             e.Body,
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
+		Migrated:         e.Migrated,
 	}
 }

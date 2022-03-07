@@ -258,6 +258,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		var idempotencyKey string
 		var metadata string
 		var createdAt time.Time
+		var migrated bool
 		err = extract(values, map[string]interface{}{
 			"id":                &id,
 			"aggregate_id":      &aggregateID,
@@ -268,6 +269,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			"idempotency_key":   &idempotencyKey,
 			"metadata":          &metadata,
 			"created_at":        &createdAt,
+			"migrated":          &migrated,
 		})
 		if err != nil {
 			return nil, faults.Wrap(err)
@@ -288,6 +290,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			Metadata:         encoding.JsonOfString(metadata),
 			IdempotencyKey:   idempotencyKey,
 			CreatedAt:        createdAt,
+			Migrated:         migrated,
 		}
 
 		return &e, nil

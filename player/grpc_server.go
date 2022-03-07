@@ -61,6 +61,7 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         string(metadata),
 			CreatedAt:        createdAt,
+			Migrated:         v.Migrated,
 		}
 	}
 	return &pb.GetEventsReply{Events: pbEvents}, nil

@@ -68,7 +68,7 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 	args := []interface{}{aggregateKind}
 	var subquery bytes.Buffer
 	// get the id of the aggregate
-	subquery.WriteString("SELECT aggregate_id FROM events WHERE aggregate_kind = $1 AND migrated = 0 AND (")
+	subquery.WriteString("SELECT aggregate_id FROM events WHERE aggregate_kind = $1 AND migration = 0 AND (")
 	for k, v := range eventTypeCriteria {
 		if k > 0 {
 			subquery.WriteString(" OR ")
@@ -81,7 +81,7 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 	// TODO should select by batches
 	// get all events for the aggregate id returned by the subquery
 	events := []*Event{}
-	query := fmt.Sprintf("SELECT * FROM events WHERE aggregate_id = (%s) AND migrated = 0 ORDER BY aggregate_version ASC", subquery.String())
+	query := fmt.Sprintf("SELECT * FROM events WHERE aggregate_id = (%s) AND migration = 0 ORDER BY aggregate_version ASC", subquery.String())
 	err := r.db.SelectContext(ctx, &events, query, args...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -133,7 +133,7 @@ func (r *EsRepository) saveMigration(
 		}
 
 		// invalidate all active events
-		_, err = tx.ExecContext(c, "UPDATE events SET migrated = $1 WHERE aggregate_id = $2 AND migrated = 0", revision, last.AggregateID)
+		_, err = tx.ExecContext(c, "UPDATE events SET migration = $1 WHERE aggregate_id = $2 AND migration = 0", revision, last.AggregateID)
 		if err != nil {
 			return faults.Errorf("failed to invalidate events: %w", err)
 		}
@@ -174,6 +174,7 @@ func (r *EsRepository) saveMigration(
 				IdempotencyKey:   NilString(mig.IdempotencyKey),
 				Metadata:         mig.Metadata,
 				CreatedAt:        t,
+				Migrated:         true,
 			}
 			err = r.saveEvent(c, tx, event)
 			if err != nil {

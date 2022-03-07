@@ -111,7 +111,7 @@ func dbSchema(cli *mongo.Client) error {
 				{
 					{"key", bson.D{
 						{"aggregate_id", 1},
-						{"migrated", 1},
+						{"migration", 1},
 					}},
 					{"name", "evt_agg_id_migrated_idx"},
 					{"unique", false},
@@ -120,7 +120,7 @@ func dbSchema(cli *mongo.Client) error {
 				{
 					{"key", bson.D{
 						{"aggregate_kind", 1},
-						{"migrated", 1},
+						{"migration", 1},
 					}},
 					{"name", "evt_type_migrated_idx"},
 					{"unique", false},
@@ -138,7 +138,7 @@ func dbSchema(cli *mongo.Client) error {
 				{
 					{"key", bson.D{
 						{"idempotency_key", 1},
-						{"migrated", 1},
+						{"migration", 1},
 					}},
 					{"name", "idx_idempotency"},
 					{"unique", true},

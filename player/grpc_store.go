@@ -96,6 +96,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         encoding.JsonOfString(v.Metadata),
 			CreatedAt:        *createdAt,
+			Migrated:         v.Migrated,
 		}
 	}
 	return events, nil

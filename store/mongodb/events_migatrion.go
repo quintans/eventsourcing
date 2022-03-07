@@ -68,7 +68,7 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 	// find an aggregate ID to migrate
 	filter := bson.D{
 		{"aggregate_kind", bson.D{{"$eq", aggregateKind}}},
-		{"migrated", bson.D{{"$eq", 0}}},
+		{"migration", bson.D{{"$eq", 0}}},
 		{"kind", bson.D{{"$in", eventTypeCriteria}}},
 	}
 
@@ -90,7 +90,7 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 	// get all events for the aggregate id returned by the subquery
 	filter = bson.D{
 		{"aggregate_id", bson.D{{"$eq", event.AggregateID}}},
-		{"migrated", bson.D{{"$eq", 0}}},
+		{"migration", bson.D{{"$eq", 0}}},
 	}
 
 	opts := options.Find().
@@ -162,10 +162,10 @@ func (r *EsRepository) saveMigration(
 		// invalidate all active events
 		filter := bson.D{
 			{"aggregate_id", last.AggregateID},
-			{"migrated", 0},
+			{"migration", 0},
 		}
 		update := bson.M{
-			"$set": bson.M{"migrated": revision},
+			"$set": bson.M{"migration": revision},
 		}
 
 		_, err = r.eventsCollection().UpdateMany(ctx, filter, update)
@@ -214,6 +214,7 @@ func (r *EsRepository) saveMigration(
 				IdempotencyKey:   mig.IdempotencyKey,
 				Metadata:         metadata,
 				CreatedAt:        t,
+				Migrated:         true,
 			}
 			err = r.saveEvent(ctx, event, lastID)
 			if err != nil {

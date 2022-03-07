@@ -276,6 +276,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 			IdempotencyKey:   r.getAsString("idempotency_key"),
 			Metadata:         encoding.JsonOfBytes(r.getAsBytes("metadata")),
 			CreatedAt:        r.getAsTimeDate("created_at"),
+			Migrated:         r.getAsBool("migrated"),
 		})
 	}
 
@@ -323,6 +324,13 @@ func (r *rec) getAsUint32(colName string) uint32 {
 		return uint32(o.(int32))
 	}
 	return 0
+}
+
+func (r *rec) getAsBool(colName string) bool {
+	if o := r.find(colName); o != nil {
+		return o.(int8) == 1
+	}
+	return false
 }
 
 func (r *rec) find(colName string) interface{} {
