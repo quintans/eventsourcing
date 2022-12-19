@@ -50,15 +50,15 @@ type Snapshot struct {
 
 var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
-type StoreOption func(*EsRepository)
+type Option func(*EsRepository)
 
-func WithEventsCollection(eventsCollection string) StoreOption {
+func WithEventsCollection(eventsCollection string) Option {
 	return func(r *EsRepository) {
 		r.eventsCollectionName = eventsCollection
 	}
 }
 
-func WithSnapshotsCollection(snapshotsCollection string) StoreOption {
+func WithSnapshotsCollection(snapshotsCollection string) Option {
 	return func(r *EsRepository) {
 		r.snapshotsCollectionName = snapshotsCollection
 	}
@@ -67,13 +67,13 @@ func WithSnapshotsCollection(snapshotsCollection string) StoreOption {
 type EsRepository struct {
 	dbName                  string
 	client                  *mongo.Client
-	subscriptions           []store.Subscription
+	eventBus                store.EventBus
 	eventsCollectionName    string
 	snapshotsCollectionName string
 }
 
 // NewStore creates a new instance of MongoEsRepository
-func NewStore(connString, database string, opts ...StoreOption) (*EsRepository, error) {
+func NewStore(connString, database string, opts ...Option) (*EsRepository, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -94,11 +94,6 @@ func NewStore(connString, database string, opts ...StoreOption) (*EsRepository, 
 	}
 
 	return r, nil
-}
-
-// Subscribe adds a listener to event sourcing events
-func (r *EsRepository) Subscribe(subscriber store.Subscription) {
-	r.subscriptions = append(r.subscriptions, subscriber)
 }
 
 func (r *EsRepository) Close(ctx context.Context) {
@@ -180,18 +175,12 @@ func (r *EsRepository) saveEvent(ctx context.Context, doc Event, id eventid.Even
 }
 
 func (r *EsRepository) publish(ctx context.Context, doc Event, id eventid.EventID) error {
-	if len(r.subscriptions) == 0 {
+	if r.eventBus == nil {
 		return nil
 	}
 
 	e := toEventsourcingEvent(doc, id)
-	for _, listener := range r.subscriptions {
-		err := listener(ctx, e)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.eventBus.Publish(ctx, e)
 }
 
 func isMongoDup(err error) bool {

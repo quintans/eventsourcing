@@ -79,9 +79,17 @@ type Snapshot struct {
 
 var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
+type Option func(*EsRepository)
+
+func WithEventBus(eb store.EventBus) Option {
+	return func(r *EsRepository) {
+		r.eventBus = eb
+	}
+}
+
 type EsRepository struct {
-	db            *sqlx.DB
-	subscriptions []store.Subscription
+	db       *sqlx.DB
+	eventBus store.EventBus
 }
 
 func NewStore(connString string) (*EsRepository, error) {
@@ -96,11 +104,6 @@ func NewStore(connString string) (*EsRepository, error) {
 	}
 
 	return r, nil
-}
-
-// Subscribe adds a listener to event sourcing events
-func (r *EsRepository) Subscribe(subscription store.Subscription) {
-	r.subscriptions = append(r.subscriptions, subscription)
 }
 
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
@@ -162,18 +165,12 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) e
 }
 
 func (r *EsRepository) publish(ctx context.Context, event Event) error {
-	if len(r.subscriptions) == 0 {
+	if r.eventBus == nil {
 		return nil
 	}
 
 	e := toEventsourcingEvent(event)
-	for _, listener := range r.subscriptions {
-		err := listener(ctx, e)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.eventBus.Publish(ctx, e)
 }
 
 func int32ring(x uint32) int32 {
