@@ -80,15 +80,15 @@ var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
 type Option func(*EsRepository)
 
-func WithEventBus(eb store.EventBus) Option {
+func WithPublisher(publisher store.Publisher) Option {
 	return func(r *EsRepository) {
-		r.eventBus = eb
+		r.publisher = publisher
 	}
 }
 
 type EsRepository struct {
-	db       *sqlx.DB
-	eventBus store.EventBus
+	db        *sqlx.DB
+	publisher store.Publisher
 }
 
 func NewStore(connString string) (*EsRepository, error) {
@@ -164,12 +164,12 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event Event) e
 }
 
 func (r *EsRepository) publish(ctx context.Context, event Event) error {
-	if r.eventBus == nil {
+	if r.publisher == nil {
 		return nil
 	}
 
 	e := toEventsourcingEvent(event)
-	return r.eventBus.Publish(ctx, e)
+	return r.publisher.Publish(ctx, e)
 }
 
 func int32ring(x uint32) int32 {

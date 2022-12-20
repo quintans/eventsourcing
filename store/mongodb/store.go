@@ -64,10 +64,16 @@ func WithSnapshotsCollection(snapshotsCollection string) Option {
 	}
 }
 
+func WithPublisher(publisher store.Publisher) Option {
+	return func(r *EsRepository) {
+		r.publisher = publisher
+	}
+}
+
 type EsRepository struct {
 	dbName                  string
 	client                  *mongo.Client
-	eventBus                store.EventBus
+	publisher               store.Publisher
 	eventsCollectionName    string
 	snapshotsCollectionName string
 }
@@ -175,12 +181,12 @@ func (r *EsRepository) saveEvent(ctx context.Context, doc Event, id eventid.Even
 }
 
 func (r *EsRepository) publish(ctx context.Context, doc Event, id eventid.EventID) error {
-	if r.eventBus == nil {
+	if r.publisher == nil {
 		return nil
 	}
 
 	e := toEventsourcingEvent(doc, id)
-	return r.eventBus.Publish(ctx, e)
+	return r.publisher.Publish(ctx, e)
 }
 
 func isMongoDup(err error) bool {

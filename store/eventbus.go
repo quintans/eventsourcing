@@ -20,27 +20,29 @@ type Publisher interface {
 	Publish(context.Context, ...eventsourcing.Event) error
 }
 
-type EventBus interface {
-	Subscriber
-	Publisher
-}
-
-type InMemEventBus struct {
+type EventBus struct {
 	subscribers []Subscription
+	coreMW      []EventBusMW
 }
 
-func New() *InMemEventBus {
-	return &InMemEventBus{}
+func New(mw ...EventBusMW) *EventBus {
+	return &EventBus{
+		coreMW: mw,
+	}
 }
 
-func (m *InMemEventBus) Subscribe(handler Subscription, mw ...EventBusMW) {
-	for i := len(mw) - 1; i >= 0; i-- {
-		handler = mw[i](handler)
+// Subscribe register an handler subscription. The middlewares are executed in the reverse order
+func (m *EventBus) Subscribe(handler Subscription, mw ...EventBusMW) {
+	for _, m := range mw {
+		handler = m(handler)
+	}
+	for _, m := range m.coreMW {
+		handler = m(handler)
 	}
 	m.subscribers = append(m.subscribers, handler)
 }
 
-func (m InMemEventBus) Publish(ctx context.Context, events ...eventsourcing.Event) error {
+func (m EventBus) Publish(ctx context.Context, events ...eventsourcing.Event) error {
 	for _, e := range events {
 		for _, h := range m.subscribers {
 			if err := h(ctx, e); err != nil {
