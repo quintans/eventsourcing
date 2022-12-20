@@ -14,7 +14,7 @@ type (
 )
 
 type subscription struct {
-	filter  string
+	filter  func(eventsourcing.Event) bool
 	handler Subscription
 }
 
@@ -45,13 +45,13 @@ func (m *EventBus) Subscribe(filter string, handler Subscription, mw ...EventBus
 	for _, m := range m.coreMW {
 		handler = m(handler)
 	}
-	m.subscribers = append(m.subscribers, subscription{filter: filter, handler: handler})
+	m.subscribers = append(m.subscribers, subscription{filter: match(filter), handler: handler})
 }
 
 func (m EventBus) Publish(ctx context.Context, events ...eventsourcing.Event) error {
 	for _, e := range events {
 		for _, s := range m.subscribers {
-			if !match(s.filter, e.Kind.String()) {
+			if !s.filter(e) {
 				continue
 			}
 			if err := s.handler(ctx, e); err != nil {
@@ -62,15 +62,26 @@ func (m EventBus) Publish(ctx context.Context, events ...eventsourcing.Event) er
 	return nil
 }
 
-func match(filter, test string) bool {
+func match(filter string) func(eventsourcing.Event) bool {
 	if filter == "*" {
-		return true
+		return func(eventsourcing.Event) bool {
+			return true
+		}
 	}
 
 	idx := strings.Index(filter, "*")
-	if idx > 0 && idx < len(test) {
-		return filter[:idx] == test[:idx]
+	if idx > 0 {
+		filter = filter[:idx]
+		return func(e eventsourcing.Event) bool {
+			test := e.Kind.String()
+			if idx < len(test) {
+				return filter == test[:idx]
+			}
+			return false
+		}
 	}
 
-	return filter == test
+	return func(e eventsourcing.Event) bool {
+		return filter == e.Kind.String()
+	}
 }
