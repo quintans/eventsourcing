@@ -26,7 +26,7 @@ func Hash(s string) uint32 {
 	return h.Sum32()
 }
 
-func In(test string, values ...string) bool {
+func In[T comparable](test T, values ...T) bool {
 	for _, v := range values {
 		if v == test {
 			return true

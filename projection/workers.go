@@ -12,8 +12,6 @@ import (
 	"github.com/quintans/eventsourcing/worker"
 )
 
-type LockerFactory func(lockName string) lock.Locker
-
 type TaskerFactory func(partitionLow, partitionHi uint32) worker.Tasker
 
 // PartitionedEventForwarderWorkers create workers responsible to forward events to their managed topic partition
@@ -45,24 +43,64 @@ func PartitionedEventForwarderWorker(ctx context.Context, logger log.Logger, nam
 	)
 }
 
-type ConsumerFactory func(context.Context, ResumeKey) (Consumer, error)
+type SubscriberFactory func(context.Context, ResumeKey) Subscriber
 
-// SoloWorkers creates workers that will always run because a locker is not provided.
-//
-// Since a locker is not provided it is not possible to balance workers between the several server instances using a [worker.Balancer]
-func SoloWorkers(ctx context.Context, logger log.Logger, streamName, topic string, partitions uint32, consumerFactory ConsumerFactory, handler EventHandlerFunc) ([]worker.Worker, error) {
-	lockerFactory := func(lockName string) lock.Locker {
+// PartitionedWorkers creates workers that will always run because a balancer locker is not provided.
+// This assumes that the balancing will be done by the message broker.
+func PartitionedWorkers(
+	ctx context.Context,
+	logger log.Logger,
+	catchUpLockerFactory WaitLockerFactory,
+	resumeStore ResumeStore,
+	subscriberFactory SubscriberFactory,
+	projectionName string, topic string, partitions uint32,
+	catchUpCallback CatchUpCallback,
+	handler EventHandlerFunc,
+) ([]worker.Worker, error) {
+	workerLockerFactory := func(lockName string) lock.Locker {
 		return nil
 	}
-	return PartitionedCompetingWorkers(ctx, logger, streamName, topic, partitions, lockerFactory, consumerFactory, handler)
+	return PartitionedCompetingWorkers(
+		ctx,
+		logger,
+		workerLockerFactory,
+		catchUpLockerFactory,
+		resumeStore,
+		subscriberFactory,
+		projectionName, topic, partitions,
+		catchUpCallback,
+		handler,
+	)
 }
 
 // PartitionedCompetingWorkers creates workers that will run depending if a lock was acquired or not.
 //
 // If a locker is provided it is possible to balance workers between the several server instances using a [worker.Balancer]
-func PartitionedCompetingWorkers(ctx context.Context, logger log.Logger, streamName, topic string, partitions uint32, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) ([]worker.Worker, error) {
+func PartitionedCompetingWorkers(
+	ctx context.Context,
+	logger log.Logger,
+	workerLockerFactory LockerFactory,
+	catchUpLockerFactory WaitLockerFactory,
+	resumeStore ResumeStore,
+	subscriberFactory SubscriberFactory,
+	projectionName string, topic string, partitions uint32,
+	catchUpCallback CatchUpCallback,
+	handler EventHandlerFunc,
+) ([]worker.Worker, error) {
 	if partitions <= 1 {
-		w, err := CreateWorker(ctx, logger, streamName, util.NewTopic(topic), lockerFactory, consumerFactory, handler)
+		w, err := createProjector(
+			ctx,
+			logger,
+			workerLockerFactory,
+			catchUpLockerFactory,
+			resumeStore,
+			subscriberFactory,
+			projectionName,
+			topic,
+			0,
+			catchUpCallback,
+			handler,
+		)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
@@ -71,7 +109,19 @@ func PartitionedCompetingWorkers(ctx context.Context, logger log.Logger, streamN
 	workers := make([]worker.Worker, partitions)
 	for x := uint32(0); x < partitions; x++ {
 		var err error
-		workers[x], err = CreateWorker(ctx, logger, streamName, util.NewPartitionedTopic(topic, x+1), lockerFactory, consumerFactory, handler)
+		workers[x], err = createProjector(
+			ctx,
+			logger,
+			workerLockerFactory,
+			catchUpLockerFactory,
+			resumeStore,
+			subscriberFactory,
+			projectionName,
+			topic,
+			x+1,
+			catchUpCallback,
+			handler,
+		)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
@@ -80,36 +130,37 @@ func PartitionedCompetingWorkers(ctx context.Context, logger log.Logger, streamN
 	return workers, nil
 }
 
-// ManagedWorker creates a single managed worker
-func ManagedWorker(ctx context.Context, logger log.Logger, streamName, topic string, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
-	return CreateWorker(ctx, logger, streamName, util.NewTopic(topic), lockerFactory, consumerFactory, handler)
-}
-
 // CreateWorker creates a worker that will run if acquires the lock
-func CreateWorker(ctx context.Context, logger log.Logger, streamName string, topic util.Topic, lockerFactory LockerFactory, consumerFactory ConsumerFactory, handler EventHandlerFunc) (worker.Worker, error) {
-	sr, err := NewStreamResume(topic, streamName)
+func createProjector(
+	ctx context.Context,
+	logger log.Logger,
+	workerLockerFactory LockerFactory,
+	catchUpLockerFactory WaitLockerFactory,
+	resumeStore ResumeStore,
+	subscriberFactory SubscriberFactory,
+	projectionName string,
+	topic string,
+	partition uint32,
+	catchUpCallback CatchUpCallback,
+	handler EventHandlerFunc,
+) (worker.Worker, error) {
+	t, err := util.NewPartitionedTopic(topic, partition)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	consumer, err := consumerFactory(ctx, sr)
+	sr, err := NewStreamResume(t, projectionName)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	name := streamName + "-lock-" + topic.String()
-	wrk := worker.NewRunWorker(
+
+	return NewProjector(
+		ctx,
 		logger,
-		name,
-		streamName,
-		lockerFactory(name),
-		worker.NewTask(
-			func(ctx context.Context) error {
-				err := consumer.StartConsumer(ctx, handler)
-				return faults.Wrapf(err, "Unable to start consumer for %s-%s", streamName, topic)
-			},
-			func(ctx context.Context, hard bool) {
-				consumer.StopConsumer(ctx, hard)
-			},
-		),
-	)
-	return wrk, nil
+		workerLockerFactory,
+		catchUpLockerFactory,
+		resumeStore,
+		subscriberFactory(ctx, sr),
+		catchUpCallback,
+		handler,
+	), nil
 }

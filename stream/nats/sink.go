@@ -48,12 +48,20 @@ func NewSink(logger log.Logger, topic string, partitions uint32, url string, opt
 	p.js = js
 
 	if partitions <= 1 {
-		if err := createStream(logger, js, util.NewPartitionedTopic(topic, 0)); err != nil {
+		t, err := util.NewPartitionedTopic(topic, 0)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		if err := createStream(logger, js, t); err != nil {
 			return nil, faults.Wrap(err)
 		}
 	} else {
 		for p := uint32(1); p <= partitions; p++ {
-			if err := createStream(logger, js, util.NewPartitionedTopic(topic, p)); err != nil {
+			t, err := util.NewPartitionedTopic(topic, 0)
+			if err != nil {
+				return nil, faults.Wrap(err)
+			}
+			if err := createStream(logger, js, t); err != nil {
 				return nil, faults.Wrap(err)
 			}
 		}
@@ -78,9 +86,12 @@ func (p *Sink) LastMessage(ctx context.Context, partition uint32) (*eventsourcin
 		sequence uint64
 		data     []byte
 	}
-	topic := util.NewPartitionedTopic(p.topic, partition)
+	topic, err := util.NewPartitionedTopic(p.topic, partition)
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
 	ch := make(chan message)
-	_, err := p.js.Subscribe(
+	_, err = p.js.Subscribe(
 		topic.String(),
 		func(m *nats.Msg) {
 			ch <- message{
@@ -123,7 +134,10 @@ func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event) error {
 		return err
 	}
 
-	topic := util.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
+	topic, err := util.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
+	if err != nil {
+		return faults.Wrap(err)
+	}
 	p.logger.WithTags(log.Tags{
 		"topic": topic,
 	}).Debugf("publishing '%+v'", e)

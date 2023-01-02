@@ -3,6 +3,8 @@ package projection
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/quintans/eventsourcing"
@@ -19,9 +21,9 @@ import (
 type ResumeKey struct {
 	// topic identifies the topic. eg: account#3
 	topic util.Topic
-	// stream identifies a stream for a topic.
+	// projection identifies a projection name for a topic.
 	// The same topic can be consumed by different projections and/or reactors.
-	stream string
+	projection string
 }
 
 func NewStreamResume(topic util.Topic, stream string) (ResumeKey, error) {
@@ -30,17 +32,21 @@ func NewStreamResume(topic util.Topic, stream string) (ResumeKey, error) {
 	}
 
 	return ResumeKey{
-		topic:  topic,
-		stream: stream,
+		topic:      topic,
+		projection: stream,
 	}, nil
 }
 
-func (ts ResumeKey) Topic() util.Topic {
-	return ts.topic
+func (r ResumeKey) Topic() util.Topic {
+	return r.topic
 }
 
-func (ts ResumeKey) String() string {
-	return ts.topic.String() + ":" + ts.stream
+func (r ResumeKey) Projection() string {
+	return r.projection
+}
+
+func (r ResumeKey) String() string {
+	return r.topic.String() + ":" + r.projection
 }
 
 type ConsumerOptions struct {
@@ -64,36 +70,94 @@ func WithAckWait(ackWait time.Duration) ConsumerOption {
 
 type Consumer interface {
 	StartConsumer(ctx context.Context, handler EventHandlerFunc, options ...ConsumerOption) error
-	StopConsumer(ctx context.Context, hard bool)
+	StopConsumer(ctx context.Context)
 }
 
 type Subscriber interface {
 	Consumer
 	ResumeKey() ResumeKey
 	RetrieveLastResume(ctx context.Context) (Resume, error)
-	RecordLastResume(ctx context.Context, token string) error
+	RecordLastResume(ctx context.Context, token Token) error
 }
 
 type EventHandlerFunc func(ctx context.Context, e *eventsourcing.Event) error
 
+type TokenKind string
+
+const (
+	CatchUpToken  TokenKind = "catchup"
+	ConsumerToken TokenKind = "consumer"
+)
+
+type Token struct {
+	kind  TokenKind
+	token string
+}
+
+func NewToken(kind TokenKind, token string) Token {
+	return Token{
+		kind:  kind,
+		token: token,
+	}
+}
+
+func ParseToken(s string) (Token, error) {
+	idx := strings.Index(s, ":")
+	if idx == -1 {
+		return Token{}, faults.Errorf("separator not found when parsing token: %s", s)
+	}
+	k := TokenKind(s[:idx])
+	if !util.In(k, CatchUpToken, ConsumerToken) {
+		return Token{}, faults.Errorf("invalid kind when parsing token: %s", s)
+	}
+	return Token{
+		kind:  k,
+		token: s[idx:],
+	}, nil
+}
+
+func (t Token) String() string {
+	return fmt.Sprintf("%s:%s", string(t.kind), t.token)
+}
+
+func (t Token) Kind() TokenKind {
+	return t.kind
+}
+
+func (t Token) Value() string {
+	return t.token
+}
+
+func (t Token) IsEmpty() bool {
+	return t.token == ""
+}
+
+func (t Token) IsZero() bool {
+	return t == Token{}
+}
+
 type Resume struct {
 	Topic   util.Topic
 	EventID eventid.EventID
-	Token   string
+	Token   Token
 }
 
 var ErrResumeTokenNotFound = errors.New("resume token not found")
 
 type ResumeStore interface {
-	// GetStreamResumeToken retrives the resume token for the resume key.
+	// GetStreamResumeToken retrieves the resume token for the resume key.
 	// If the a resume key is not found it return ErrResumeTokenNotFound as an error
-	GetStreamResumeToken(ctx context.Context, key ResumeKey) (string, error)
-	SetStreamResumeToken(ctx context.Context, key ResumeKey, token string) error
+	GetStreamResumeToken(ctx context.Context, key ResumeKey) (Token, error)
+	SetStreamResumeToken(ctx context.Context, key ResumeKey, token Token) error
 }
 
-type WaitLockerFactory func(lockName string) lock.WaitLocker
+type (
+	LockerFactory     func(lockName string) lock.Locker
+	WaitLockerFactory func(lockName string) lock.WaitLocker
+	CatchUpCallback   func(context.Context, eventid.EventID) (eventid.EventID, error)
+)
 
-// NewProjector creates subscribes to all events streams and process them.
+// NewProjector creates a subscriber to an event stream and process all events.
 //
 // It will check if it needs to do a catch up.
 // If so, it will try acquire a lock and run a projection catchup.
@@ -108,39 +172,42 @@ type WaitLockerFactory func(lockName string) lock.WaitLocker
 func NewProjector(
 	ctx context.Context,
 	logger log.Logger,
-	lockerFactory WaitLockerFactory,
+	workerLockerFactory LockerFactory,
+	catchUpLockerFactory WaitLockerFactory,
 	resumeStore ResumeStore,
-	projectionName string,
 	subscriber Subscriber,
-	topic string,
-	catchUpFunc func(context.Context, Resume) error,
+	catchUpCallback CatchUpCallback,
 	handler EventHandlerFunc,
-) (*worker.RunWorker, error) {
+) *worker.RunWorker {
+	rk := subscriber.ResumeKey()
 	logger = logger.WithTags(log.Tags{
-		"projection": projectionName,
+		"projection": rk.Projection(),
 	})
 
-	name := projectionName + "-lock-" + topic
-	locker := lockerFactory(name)
+	name := rk.String() + "-lock"
+	catchUpLocker := catchUpLockerFactory(name)
 	return worker.NewRunWorker(
 		logger,
 		name,
-		projectionName,
-		locker,
+		rk.Projection(),
+		workerLockerFactory(name),
 		worker.NewTask(
 			func(ctx context.Context) error {
-				err := catchUp(ctx, logger, locker, resumeStore, subscriber, catchUpFunc)
-				if err != nil {
-					logger.WithError(err).Error("catchup projection '%s'", projectionName)
+				if catchUpCallback != nil {
+					err := catchUp(ctx, logger, catchUpLocker, resumeStore, subscriber, catchUpCallback)
+					if err != nil {
+						logger.WithError(err).Error("catchup projection '%s'", rk.Projection())
+					}
+					logger.Info("Finished catching up")
 				}
-				err = subscriber.StartConsumer(ctx, handler)
-				return faults.Wrapf(err, "Unable to start consumer for %s-%s", projectionName, topic)
+				err := subscriber.StartConsumer(ctx, handler)
+				return faults.Wrapf(err, "start consumer for %s", rk.String())
 			},
 			func(ctx context.Context, hard bool) {
-				subscriber.StopConsumer(ctx, hard)
+				subscriber.StopConsumer(ctx)
 			},
 		),
-	), nil
+	)
 }
 
 func catchUp(
@@ -149,17 +216,17 @@ func catchUp(
 	locker lock.WaitLocker,
 	resumeStore ResumeStore,
 	subscriber Subscriber,
-	catchUpFunc func(context.Context, Resume) error,
+	catchUpCallback CatchUpCallback,
 ) error {
-	// check if it should catch up
-	ok, err := shouldCatchup(ctx, resumeStore, subscriber)
+	token, err := getSavedToken(ctx, resumeStore, subscriber.ResumeKey())
 	if err != nil {
 		return faults.Wrap(err)
 	}
-	if !ok {
+	if token.Kind() != CatchUpToken {
 		return nil
 	}
-	// lock
+
+	// lock for catchup
 	for {
 		_, err = locker.Lock(ctx)
 		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
@@ -181,12 +248,12 @@ func catchUp(
 		}
 	}()
 
-	// recheck if it should catch up
-	ok, err = shouldCatchup(ctx, resumeStore, subscriber)
+	// recheck if we still need to do a catchup
+	token, err = getSavedToken(ctx, resumeStore, subscriber.ResumeKey())
 	if err != nil {
 		return faults.Wrap(err)
 	}
-	if !ok {
+	if token.Kind() != CatchUpToken {
 		return nil
 	}
 
@@ -194,20 +261,34 @@ func catchUp(
 		"method": "Projector.catchUp",
 	})
 
+	logger.Info("Catching up projection for the first time")
+	id, err := eventid.Parse(token.Value())
+	if err != nil {
+		return faults.Errorf("parsing event ID on catchup '%s': %w", token.Value(), err)
+	}
+	// first catch up (this can take days)
+	// catchUpCallback should take care of saving the resume value
+	id, err = catchUpCallback(ctx, id)
+	if err != nil {
+		return faults.Errorf("executing catch up function for projection: %w", err)
+	}
+
 	logger.Info("Retrieving subscriptions last position")
-	resume, err := retrieveResume(ctx, subscriber)
+	// this call can hang if there is not message in the MQ but that is ok
+	resume, err := retrieveResumeFromSubscriber(ctx, subscriber)
 	if err != nil {
 		return faults.Wrap(err)
 	}
 
-	logger.Info("Catching up projection")
-	err = catchUpFunc(ctx, resume)
+	logger.Info("Catching up projection for the second time")
+	// this should be very quick since the bulk of the work was already done
+	_, err = catchUpCallback(ctx, id)
 	if err != nil {
 		return faults.Errorf("executing catch up function for projection: %w", err)
 	}
 
 	logger.Info("Recording subscriptions positions")
-	err = recordResumeTokens(ctx, subscriber, resume)
+	err = recordResumeToken(ctx, subscriber, resume.Token)
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -215,27 +296,25 @@ func catchUp(
 	return nil
 }
 
-func shouldCatchup(ctx context.Context, resumeStore ResumeStore, subscriber Subscriber) (bool, error) {
-	_, err := resumeStore.GetStreamResumeToken(ctx, subscriber.ResumeKey())
-	// if there is at leat one token that it is not defined it means that the last execution failed
-	// and needs to be attempted again.
+func getSavedToken(ctx context.Context, resumeStore ResumeStore, resumeKey ResumeKey) (Token, error) {
+	token, err := resumeStore.GetStreamResumeToken(ctx, resumeKey)
 	if errors.Is(err, ErrResumeTokenNotFound) {
-		return true, nil
+		return NewToken(CatchUpToken, eventid.Zero.String()), nil
 	}
 	if err != nil {
-		return false, faults.Wrap(err)
+		return Token{}, faults.Wrap(err)
 	}
 
-	return false, nil
+	return token, nil
 }
 
-func retrieveResume(ctx context.Context, subscriber Subscriber) (Resume, error) {
+func retrieveResumeFromSubscriber(ctx context.Context, subscriber Subscriber) (Resume, error) {
 	var max time.Time
 	resume, err := subscriber.RetrieveLastResume(ctx)
 	if err != nil {
 		return Resume{}, faults.Wrap(err)
 	}
-	// add offset to compensate clock skews
+	// add offset to compensate clock skews and the safety margin used on catch up
 	resume.EventID = resume.EventID.OffsetTime(time.Second)
 
 	// max time
@@ -253,7 +332,7 @@ func retrieveResume(ctx context.Context, subscriber Subscriber) (Resume, error) 
 	return resume, nil
 }
 
-func recordResumeTokens(ctx context.Context, subscriber Subscriber, resume Resume) error {
-	err := subscriber.RecordLastResume(ctx, resume.Token)
+func recordResumeToken(ctx context.Context, subscriber Subscriber, token Token) error {
+	err := subscriber.RecordLastResume(ctx, token)
 	return faults.Wrap(err)
 }

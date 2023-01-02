@@ -22,12 +22,13 @@ func NewProjector(
 	ctx context.Context,
 	logger log.Logger,
 	url string,
-	lockerFactory projection.WaitLockerFactory,
+	lockerFactory projection.LockerFactory,
+	catchUpLockerFactory projection.WaitLockerFactory,
 	resumeStore projection.ResumeStore,
 	resumeKey projection.ResumeKey,
 	projectionName string,
 	topic string,
-	catchUpFunc func(context.Context, projection.Resume) error,
+	catchUpCallback projection.CatchUpCallback,
 	handler projection.EventHandlerFunc,
 ) (*worker.RunWorker, error) {
 	nc, err := nats.Connect(url)
@@ -39,11 +40,12 @@ func NewProjector(
 		logger,
 		nc,
 		lockerFactory,
+		catchUpLockerFactory,
 		resumeStore,
 		resumeKey,
 		projectionName,
 		topic,
-		catchUpFunc,
+		catchUpCallback,
 		handler,
 	)
 	if err != nil {
@@ -61,12 +63,13 @@ func NewProjectorWithConn(
 	ctx context.Context,
 	logger log.Logger,
 	nc *nats.Conn,
-	lockerFactory projection.WaitLockerFactory,
+	lockerFactory projection.LockerFactory,
+	catchUpLockerFactory projection.WaitLockerFactory,
 	resumeStore projection.ResumeStore,
 	resumeKey projection.ResumeKey,
 	projectionName string,
 	topic string,
-	catchUpFunc func(context.Context, projection.Resume) error,
+	catchUpCallback projection.CatchUpCallback,
 	handler projection.EventHandlerFunc,
 ) (*worker.RunWorker, error) {
 	stream, err := nc.JetStream()
@@ -82,13 +85,12 @@ func NewProjectorWithConn(
 		ctx,
 		logger,
 		lockerFactory,
+		catchUpLockerFactory,
 		resumeStore,
-		projectionName,
 		subscriber,
-		topic,
-		catchUpFunc,
+		catchUpCallback,
 		handler,
-	)
+	), nil
 }
 
 type SubOption func(*Subscriber)
@@ -164,7 +166,7 @@ func (s *Subscriber) RetrieveLastResume(ctx context.Context) (projection.Resume,
 			ch <- projection.Resume{
 				Topic:   s.resumeKey.Topic(),
 				EventID: evt.ID,
-				Token:   token,
+				Token:   projection.NewToken(projection.ConsumerToken, token),
 			}
 			m.Ack()
 		},
@@ -186,7 +188,7 @@ func (s *Subscriber) RetrieveLastResume(ctx context.Context) (projection.Resume,
 	return resume, nil
 }
 
-func (s *Subscriber) RecordLastResume(ctx context.Context, token string) error {
+func (s *Subscriber) RecordLastResume(ctx context.Context, token projection.Token) error {
 	return s.resumeStore.SetStreamResumeToken(ctx, s.resumeKey, token)
 }
 
@@ -199,20 +201,18 @@ func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.Event
 		v(&opts)
 	}
 
-	var token string
 	var startOption nats.SubOpt
-	var err error
-	token, err = s.resumeStore.GetStreamResumeToken(ctx, s.resumeKey)
+	token, err := s.resumeStore.GetStreamResumeToken(ctx, s.resumeKey)
 	if err != nil && !errors.Is(err, projection.ErrResumeTokenNotFound) {
 		return faults.Errorf("Could not retrieve resume token for '%s': %w", s.resumeKey, err)
 	}
-	if token == "" {
+	if token.IsEmpty() {
 		logger.Infof("Starting consuming all available [token key: '%s']", s.resumeKey)
 		// startOption = nats.DeliverAll()
 		startOption = nats.StartSequence(1)
 	} else {
 		logger.Infof("Starting consuming from '%s' [token key: '%s']", token, s.resumeKey)
-		seq, er := strconv.ParseUint(token, 10, 64)
+		seq, er := strconv.ParseUint(token.Value(), 10, 64)
 		if er != nil {
 			return faults.Errorf("unable to parse resume token '%s': %w", token, er)
 		}
@@ -263,26 +263,26 @@ func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.Event
 		select {
 		case <-done:
 		case <-ctx.Done():
-			s.StopConsumer(context.Background(), false)
+			s.StopConsumer(context.Background())
 		}
 	}()
 	return nil
 }
 
-func (s *Subscriber) StopConsumer(ctx context.Context, hard bool) {
+func (s *Subscriber) StopConsumer(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done == nil {
 		return
 	}
-	if hard {
-		err := s.subscription.Unsubscribe()
-		if err != nil {
-			s.logger.WithError(err).Warnf("Failed to unsubscribe from '%s'", s.resumeKey.Topic())
-		} else {
-			s.logger.Infof("Unsubscribed from '%s'", s.resumeKey.Topic())
-		}
+
+	err := s.subscription.Unsubscribe()
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to unsubscribe from '%s'", s.resumeKey.Topic())
+	} else {
+		s.logger.Infof("Unsubscribed from '%s'", s.resumeKey.Topic())
 	}
+
 	s.subscription = nil
 	close(s.done)
 	s.done = nil

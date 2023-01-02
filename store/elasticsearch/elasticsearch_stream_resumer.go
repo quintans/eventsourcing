@@ -47,37 +47,37 @@ func NewStreamResumer(addresses []string, index string) (StreamResumer, error) {
 	}, nil
 }
 
-func (es StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
+func (es StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (projection.Token, error) {
 	req := esapi.GetRequest{
 		Index:      es.index,
 		DocumentID: key.String(),
 	}
 	res, err := req.Do(ctx, es.client)
 	if err != nil {
-		return "", faults.Errorf("Error getting response for GetRequest: %w", err)
+		return projection.Token{}, faults.Errorf("Error getting response for GetRequest: %w", err)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusNotFound {
-		return "", faults.Wrap(projection.ErrResumeTokenNotFound)
+		return projection.Token{}, faults.Wrap(projection.ErrResumeTokenNotFound)
 	}
 
 	if res.IsError() {
-		return "", faults.Errorf("[%s] Error getting document ID=%s", res.Status(), key)
+		return projection.Token{}, faults.Errorf("[%s] Error getting document ID=%s", res.Status(), key)
 	}
 	// Deserialize the response into a map.
 	r := GetResponse{
 		Source: &StreamResumerRow{},
 	}
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		return "", faults.Errorf("Error parsing the response body for GetRequest: %w", err)
+		return projection.Token{}, faults.Errorf("Error parsing the response body for GetRequest: %w", err)
 	}
 	row := r.Source.(*StreamResumerRow)
 
-	return row.Token, nil
+	return projection.ParseToken(row.Token)
 }
 
-func (es StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token string) error {
+func (es StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token projection.Token) error {
 	res, err := es.client.Update(
 		es.index,
 		key.String(),
@@ -86,7 +86,7 @@ func (es StreamResumer) SetStreamResumeToken(ctx context.Context, key projection
 			"token": "%s"
 		  },
 		  "doc_as_upsert": true
-		}`, token)),
+		}`, token.String())),
 	)
 	if err != nil {
 		return faults.Errorf("Error getting elastic search response: %w", err)
