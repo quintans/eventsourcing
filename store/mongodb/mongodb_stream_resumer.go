@@ -39,6 +39,8 @@ func NewStreamResumer(connString, dbName, collection string) (StreamResumer, err
 }
 
 func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
+	// TODO participate in a existing transaction instead of using a different connection
+
 	opts := options.FindOne()
 	row := StreamResumerRow{}
 	if err := m.collection.FindOne(ctx, bson.D{{"_id", key.String()}}, opts).Decode(&row); err != nil {
@@ -52,6 +54,8 @@ func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.
 }
 
 func (m StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token string) error {
+	// TODO participate in a existing transaction instead of using a different connection
+
 	opts := options.Update().SetUpsert(true)
 	_, err := m.collection.UpdateOne(
 		ctx,
