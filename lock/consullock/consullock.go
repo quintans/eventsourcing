@@ -55,7 +55,7 @@ func (l *Lock) Lock(ctx context.Context) (<-chan struct{}, error) {
 	}
 
 	if !acquired {
-		l.client.Session().Destroy(sID, options)
+		_, _ = l.client.Session().Destroy(sID, options)
 		return nil, faults.Wrap(lock.ErrLockAlreadyAcquired)
 	}
 

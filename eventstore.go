@@ -53,12 +53,12 @@ type Event struct {
 	Kind             Kind
 	Body             encoding.Base64
 	IdempotencyKey   string
-	Metadata         *encoding.Json
+	Metadata         *encoding.JSON
 	CreatedAt        time.Time
 	Migrated         bool
 }
 
-func (e Event) IsZero() bool {
+func (e *Event) IsZero() bool {
 	return e.ID.IsZero()
 }
 
@@ -72,17 +72,17 @@ type Snapshot struct {
 }
 
 type EsRepository interface {
-	SaveEvent(ctx context.Context, eRec EventRecord) (id eventid.EventID, version uint32, err error)
+	SaveEvent(ctx context.Context, eRec *EventRecord) (id eventid.EventID, version uint32, err error)
 	GetSnapshot(ctx context.Context, aggregateID string) (Snapshot, error)
-	SaveSnapshot(ctx context.Context, snapshot Snapshot) error
-	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]Event, error)
+	SaveSnapshot(ctx context.Context, snapshot *Snapshot) error
+	GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]*Event, error)
 	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
 	Forget(ctx context.Context, request ForgetRequest, forget func(kind Kind, body []byte, snapshot bool) ([]byte, error)) error
 	MigrateInPlaceCopyReplace(
 		ctx context.Context,
 		revision int,
 		snapshotThreshold uint32,
-		rehydrateFunc func(Aggregater, Event) error, // called only if snapshot threshold is reached
+		rehydrateFunc func(Aggregater, *Event) error, // called only if snapshot threshold is reached
 		codec Codec,
 		handler MigrationHandler,
 		targetAggregateKind Kind,
@@ -96,7 +96,7 @@ type EventMigration struct {
 	Kind           Kind
 	Body           []byte
 	IdempotencyKey string
-	Metadata       *encoding.Json
+	Metadata       *encoding.JSON
 }
 
 func DefaultEventMigration(e *Event) *EventMigration {
@@ -254,7 +254,7 @@ func (es EventStore) retrieve(ctx context.Context, aggregateID string) (Aggregat
 		updatedAt = snap.CreatedAt
 	}
 
-	var events []Event
+	var events []*Event
 	if snap.AggregateID == "" {
 		events, err = es.store.GetAggregateEvents(ctx, aggregateID, -1)
 	} else {
@@ -284,7 +284,7 @@ func (es EventStore) retrieve(ctx context.Context, aggregateID string) (Aggregat
 	return aggregate, aggregateVersion, updatedAt, eventsCounter, nil
 }
 
-func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e Event) error {
+func (es EventStore) ApplyChangeFromHistory(agg Aggregater, e *Event) error {
 	evt, err := es.RehydrateEvent(e.Kind, e.Body)
 	if err != nil {
 		return err
@@ -332,9 +332,9 @@ func (es EventStore) save(
 	details := make([]EventRecordDetail, eventsLen)
 	for i := 0; i < eventsLen; i++ {
 		e := events[i]
-		body, err := es.codec.Encode(e)
-		if err != nil {
-			return err
+		body, er := es.codec.Encode(e)
+		if er != nil {
+			return er
 		}
 		details[i] = EventRecordDetail{
 			Kind: e.GetKind(),
@@ -342,10 +342,10 @@ func (es EventStore) save(
 		}
 	}
 
-	rec := EventRecord{
+	rec := &EventRecord{
 		AggregateID:    aggregate.GetID(),
 		Version:        version,
-		AggregateKind:  Kind(tName),
+		AggregateKind:  tName,
 		IdempotencyKey: opts.IdempotencyKey,
 		Metadata:       opts.Labels,
 		CreatedAt:      now,
@@ -363,11 +363,11 @@ func (es EventStore) save(
 			return faults.Errorf("Failed to create serialize snapshot: %w", err)
 		}
 
-		snap := Snapshot{
+		snap := &Snapshot{
 			ID:               id,
 			AggregateID:      aggregate.GetID(),
 			AggregateVersion: lastVersion,
-			AggregateKind:    Kind(tName),
+			AggregateKind:    tName,
 			Body:             body,
 			CreatedAt:        now,
 		}

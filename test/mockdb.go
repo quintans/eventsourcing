@@ -22,7 +22,7 @@ var _ player.Repository = (*InMemDB)(nil)
 
 type InMemDB struct {
 	mu      sync.RWMutex
-	events  []eventsourcing.Event
+	events  []*eventsourcing.Event
 	cursor  *Cursor
 	entropy *ulid.MonotonicEntropy
 }
@@ -33,7 +33,7 @@ func NewInMemDB() *InMemDB {
 	}
 }
 
-func (db *InMemDB) Add(event eventsourcing.Event) eventsourcing.Event {
+func (db *InMemDB) Add(event *eventsourcing.Event) *eventsourcing.Event {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -61,7 +61,7 @@ func NewID(entropy *ulid.MonotonicEntropy) eventid.EventID {
 	return eventid.MustNew(now, entropy)
 }
 
-func (db *InMemDB) GetFrom(id eventid.EventID) []eventsourcing.Event {
+func (db *InMemDB) GetFrom(id eventid.EventID) []*eventsourcing.Event {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
@@ -76,7 +76,7 @@ func (db *InMemDB) GetFrom(id eventid.EventID) []eventsourcing.Event {
 		return nil
 	}
 	size := len(db.events)
-	events := make([]eventsourcing.Event, size-found)
+	events := make([]*eventsourcing.Event, size-found)
 	for k := found; k < size; k++ {
 		events[k-found] = db.events[k]
 	}
@@ -119,11 +119,11 @@ func (db *InMemDB) RemoveCursor(c *Cursor) {
 	}
 }
 
-func (db *InMemDB) ReadAt(idx int) (eventsourcing.Event, bool) {
+func (db *InMemDB) ReadAt(idx int) (*eventsourcing.Event, bool) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	if idx >= len(db.events) {
-		return eventsourcing.Event{}, false
+		return nil, false
 	}
 	return db.events[idx], true
 }
@@ -139,11 +139,11 @@ func (db *InMemDB) GetLastEventID(ctx context.Context, trailingLag time.Duration
 	return e.ID, nil
 }
 
-func (db *InMemDB) GetEvents(ctx context.Context, afterMessageID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
+func (db *InMemDB) GetEvents(ctx context.Context, afterMessageID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]*eventsourcing.Event, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	var events []eventsourcing.Event
+	var events []*eventsourcing.Event
 	for _, v := range db.events {
 		if v.ID.Compare(afterMessageID) > 0 {
 			events = append(events, v)
@@ -165,13 +165,13 @@ type Cursor struct {
 	changed chan bool
 }
 
-func (c *Cursor) Next() (eventsourcing.Event, <-chan bool) {
+func (c *Cursor) Next() (*eventsourcing.Event, <-chan bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	e, ok := c.db.ReadAt(c.lastPos + 1)
 	if !ok {
-		return eventsourcing.Event{}, c.changed
+		return nil, c.changed
 	}
 	c.lastPos++
 	return e, nil

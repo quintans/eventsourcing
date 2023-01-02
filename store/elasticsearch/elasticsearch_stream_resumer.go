@@ -14,40 +14,40 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 )
 
-var _ projection.ResumeStore = (*ElasticSearchStreamResumer)(nil)
+var _ projection.ResumeStore = (*StreamResumer)(nil)
 
-type ElasticGetResponse struct {
+type GetResponse struct {
 	ID      string      `json:"_id"`
 	Version int64       `json:"_version"`
 	Source  interface{} `json:"_source"`
 }
 
-type ElasticSearchStreamResumerRow struct {
+type StreamResumerRow struct {
 	ID    string `json:"id"`
 	Token string `json:"token"`
 }
 
-type ElasticSearchStreamResumer struct {
+type StreamResumer struct {
 	client *elasticsearch.Client
 	index  string
 }
 
-func NewElasticSearchStreamResumer(addresses []string, index string) (ElasticSearchStreamResumer, error) {
+func NewStreamResumer(addresses []string, index string) (StreamResumer, error) {
 	escfg := elasticsearch.Config{
 		Addresses: addresses,
 	}
 	es, err := elasticsearch.NewClient(escfg)
 	if err != nil {
-		return ElasticSearchStreamResumer{}, faults.Errorf("Error creating elastic search client: %w", err)
+		return StreamResumer{}, faults.Errorf("Error creating elastic search client: %w", err)
 	}
 
-	return ElasticSearchStreamResumer{
+	return StreamResumer{
 		client: es,
 		index:  index,
 	}, nil
 }
 
-func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
+func (es StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
 	req := esapi.GetRequest{
 		Index:      es.index,
 		DocumentID: key.String(),
@@ -66,18 +66,18 @@ func (es ElasticSearchStreamResumer) GetStreamResumeToken(ctx context.Context, k
 		return "", faults.Errorf("[%s] Error getting document ID=%s", res.Status(), key)
 	}
 	// Deserialize the response into a map.
-	r := ElasticGetResponse{
-		Source: &ElasticSearchStreamResumerRow{},
+	r := GetResponse{
+		Source: &StreamResumerRow{},
 	}
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return "", faults.Errorf("Error parsing the response body for GetRequest: %w", err)
 	}
-	row := r.Source.(*ElasticSearchStreamResumerRow)
+	row := r.Source.(*StreamResumerRow)
 
 	return row.Token, nil
 }
 
-func (es ElasticSearchStreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token string) error {
+func (es StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token string) error {
 	res, err := es.client.Update(
 		es.index,
 		key.String(),

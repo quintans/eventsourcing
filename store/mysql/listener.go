@@ -99,7 +99,7 @@ func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...Fee
 	return feed
 }
 
-func (f Feed) Run(ctx context.Context) error {
+func (f *Feed) Run(ctx context.Context) error {
 	f.logger.Infof("Starting Feed for '%s'", f.eventsTable)
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
@@ -178,7 +178,7 @@ func (f Feed) Run(ctx context.Context) error {
 
 func (Feed) Cancel(ctx context.Context, hard bool) {}
 
-func (f Feed) newCanal() (*canal.Canal, error) {
+func (f *Feed) newCanal() (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	buf := make([]byte, 4)
 	rand.Read(buf) // Always succeeds, no need to check error
@@ -200,11 +200,11 @@ func (f Feed) newCanal() (*canal.Canal, error) {
 }
 
 func parse(lastResumeToken string) (mysql.Position, error) {
-	if len(lastResumeToken) == 0 {
+	if lastResumeToken == "" {
 		return mysql.Position{}, nil
 	}
 
-	s := strings.Split(string(lastResumeToken), resumeTokenSep)
+	s := strings.Split(lastResumeToken, resumeTokenSep)
 	pos, err := strconv.ParseUint(s[1], 10, 32)
 	if err != nil {
 		return mysql.Position{}, faults.Errorf("unable to parse '%s' as uint32: %w", s[1], err)
@@ -225,7 +225,7 @@ func format(xid mysql.Position) []byte {
 type binlogHandler struct {
 	canal.DummyEventHandler // Dummy handler from external lib
 	logger                  log.Logger
-	events                  []eventsourcing.Event
+	events                  []*eventsourcing.Event
 	sinker                  sink.Sinker
 	lastResumeToken         []byte
 	partitions              uint32
@@ -265,7 +265,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		if err != nil {
 			return faults.Wrap(err)
 		}
-		h.events = append(h.events, eventsourcing.Event{
+		h.events = append(h.events, &eventsourcing.Event{
 			ID:               id,
 			AggregateID:      r.getAsString("aggregate_id"),
 			AggregateIDHash:  hash,
@@ -274,7 +274,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 			Kind:             eventsourcing.Kind(r.getAsString("kind")),
 			Body:             r.getStringAsBytes("body"),
 			IdempotencyKey:   r.getAsString("idempotency_key"),
-			Metadata:         encoding.JsonOfBytes(r.getAsBytes("metadata")),
+			Metadata:         encoding.JSONOfBytes(r.getAsBytes("metadata")),
 			CreatedAt:        r.getAsTimeDate("created_at"),
 			Migrated:         r.getAsBool("migrated"),
 		})
@@ -334,7 +334,8 @@ func (r *rec) getAsBool(colName string) bool {
 }
 
 func (r *rec) find(colName string) interface{} {
-	for k, v := range r.cols {
+	for k := range r.cols {
+		v := r.cols[k]
 		if v.Name == colName {
 			return r.row[k]
 		}

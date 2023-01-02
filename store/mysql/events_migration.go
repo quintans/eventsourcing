@@ -19,7 +19,7 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	ctx context.Context,
 	revision int,
 	snapshotThreshold uint32,
-	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error, // called only if snapshot threshold is reached
+	rehydrateFunc func(eventsourcing.Aggregater, *eventsourcing.Event) error, // called only if snapshot threshold is reached
 	codec eventsourcing.Codec,
 	handler eventsourcing.MigrationHandler,
 	targetAggregateKind eventsourcing.Kind,
@@ -92,8 +92,7 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 
 	evts := make([]*eventsourcing.Event, len(events))
 	for k, v := range events {
-		e := toEventsourcingEvent(*v)
-		evts[k] = &e
+		evts[k] = toEventsourcingEvent(v)
 	}
 	return evts, nil
 }
@@ -104,7 +103,7 @@ func (r *EsRepository) saveMigration(
 	last *eventsourcing.Event,
 	migration []*eventsourcing.EventMigration,
 	snapshotThreshold uint32,
-	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error,
+	rehydrateFunc func(eventsourcing.Aggregater, *eventsourcing.Event) error,
 	codec eventsourcing.Codec,
 	revision int,
 ) error {
@@ -120,7 +119,7 @@ func (r *EsRepository) saveMigration(
 		if err != nil {
 			return faults.Wrap(err)
 		}
-		err = r.saveEvent(c, tx, Event{
+		err = r.saveEvent(c, tx, &Event{
 			ID:               id,
 			AggregateID:      last.AggregateID,
 			AggregateIDHash:  int32ring(last.AggregateIDHash),
@@ -147,9 +146,9 @@ func (r *EsRepository) saveMigration(
 
 		var aggregate eventsourcing.Aggregater
 		if snapshotThreshold > 0 && len(migration) >= int(snapshotThreshold) {
-			t, err := codec.Decode(nil, targetAggregateKind)
-			if err != nil {
-				return faults.Wrap(err)
+			t, er := codec.Decode(nil, targetAggregateKind)
+			if er != nil {
+				return faults.Wrap(er)
 			}
 			aggregate = t.(eventsourcing.Aggregater)
 		}
@@ -163,7 +162,7 @@ func (r *EsRepository) saveMigration(
 			if err != nil {
 				return faults.Wrap(err)
 			}
-			event := Event{
+			event := &Event{
 				ID:               lastID,
 				AggregateID:      last.AggregateID,
 				AggregateIDHash:  int32ring(last.AggregateIDHash),
@@ -195,7 +194,7 @@ func (r *EsRepository) saveMigration(
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
 			}
 
-			err = saveSnapshot(c, tx, Snapshot{
+			err = saveSnapshot(c, tx, &Snapshot{
 				ID:               lastID,
 				AggregateID:      last.AggregateID,
 				AggregateVersion: version,

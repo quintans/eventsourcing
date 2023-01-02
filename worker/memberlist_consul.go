@@ -22,7 +22,7 @@ type ConsulMemberList struct {
 	sID    string
 }
 
-func NewConsulMemberList(address string, family string, expiration time.Duration) (*ConsulMemberList, error) {
+func NewConsulMemberList(address, family string, expiration time.Duration) (*ConsulMemberList, error) {
 	client, err := api.NewClient(&api.Config{Address: address})
 	if err != nil {
 		return nil, faults.Wrap(err)

@@ -27,6 +27,8 @@ type slot struct {
 }
 
 func TestListener(t *testing.T) {
+	t.Parallel()
+
 	testcases := []struct {
 		name           string
 		partitionSlots []slot
@@ -69,6 +71,7 @@ func TestListener(t *testing.T) {
 	}
 
 	for _, tt := range testcases {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -76,7 +79,7 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 			defer tearDown()
 
-			repository, err := postgresql.NewStore(dbConfig.Url())
+			repository, err := postgresql.NewStore(dbConfig.URL())
 			require.NoError(t, err)
 
 			quit := make(chan os.Signal, 1)
@@ -168,7 +171,7 @@ func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slot
 	var wg sync.WaitGroup
 	for k, v := range slots {
 		wg.Add(1)
-		listener, err := postgresql.NewFeed(dbConfig.ReplicationUrl(), k+1, len(slots), sinker, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
+		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), sinker, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
 		if err != nil {
 			return nil, err
 		}

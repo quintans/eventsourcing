@@ -8,42 +8,42 @@ import (
 	"github.com/quintans/faults"
 )
 
-// Json is a raw encoded JSON value.
+// JSON is a raw encoded JSON value.
 // It implements Marshaler and Unmarshaler and can
 // be used to delay JSON decoding or precompute a JSON encoding.
 // This can interchangeably use []byte or map[string]interface{}
-type Json struct {
+type JSON struct {
 	b []byte
 	m map[string]interface{}
 }
 
-func JsonOfBytes(b []byte) *Json {
+func JSONOfBytes(b []byte) *JSON {
 	if len(b) == 0 {
-		return &Json{}
+		return &JSON{}
 	}
-	return &Json{b: b}
+	return &JSON{b: b}
 }
 
-func JsonOfString(s string) *Json {
-	if len(s) == 0 {
-		return &Json{}
+func JSONOfString(s string) *JSON {
+	if s == "" {
+		return &JSON{}
 	}
-	return &Json{b: []byte(s)}
+	return &JSON{b: []byte(s)}
 }
 
-func JsonOfMap(m map[string]interface{}) *Json {
+func JSONOfMap(m map[string]interface{}) *JSON {
 	if len(m) == 0 {
-		return &Json{}
+		return &JSON{}
 	}
-	return &Json{m: m}
+	return &JSON{m: m}
 }
 
-func (j Json) IsZero() bool {
+func (j JSON) IsZero() bool {
 	return len(j.b) == 0 && len(j.m) == 0
 }
 
 // MarshalJSON returns m as the JSON encoding of m.
-func (j *Json) MarshalJSON() ([]byte, error) {
+func (j *JSON) MarshalJSON() ([]byte, error) {
 	b, err := j.AsBytes()
 	if err != nil {
 		return nil, err
@@ -55,7 +55,7 @@ func (j *Json) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON sets *m to a copy of data.
-func (j *Json) UnmarshalJSON(data []byte) error {
+func (j *JSON) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return faults.New("encoding.Json: UnmarshalJSON on nil pointer")
 	}
@@ -64,11 +64,11 @@ func (j *Json) UnmarshalJSON(data []byte) error {
 }
 
 var (
-	_ json.Marshaler   = (*Json)(nil)
-	_ json.Unmarshaler = (*Json)(nil)
+	_ json.Marshaler   = (*JSON)(nil)
+	_ json.Unmarshaler = (*JSON)(nil)
 )
 
-func (j *Json) Scan(value interface{}) error {
+func (j *JSON) Scan(value interface{}) error {
 	if j == nil {
 		return faults.New("encoding.Json: Scan on nil pointer")
 	}
@@ -87,7 +87,7 @@ func (j *Json) Scan(value interface{}) error {
 	return nil
 }
 
-func (j *Json) Value() (driver.Value, error) {
+func (j *JSON) Value() (driver.Value, error) {
 	b, err := j.AsBytes()
 	if err != nil || len(b) == 0 {
 		return nil, faults.Wrap(err)
@@ -95,7 +95,7 @@ func (j *Json) Value() (driver.Value, error) {
 	return string(b), nil
 }
 
-func (j Json) String() string {
+func (j JSON) String() string {
 	if j.IsZero() {
 		return "null"
 	}
@@ -105,9 +105,9 @@ func (j Json) String() string {
 	return fmt.Sprintf("%+v", j.m)
 }
 
-var _ fmt.Stringer = (*Json)(nil)
+var _ fmt.Stringer = (*JSON)(nil)
 
-func (j *Json) AsMap() (map[string]interface{}, error) {
+func (j *JSON) AsMap() (map[string]interface{}, error) {
 	if j == nil {
 		return nil, nil
 	}
@@ -126,7 +126,7 @@ func (j *Json) AsMap() (map[string]interface{}, error) {
 	return j.m, nil
 }
 
-func (j *Json) AsBytes() ([]byte, error) {
+func (j *JSON) AsBytes() ([]byte, error) {
 	if j == nil {
 		return nil, nil
 	}

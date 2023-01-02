@@ -51,7 +51,7 @@ func TestSaveAndGet(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
@@ -172,7 +172,7 @@ func TestPollListener(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
@@ -193,7 +193,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r, err = mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err = mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	lm := poller.New(logger, r)
@@ -210,7 +210,7 @@ func TestPollListener(t *testing.T) {
 		logger.Info("Cancelling...")
 		cancel()
 	}()
-	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -236,7 +236,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
@@ -257,13 +257,13 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(logger, repository, poller.WithAggregateKinds(AggregateAccount))
 
 	done := make(chan struct{})
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -295,7 +295,7 @@ func TestListenerWithLabels(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
@@ -322,13 +322,13 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
 
 	done := make(chan struct{})
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -360,7 +360,7 @@ func TestForget(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
@@ -404,8 +404,8 @@ func TestForget(t *testing.T) {
 	for _, e := range evts {
 		if e.Kind == "OwnerUpdated" {
 			foundEvent = true
-			event, err := codec.Decode(e.Body, e.Kind)
-			require.NoError(t, err)
+			event, er := codec.Decode(e.Body, e.Kind)
+			require.NoError(t, er)
 			evt := event.(*test.OwnerUpdated)
 			assert.NotEmpty(t, evt.Owner)
 		}
@@ -422,8 +422,8 @@ func TestForget(t *testing.T) {
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		a, err := codec.Decode(v.Body, test.KindAccount)
-		require.NoError(t, err)
+		a, er := codec.Decode(v.Body, test.KindAccount)
+		require.NoError(t, er)
 		snap := a.(*test.Account)
 		assert.NotEmpty(t, snap.Owner())
 	}
@@ -438,9 +438,9 @@ func TestForget(t *testing.T) {
 			case test.OwnerUpdated:
 				t.Owner = ""
 				return t, nil
-			case test.Account:
-				err := t.Forget()
-				return t, err
+			case *test.Account:
+				er := t.Forget()
+				return t, er
 			}
 			return i, nil
 		},
@@ -466,8 +466,8 @@ func TestForget(t *testing.T) {
 	for _, e := range evts {
 		if e.Kind == "OwnerUpdated" {
 			foundEvent = true
-			event, err := codec.Decode(e.Body, e.Kind)
-			require.NoError(t, err)
+			event, er := codec.Decode(e.Body, e.Kind)
+			require.NoError(t, er)
 			evt := event.(*test.OwnerUpdated)
 			assert.Empty(t, evt.Owner)
 		}
@@ -498,7 +498,7 @@ func TestMigration(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
@@ -525,17 +525,17 @@ func TestMigration(t *testing.T) {
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store
 			for _, e := range events {
-				var err error
+				var er error
 				switch e.Kind {
 				case test.KindAccountCreated:
-					m, err = test.MigrateAccountCreated(e, codec)
+					m, er = test.MigrateAccountCreated(e, codec)
 				case test.KindOwnerUpdated:
-					m, err = test.MigrateOwnerUpdated(e, codec)
+					m, er = test.MigrateOwnerUpdated(e, codec)
 				default:
 					m = eventsourcing.DefaultEventMigration(e)
 				}
-				if err != nil {
-					return nil, err
+				if er != nil {
+					return nil, er
 				}
 				migration = append(migration, m)
 			}

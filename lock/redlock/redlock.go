@@ -110,7 +110,7 @@ func (m *Lock) heartbeat(expiry time.Duration) <-chan struct{} {
 			select {
 			case <-done:
 				return
-			case _ = <-ticker.C:
+			case <-ticker.C:
 				err := m.extend(context.Background())
 				if err != nil {
 					_ = m.Unlock(context.Background())
@@ -218,9 +218,9 @@ func (m *Lock) WaitForUnlock(ctx context.Context) error {
 		ticker := time.NewTicker(heartbeat)
 		defer ticker.Stop()
 		for {
-			ctx, cancel := context.WithTimeout(ctx, heartbeat)
+			ctx2, cancel := context.WithTimeout(ctx, heartbeat)
 			n, err := m.pool.DoUntilQuorumAsync(m.quorum, func(c *redis.Client) (bool, error) {
-				return m.exists(ctx, c)
+				return m.exists(ctx2, c)
 			})
 			cancel()
 			if err != nil {

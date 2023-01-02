@@ -22,11 +22,11 @@ type DBConfig struct {
 	Password string
 }
 
-func (c DBConfig) ReplicationUrl() string {
-	return c.Url() + "&replication=database"
+func (c DBConfig) ReplicationURL() string {
+	return c.URL() + "&replication=database"
 }
 
-func (c DBConfig) Url() string {
+func (c DBConfig) URL() string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 

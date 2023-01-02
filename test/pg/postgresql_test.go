@@ -50,7 +50,7 @@ func TestSaveAndGet(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.Url())
+	r, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -131,7 +131,7 @@ func TestPollListener(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.Url())
+	r, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -151,13 +151,13 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbConfig.Url())
+	repository, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository)
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -187,7 +187,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.Url())
+	r, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -207,13 +207,13 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbConfig.Url())
+	repository, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository, poller.WithAggregateKinds(aggregateKind))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -243,7 +243,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.Url())
+	r, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -269,13 +269,13 @@ func TestListenerWithMetadata(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := postgresql.NewStore(dbConfig.Url())
+	repository, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -307,7 +307,7 @@ func TestForget(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.Url())
+	r, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -339,9 +339,9 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		e, err := codec.Decode(v, test.KindOwnerUpdated)
+		e, er := codec.Decode(v, test.KindOwnerUpdated)
 		ou := e.(*test.OwnerUpdated)
-		require.NoError(t, err)
+		require.NoError(t, er)
 		assert.NotEmpty(t, ou.Owner)
 	}
 
@@ -350,9 +350,9 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
-		x, err := codec.Decode(v, test.KindAccount)
+		x, er := codec.Decode(v, test.KindAccount)
 		a := x.(*test.Account)
-		require.NoError(t, err)
+		require.NoError(t, er)
 		assert.NotEmpty(t, a.Owner())
 	}
 
@@ -366,9 +366,9 @@ func TestForget(t *testing.T) {
 			case test.OwnerUpdated:
 				t.Owner = ""
 				return t, nil
-			case test.Account:
-				err := t.Forget()
-				return t, err
+			case *test.Account:
+				er := t.Forget()
+				return t, er
 			}
 			return i, nil
 		},
@@ -380,9 +380,9 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		e, err := codec.Decode(v, test.KindOwnerUpdated)
+		e, er := codec.Decode(v, test.KindOwnerUpdated)
 		ou := e.(*test.OwnerUpdated)
-		require.NoError(t, err)
+		require.NoError(t, er)
 		assert.Empty(t, ou.Owner)
 	}
 
@@ -404,7 +404,7 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 	require.NoError(b, err)
 	defer tearDown()
 
-	r, _ := postgresql.NewStore(dbConfig.Url())
+	r, _ := postgresql.NewStore(dbConfig.URL())
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(50))
 	b.RunParallel(func(pb *testing.PB) {
 		ctx := context.Background()
@@ -412,8 +412,8 @@ func BenchmarkDepositAndSave2(b *testing.B) {
 		acc, _ := test.CreateAccount("Paulo", id, 0)
 
 		for pb.Next() {
-			acc.Deposit(10)
-			es.Create(ctx, acc)
+			_ = acc.Deposit(10)
+			_ = es.Create(ctx, acc)
 		}
 	})
 }
@@ -426,7 +426,7 @@ func TestMigration(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.Url())
+	r, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -452,17 +452,17 @@ func TestMigration(t *testing.T) {
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store
 			for _, e := range events {
-				var err error
+				var er error
 				switch e.Kind {
 				case test.KindAccountCreated:
-					m, err = test.MigrateAccountCreated(e, codec)
+					m, er = test.MigrateAccountCreated(e, codec)
 				case test.KindOwnerUpdated:
-					m, err = test.MigrateOwnerUpdated(e, codec)
+					m, er = test.MigrateOwnerUpdated(e, codec)
 				default:
 					m = eventsourcing.DefaultEventMigration(e)
 				}
-				if err != nil {
-					return nil, err
+				if er != nil {
+					return nil, er
 				}
 				migration = append(migration, m)
 			}

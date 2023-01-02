@@ -30,9 +30,9 @@ type FeedEvent struct {
 	AggregateVersion uint32             `json:"aggregate_version,omitempty"`
 	AggregateKind    eventsourcing.Kind `json:"aggregate_kind,omitempty"`
 	Kind             eventsourcing.Kind `json:"kind,omitempty"`
-	Body             encoding.Json      `json:"body,omitempty"`
+	Body             encoding.JSON      `json:"body,omitempty"`
 	IdempotencyKey   string             `json:"idempotency_key,omitempty"`
-	Metadata         *encoding.Json     `json:"metadata,omitempty"`
+	Metadata         *encoding.JSON     `json:"metadata,omitempty"`
 	CreatedAt        PgTime             `json:"created_at,omitempty"`
 	Migrated         bool               `json:"migrated,omitempty"`
 }
@@ -123,7 +123,7 @@ func NewFeedListenNotify(logger log.Logger, connString string, repository player
 
 // Run will forward messages to the sinker
 // important: sinker.LastMessage should implement lag
-func (p Feed) Run(ctx context.Context) error {
+func (p *Feed) Run(ctx context.Context) error {
 	afterEventID := []byte{}
 	err := store.ForEachResumeTokenInSinkPartitions(ctx, p.sinker, p.partitionsLow, p.partitionsHi, func(message *eventsourcing.Event) error {
 		if bytes.Compare(message.ResumeToken, afterEventID) > 0 {
@@ -163,7 +163,7 @@ func (p Feed) Run(ctx context.Context) error {
 
 func (Feed) Cancel(ctx context.Context, hard bool) {}
 
-func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID eventid.EventID, sinker sink.Sinker, b backoff.BackOff) (eventid.EventID, error) {
+func (p *Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID eventid.EventID, sinker sink.Sinker, b backoff.BackOff) (eventid.EventID, error) {
 	lastID := afterEventID
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -210,7 +210,7 @@ func (p Feed) forward(ctx context.Context, pool *pgxpool.Pool, afterEventID even
 	return p.listen(ctx, conn, lastID, sinker, b)
 }
 
-func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventid.EventID, sinker sink.Sinker, b backoff.BackOff) (lastID eventid.EventID, err error) {
+func (p *Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventid.EventID, sinker sink.Sinker, b backoff.BackOff) (lastID eventid.EventID, err error) {
 	defer conn.Release()
 
 	p.logger.Infof("Listening for PostgreSQL notifications on channel %s starting at %s", p.channel, thresholdID)
@@ -249,7 +249,7 @@ func (p Feed) listen(ctx context.Context, conn *pgxpool.Conn, thresholdID eventi
 			return eventid.Zero, err
 		}
 
-		event := eventsourcing.Event{
+		event := &eventsourcing.Event{
 			ID:               pgEvent.ID,
 			ResumeToken:      []byte(pgEvent.ID.String()),
 			AggregateID:      pgEvent.AggregateID,

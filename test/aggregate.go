@@ -27,7 +27,7 @@ const (
 )
 
 type AccountCreated struct {
-	Id    ulid.ULID
+	ID    ulid.ULID
 	Money int64
 	Owner string
 }
@@ -83,7 +83,7 @@ func NewJSONCodec() *jsoncodec.Codec {
 func CreateAccount(owner string, id ulid.ULID, money int64) (*Account, error) {
 	a := NewAccount()
 	if err := a.ApplyChange(AccountCreated{
-		Id:    id,
+		ID:    id,
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -107,23 +107,23 @@ type Account struct {
 	owner   string
 }
 
-func (a Account) GetID() string {
+func (a *Account) GetID() string {
 	return a.id.String()
 }
 
-func (a Account) ID() ulid.ULID {
+func (a *Account) ID() ulid.ULID {
 	return a.id
 }
 
-func (a Account) Status() Status {
+func (a *Account) Status() Status {
 	return a.status
 }
 
-func (a Account) Balance() int64 {
+func (a *Account) Balance() int64 {
 	return a.balance
 }
 
-func (a Account) Owner() string {
+func (a *Account) Owner() string {
 	return a.owner
 }
 
@@ -131,7 +131,7 @@ func (a *Account) Forget() error {
 	return a.HandleEvent(OwnerUpdated{})
 }
 
-func (a Account) GetKind() eventsourcing.Kind {
+func (a *Account) GetKind() eventsourcing.Kind {
 	return KindAccount
 }
 
@@ -171,7 +171,7 @@ func (a *Account) HandleEvent(event eventsourcing.Eventer) error {
 }
 
 func (a *Account) HandleAccountCreated(event AccountCreated) {
-	a.id = event.Id
+	a.id = event.ID
 	a.balance = event.Money
 	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events

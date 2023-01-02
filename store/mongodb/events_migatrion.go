@@ -19,7 +19,7 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	ctx context.Context,
 	revision int,
 	snapshotThreshold uint32,
-	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error, // called only if snapshot threshold is reached
+	rehydrateFunc func(eventsourcing.Aggregater, *eventsourcing.Event) error, // called only if snapshot threshold is reached
 	codec eventsourcing.Codec,
 	handler eventsourcing.MigrationHandler,
 	targetAggregateKind eventsourcing.Kind,
@@ -114,8 +114,7 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		e := toEventsourcingEvent(*v, id)
-		evts[k] = &e
+		evts[k] = toEventsourcingEvent(v, id)
 	}
 	return evts, nil
 }
@@ -126,7 +125,7 @@ func (r *EsRepository) saveMigration(
 	last *eventsourcing.Event,
 	migration []*eventsourcing.EventMigration,
 	snapshotThreshold uint32,
-	rehydrateFunc func(eventsourcing.Aggregater, eventsourcing.Event) error,
+	rehydrateFunc func(eventsourcing.Aggregater, *eventsourcing.Event) error,
 	codec eventsourcing.Codec,
 	revision int,
 ) error {
@@ -144,7 +143,7 @@ func (r *EsRepository) saveMigration(
 		}
 		err = r.saveEvent(
 			ctx,
-			Event{
+			&Event{
 				ID:               id.String(),
 				AggregateID:      last.AggregateID,
 				AggregateIDHash:  last.AggregateIDHash,
@@ -203,7 +202,7 @@ func (r *EsRepository) saveMigration(
 			if err != nil {
 				return faults.Wrap(err)
 			}
-			event := Event{
+			event := &Event{
 				ID:               lastID.String(),
 				AggregateID:      last.AggregateID,
 				AggregateIDHash:  last.AggregateIDHash,
@@ -234,7 +233,7 @@ func (r *EsRepository) saveMigration(
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
 			}
 
-			err = r.saveSnapshot(ctx, Snapshot{
+			err = r.saveSnapshot(ctx, &Snapshot{
 				ID:               lastID.String(),
 				AggregateID:      last.AggregateID,
 				AggregateVersion: version,

@@ -78,7 +78,7 @@ func TestMongoListenere(t *testing.T) {
 			require.NoError(t, err)
 			defer tearDown()
 
-			repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+			repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 			require.NoError(t, err)
 			defer repository.Close(context.Background())
 
@@ -197,7 +197,7 @@ func feeding(ctx context.Context, dbConfig tmg.DBConfig, partitions uint32, slot
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)
-		listener := mongodb.NewFeed(logger, dbConfig.Url(), dbConfig.Database, sinker, mongodb.WithPartitions(partitions, v.low, v.high))
+		listener := mongodb.NewFeed(logger, dbConfig.URL(), dbConfig.Database, sinker, mongodb.WithPartitions(partitions, v.low, v.high))
 		go func() {
 			wg.Done()
 			err := listener.Run(ctx)

@@ -20,7 +20,7 @@ type DBConfig struct {
 	Password string
 }
 
-func (c DBConfig) Url() string {
+func (c DBConfig) URL() string {
 	return fmt.Sprintf("%s:%s@(%s:%d)/%s?parseTime=true", c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 

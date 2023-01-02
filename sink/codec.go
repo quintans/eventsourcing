@@ -17,11 +17,11 @@ type Codec interface {
 }
 
 type Encoder interface {
-	Encode(eventsourcing.Event) ([]byte, error)
+	Encode(*eventsourcing.Event) ([]byte, error)
 }
 
 type Decoder interface {
-	Decode([]byte) (eventsourcing.Event, error)
+	Decode([]byte) (*eventsourcing.Event, error)
 }
 
 type Event struct {
@@ -34,15 +34,15 @@ type Event struct {
 	Kind             eventsourcing.Kind `json:"kind,omitempty"`
 	Body             encoding.Base64    `json:"body,omitempty"`
 	IdempotencyKey   string             `json:"idempotency_key,omitempty"`
-	Metadata         *encoding.Json     `json:"metadata,omitempty"`
+	Metadata         *encoding.JSON     `json:"metadata,omitempty"`
 	CreatedAt        time.Time          `json:"created_at,omitempty"`
 	Migrated         bool               `json:"migrated,omitempty"`
 }
 
-type JsonCodec struct{}
+type JSONCodec struct{}
 
-func (JsonCodec) Encode(e eventsourcing.Event) ([]byte, error) {
-	event := Event{
+func (JSONCodec) Encode(e *eventsourcing.Event) ([]byte, error) {
+	event := &Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
 		AggregateID:      e.AggregateID,
@@ -63,13 +63,13 @@ func (JsonCodec) Encode(e eventsourcing.Event) ([]byte, error) {
 	return b, nil
 }
 
-func (JsonCodec) Decode(data []byte) (eventsourcing.Event, error) {
+func (JSONCodec) Decode(data []byte) (*eventsourcing.Event, error) {
 	e := Event{}
 	err := json.Unmarshal(data, &e)
 	if err != nil {
-		return eventsourcing.Event{}, faults.Wrap(err)
+		return nil, faults.Wrap(err)
 	}
-	event := eventsourcing.Event{
+	event := &eventsourcing.Event{
 		ID:               e.ID,
 		ResumeToken:      e.ResumeToken,
 		AggregateID:      e.AggregateID,

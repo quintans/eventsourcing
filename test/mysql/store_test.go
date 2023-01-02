@@ -25,7 +25,7 @@ import (
 var logger = log.NewLogrus(logrus.StandardLogger())
 
 func connect(dbConfig DBConfig) (*sqlx.DB, error) {
-	dburl := dbConfig.Url()
+	dburl := dbConfig.URL()
 
 	db, err := sqlx.Open("mysql", dburl)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestSaveAndGet(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.Url())
+	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -126,7 +126,7 @@ func TestPollListener(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.Url())
+	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -146,7 +146,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mysql.NewStore(dbConfig.Url())
+	repository, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	lm := poller.New(logger, repository)
 
@@ -162,7 +162,7 @@ func TestPollListener(t *testing.T) {
 		logger.Info("Cancelling...")
 		cancel()
 	}()
-	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -190,7 +190,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.Url())
+	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -210,12 +210,12 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mysql.NewStore(dbConfig.Url())
+	repository, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository, poller.WithAggregateKinds(test.KindAccount))
 
 	done := make(chan struct{})
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -249,7 +249,7 @@ func TestListenerWithLabels(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.Url())
+	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -275,7 +275,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mysql.NewStore(dbConfig.Url())
+	repository, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
 
@@ -283,7 +283,7 @@ func TestListenerWithLabels(t *testing.T) {
 	var mu sync.Mutex
 	errCh := make(chan error, 1)
 	go func() {
-		err := p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+		err := p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 			if e.AggregateID == id.String() {
 				if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 					return err
@@ -317,7 +317,7 @@ func TestForget(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.Url())
+	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -349,9 +349,9 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		e, err := codec.Decode(v, test.KindOwnerUpdated)
+		e, er := codec.Decode(v, test.KindOwnerUpdated)
 		ou := e.(*test.OwnerUpdated)
-		require.NoError(t, err)
+		require.NoError(t, er)
 		assert.NotEmpty(t, ou.Owner)
 	}
 
@@ -360,9 +360,9 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
-		x, err := codec.Decode(v, test.KindAccount)
+		x, er := codec.Decode(v, test.KindAccount)
 		a := x.(*test.Account)
-		require.NoError(t, err)
+		require.NoError(t, er)
 		assert.NotEmpty(t, a.Owner())
 	}
 
@@ -376,9 +376,9 @@ func TestForget(t *testing.T) {
 			case test.OwnerUpdated:
 				t.Owner = ""
 				return t, nil
-			case test.Account:
-				err := t.Forget()
-				return t, err
+			case *test.Account:
+				er := t.Forget()
+				return t, er
 			}
 			return i, nil
 		},
@@ -390,9 +390,9 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		e, err := codec.Decode(v, test.KindOwnerUpdated)
+		e, er := codec.Decode(v, test.KindOwnerUpdated)
 		ou := e.(*test.OwnerUpdated)
-		require.NoError(t, err)
+		require.NoError(t, er)
 		assert.Empty(t, ou.Owner)
 	}
 
@@ -417,7 +417,7 @@ func TestMigration(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.Url())
+	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
 
@@ -443,17 +443,17 @@ func TestMigration(t *testing.T) {
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store
 			for _, e := range events {
-				var err error
+				var er error
 				switch e.Kind {
 				case test.KindAccountCreated:
-					m, err = test.MigrateAccountCreated(e, codec)
+					m, er = test.MigrateAccountCreated(e, codec)
 				case test.KindOwnerUpdated:
-					m, err = test.MigrateOwnerUpdated(e, codec)
+					m, er = test.MigrateOwnerUpdated(e, codec)
 				default:
 					m = eventsourcing.DefaultEventMigration(e)
 				}
-				if err != nil {
-					return nil, err
+				if er != nil {
+					return nil, er
 				}
 				migration = append(migration, m)
 			}

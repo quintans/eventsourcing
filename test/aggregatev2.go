@@ -47,7 +47,7 @@ func (n NameVO) LastName() string {
 }
 
 type AccountCreatedV2 struct {
-	Id    ulid.ULID
+	ID    ulid.ULID
 	Money int64
 	Owner NameVO
 }
@@ -120,7 +120,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec {
 func CreateAccountV2(owner NameVO, id ulid.ULID, money int64) (*AccountV2, error) {
 	a := NewAccountV2()
 	if err := a.ApplyChange(AccountCreatedV2{
-		Id:    id,
+		ID:    id,
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -144,27 +144,27 @@ type AccountV2 struct {
 	owner   NameVO
 }
 
-func (a AccountV2) GetID() string {
+func (a *AccountV2) GetID() string {
 	return a.id.String()
 }
 
-func (a AccountV2) ID() ulid.ULID {
+func (a *AccountV2) ID() ulid.ULID {
 	return a.id
 }
 
-func (a AccountV2) Status() Status {
+func (a *AccountV2) Status() Status {
 	return a.status
 }
 
-func (a AccountV2) Balance() int64 {
+func (a *AccountV2) Balance() int64 {
 	return a.balance
 }
 
-func (a AccountV2) Owner() NameVO {
+func (a *AccountV2) Owner() NameVO {
 	return a.owner
 }
 
-func (a AccountV2) GetKind() eventsourcing.Kind {
+func (a *AccountV2) GetKind() eventsourcing.Kind {
 	return KindAccountV2
 }
 
@@ -203,7 +203,7 @@ func (a *AccountV2) HandleEvent(event eventsourcing.Eventer) error {
 }
 
 func (a *AccountV2) HandleAccountCreatedV2(event AccountCreatedV2) {
-	a.id = event.Id
+	a.id = event.ID
 	a.balance = event.Money
 	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events
@@ -264,7 +264,7 @@ func migrateAccountCreated(oldEvent AccountCreated) (AccountCreatedV2, error) {
 		return AccountCreatedV2{}, err
 	}
 	return AccountCreatedV2{
-		Id:    oldEvent.Id,
+		ID:    oldEvent.ID,
 		Money: oldEvent.Money,
 		Owner: owner,
 	}, nil

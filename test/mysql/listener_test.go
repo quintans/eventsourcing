@@ -26,6 +26,8 @@ type slot struct {
 }
 
 func TestListener(t *testing.T) {
+	t.Parallel()
+
 	testcases := []struct {
 		name           string
 		partitionSlots []slot
@@ -68,6 +70,7 @@ func TestListener(t *testing.T) {
 	}
 
 	for _, tt := range testcases {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -75,7 +78,7 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 			defer tearDown()
 
-			repository, err := mysql.NewStore(dbConfig.Url())
+			repository, err := mysql.NewStore(dbConfig.URL())
 			require.NoError(t, err)
 
 			quit := make(chan os.Signal, 1)
@@ -119,7 +122,6 @@ func TestListener(t *testing.T) {
 			id = util.MustNewULID()
 			acc, _ = test.CreateAccount("Quintans", id, 100)
 			acc.Deposit(30)
-			// acc.Withdraw(5)
 			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 

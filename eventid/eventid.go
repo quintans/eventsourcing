@@ -63,7 +63,7 @@ func MustNew(t time.Time, entropy io.Reader) EventID {
 
 func TimeOnly(t time.Time) EventID {
 	var id ulid.ULID
-	id.SetTime(ulid.Timestamp(t))
+	_ = id.SetTime(ulid.Timestamp(t))
 	return EventID{u: id}
 }
 
@@ -104,8 +104,8 @@ func (e EventID) OffsetTime(offset time.Duration) EventID {
 	t := ulid.Time(ut)
 	t = t.Add(offset)
 	other := ulid.ULID{}
-	other.SetTime(ulid.Timestamp(t))
-	other.SetEntropy(e.u.Entropy())
+	_ = other.SetTime(ulid.Timestamp(t))
+	_ = other.SetEntropy(e.u.Entropy())
 	return EventID{other}
 }
 
