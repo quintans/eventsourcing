@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -46,6 +47,7 @@ func setup() (DBConfig, func(), error) {
 		Cmd:        []string{"--log-bin", "--binlog-format=ROW"},
 		WaitingFor: wait.ForListeningPort(natPort),
 	}
+	time.Sleep(3 * time.Second)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,

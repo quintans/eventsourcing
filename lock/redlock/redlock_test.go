@@ -1,3 +1,5 @@
+//go:build redis
+
 package redlock_test
 
 import (

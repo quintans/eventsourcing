@@ -2,16 +2,15 @@ package eventsourcing
 
 import (
 	"github.com/quintans/faults"
-
-	"github.com/quintans/eventsourcing/util"
 )
 
-func RehydrateAggregate(decoder Decoder, aggregateKind Kind, body []byte) (Aggregater, error) {
+func RehydrateAggregate[T Aggregater](decoder Decoder, aggregateKind Kind, body []byte) (T, error) {
 	a, err := rehydrate(aggregateKind, decoder, body, false)
 	if err != nil {
-		return nil, err
+		var zero T
+		return zero, err
 	}
-	return a.(Aggregater), nil
+	return a.(T), nil
 }
 
 func RehydrateEvent(decoder Decoder, kind Kind, body []byte) (Kinder, error) {
@@ -19,17 +18,10 @@ func RehydrateEvent(decoder Decoder, kind Kind, body []byte) (Kinder, error) {
 }
 
 func rehydrate(kind Kind, decoder Decoder, body []byte, dereference bool) (Kinder, error) {
-	var err error
-	var e interface{}
-	e, err = decoder.Decode(body, kind)
+	e, err := decoder.Decode(body, kind)
 	if err != nil {
 		return nil, faults.Errorf("Unable to decode into %T: %w", e, err)
 	}
 
-	if dereference {
-		e2 := util.Dereference(e)
-		return e2.(Kinder), nil
-	}
-
-	return e.(Kinder), nil
+	return e, nil
 }

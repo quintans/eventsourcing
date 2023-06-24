@@ -1,3 +1,5 @@
+//go:build mysql
+
 package mysql
 
 import (
@@ -22,7 +24,12 @@ import (
 	"github.com/quintans/eventsourcing/util"
 )
 
-var logger = log.NewLogrus(logrus.StandardLogger())
+var (
+	logger    = log.NewLogrus(logrus.StandardLogger())
+	esOptions = &eventsourcing.EsOptions{
+		SnapshotThreshold: 3,
+	}
+)
 
 func connect(dbConfig DBConfig) (*sqlx.DB, error) {
 	dburl := dbConfig.URL()
@@ -47,10 +54,11 @@ func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -58,8 +66,7 @@ func TestSaveAndGet(t *testing.T) {
 	err = es.Update(
 		ctx,
 		id.String(),
-		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-			acc := a.(*test.Account)
+		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			acc.Deposit(1)
 			return acc, nil
@@ -94,9 +101,8 @@ func TestSaveAndGet(t *testing.T) {
 		assert.Equal(t, uint32(i+1), evts[i].AggregateVersion)
 	}
 
-	a, err := es.Retrieve(ctx, id.String())
+	acc2, err := es.Retrieve(ctx, id.String())
 	require.NoError(t, err)
-	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(136), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
@@ -108,8 +114,7 @@ func TestSaveAndGet(t *testing.T) {
 	err = es.Update(
 		ctx,
 		id.String(),
-		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-			acc := a.(*test.Account)
+		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
 		},
@@ -128,16 +133,16 @@ func TestPollListener(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-		acc := a.(*test.Account)
+	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		return acc, nil
 	})
@@ -162,10 +167,10 @@ func TestPollListener(t *testing.T) {
 		logger.Info("Cancelling...")
 		cancel()
 	}()
-	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
+	err = lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
-			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
-				return err
+			if er := es.ApplyChangeFromHistory(acc2, e); er != nil {
+				return er
 			}
 			counter++
 			if counter == 4 {
@@ -175,6 +180,7 @@ func TestPollListener(t *testing.T) {
 		}
 		return nil
 	})
+	require.NoError(t, err)
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID())
@@ -192,16 +198,16 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-		acc := a.(*test.Account)
+	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		return acc, nil
 	})
@@ -251,10 +257,11 @@ func TestListenerWithLabels(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
@@ -262,8 +269,7 @@ func TestListenerWithLabels(t *testing.T) {
 	err = es.Update(
 		ctx,
 		id.String(),
-		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-			acc := a.(*test.Account)
+		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
 		},
@@ -319,17 +325,17 @@ func TestForget(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-		acc := a.(*test.Account)
+	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		acc.Withdraw(15)
 		acc.UpdateOwner("Paulo Quintans Pereira")
@@ -373,12 +379,12 @@ func TestForget(t *testing.T) {
 		},
 		func(i eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 			switch t := i.(type) {
-			case test.OwnerUpdated:
+			case *test.OwnerUpdated:
 				t.Owner = ""
 				return t, nil
 			case *test.Account:
-				er := t.Forget()
-				return t, er
+				t.Forget()
+				return t, nil
 			}
 			return i, nil
 		},
@@ -419,14 +425,15 @@ func TestMigration(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
-	acc, _ := test.CreateAccount("Paulo Pereira", id, 100)
+	acc, err := test.CreateAccount("Paulo Pereira", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(20)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")
-	err = es.Create(ctx, acc)
+	err = es1.Create(ctx, acc)
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
@@ -434,8 +441,8 @@ func TestMigration(t *testing.T) {
 
 	codec := test.NewJSONCodecWithUpcaster()
 	// switching the aggregator factory
-	es = eventsourcing.NewEventStore(r, codec, eventsourcing.WithSnapshotThreshold(3))
-	err = es.MigrateInPlaceCopyReplace(ctx,
+	es2 := eventsourcing.NewEventStore[*test.AccountV2](r, codec, esOptions)
+	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
 		func(events []*eventsourcing.Event) ([]*eventsourcing.EventMigration, error) {
@@ -546,9 +553,8 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, 0, evt.Migration)
 	assert.True(t, evt.Migrated)
 
-	a, err := es.Retrieve(ctx, id.String())
+	acc2, err := es2.Retrieve(ctx, id.String())
 	require.NoError(t, err)
-	acc2 := a.(*test.AccountV2)
 	assert.Equal(t, "Paulo", acc2.Owner().FirstName())
 	assert.Equal(t, "Quintans Pereira", acc2.Owner().LastName())
 }

@@ -1,3 +1,5 @@
+//go:build pg
+
 package pg
 
 import (
@@ -38,7 +40,7 @@ func TestPgListener(t *testing.T) {
 
 	errCh := feeding(ctx, dbConfig, repository, s)
 
-	es := eventsourcing.NewEventStore(repository, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
 	acc, _ := test.CreateAccount("Paulo", id, 100)

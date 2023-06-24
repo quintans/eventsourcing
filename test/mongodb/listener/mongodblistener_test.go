@@ -1,3 +1,5 @@
+//go:build mongo
+
 package listener
 
 import (
@@ -91,7 +93,7 @@ func TestMongoListenere(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			errs := feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
 
-			es := eventsourcing.NewEventStore(repository, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
 			id := util.MustNewULID()
 			acc, _ := test.CreateAccount("Paulo", id, 100)
@@ -123,8 +125,7 @@ func TestMongoListenere(t *testing.T) {
 
 			assert.Equal(t, 3, len(events), "event size")
 
-			err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-				acc := a.(*test.Account)
+			err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
 				acc.Withdraw(5)
 				acc.Withdraw(10)
 				return acc, nil

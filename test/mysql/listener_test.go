@@ -1,3 +1,5 @@
+//go:build mysql
+
 package mysql
 
 import (
@@ -84,7 +86,7 @@ func TestListener(t *testing.T) {
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-			es := eventsourcing.NewEventStore(repository, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), esOptions)
 
 			cfg := mysql.DBConfig{
 				Host:     dbConfig.Host,
@@ -100,7 +102,8 @@ func TestListener(t *testing.T) {
 			errs := feeding(ctx, cfg, partitions, tt.partitionSlots, s)
 
 			id := util.MustNewULID()
-			acc, _ := test.CreateAccount("Paulo", id, 100)
+			acc, err := test.CreateAccount("Paulo", id, 100)
+			require.NoError(t, err)
 			acc.Deposit(10)
 			acc.Deposit(20)
 			err = es.Create(ctx, acc)
@@ -120,7 +123,8 @@ func TestListener(t *testing.T) {
 			ctx, cancel = context.WithCancel(context.Background())
 
 			id = util.MustNewULID()
-			acc, _ = test.CreateAccount("Quintans", id, 100)
+			acc, err = test.CreateAccount("Quintans", id, 100)
+			require.NoError(t, err)
 			acc.Deposit(30)
 			err = es.Create(ctx, acc)
 			require.NoError(t, err)
@@ -137,7 +141,7 @@ func TestListener(t *testing.T) {
 				require.NoError(t, <-errs, "Error feeding #2: %d", i)
 			}
 
-			// resume from the begginning
+			// resume from the beginning
 			s = test.NewMockSink(0)
 			ctx, cancel = context.WithCancel(context.Background())
 			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, s)

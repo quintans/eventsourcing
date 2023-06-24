@@ -50,7 +50,7 @@ type Snapshot struct {
 
 var _ eventsourcing.EsRepository = (*EsRepository)(nil)
 
-type Option func(*EsRepository)
+type Option func(f *EsRepository)
 
 func WithEventsCollection(eventsCollection string) Option {
 	return func(r *EsRepository) {

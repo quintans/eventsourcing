@@ -1,3 +1,5 @@
+//go:build consul
+
 package consullock_test
 
 import (

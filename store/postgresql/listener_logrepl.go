@@ -321,20 +321,17 @@ func (f *FeedLogrepl) listReplicationSlot(ctx context.Context, conn *pgconn.PgCo
 	}
 
 	if len(results) != 1 {
-		return nil, faults.Errorf("expected 1 result set, got %d", len(results))
+		return nil, faults.Errorf("expected 1 result set for '%s', got %d", f.publicationName, len(results))
 	}
 
 	slots := map[string]bool{}
 	result := results[0]
-	if len(result.Rows) != 1 {
-		return slots, nil
-	}
-	for _, rows := range result.Rows {
-		row := rows[0]
-		if len(row) != 1 {
-			return nil, faults.Errorf("expected 1 result columns, got %d", len(row))
+	for _, cols := range result.Rows {
+		if len(cols) != 1 {
+			return nil, faults.Errorf("expected 1 result column for '%s', got %d: %s", f.publicationName, len(cols), string(cols[0]))
 		}
-		slots[string(row[0])] = true
+
+		slots[string(cols[0])] = true
 	}
 
 	return slots, nil
