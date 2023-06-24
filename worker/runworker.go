@@ -34,15 +34,11 @@ type RunWorker struct {
 	mu         sync.RWMutex
 }
 
-func NewUnbalancedRunWorker(logger log.Logger, name string, group string, runner Tasker) *RunWorker {
-	return newRunWorker(logger, name, group, nil, runner)
-}
-
-func NewRunWorker(logger log.Logger, name string, group string, locker lock.Locker, runner Tasker) *RunWorker {
+func NewRunWorker(logger log.Logger, name, group string, locker lock.Locker, runner Tasker) *RunWorker {
 	return newRunWorker(logger, name, group, locker, runner)
 }
 
-func newRunWorker(logger log.Logger, name string, group string, locker lock.Locker, runner Tasker) *RunWorker {
+func newRunWorker(logger log.Logger, name, group string, locker lock.Locker, runner Tasker) *RunWorker {
 	logger = logger.WithTags(log.Tags{
 		"id": shortid.MustGenerate(),
 	})
@@ -83,11 +79,9 @@ func (w *RunWorker) Start(ctx context.Context) bool {
 	}
 	w.mu.Unlock()
 
-	var err error
-	var release <-chan struct{}
 	if w.locker != nil {
-		ctx, cancel := context.WithCancel(context.Background())
-		release, err = w.locker.Lock(ctx)
+		ctx2, cancel := context.WithCancel(context.Background())
+		release, err := w.locker.Lock(ctx2)
 		if err != nil {
 			cancel()
 			return false
@@ -99,8 +93,6 @@ func (w *RunWorker) Start(ctx context.Context) bool {
 			<-release
 			w.Stop(context.Background())
 		}()
-	} else {
-		release = make(chan struct{})
 	}
 
 	w.mu.Lock()

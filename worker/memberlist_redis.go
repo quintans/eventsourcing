@@ -28,7 +28,7 @@ type RedisMemberList struct {
 	quorum     int
 }
 
-func NewRedisMemberlist(addresses string, prefix string, expiration time.Duration) *RedisMemberList {
+func NewRedisMemberlist(addresses, prefix string, expiration time.Duration) *RedisMemberList {
 	addrs := strings.Split(addresses, separator)
 	pool := make([]*redis.Client, 0, len(addrs))
 	for _, addr := range addrs {
@@ -50,24 +50,25 @@ func (r *RedisMemberList) Name() string {
 }
 
 func (r *RedisMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
-	results, err := r.doAsync(func(c *redis.Client) (interface{}, error) {
+	results, err := doAsync(r, func(c *redis.Client) ([]MemberWorkers, error) {
 		return r.list(ctx, c)
 	})
 	if len(results) < r.quorum {
-		return []MemberWorkers{}, err
+		return nil, err
 	}
 
 	// merge all workers of a member
 	memberSet := map[string]map[string]bool{}
 	for _, result := range results {
-		mw := result.(MemberWorkers)
-		workerSet, ok := memberSet[mw.Name]
-		if !ok {
-			workerSet = map[string]bool{}
-			memberSet[mw.Name] = workerSet
-		}
-		for _, w := range mw.Workers {
-			workerSet[w] = true
+		for _, mw := range result {
+			workerSet, ok := memberSet[mw.Name]
+			if !ok {
+				workerSet = map[string]bool{}
+				memberSet[mw.Name] = workerSet
+			}
+			for _, w := range mw.Workers {
+				workerSet[w] = true
+			}
 		}
 	}
 	mws := make([]MemberWorkers, 0, len(memberSet))
@@ -103,16 +104,16 @@ func (r *RedisMemberList) list(ctx context.Context, c *redis.Client) ([]MemberWo
 		ch := make(chan result, len(members))
 		for _, memberID := range members {
 			go func(m string) {
-				r := result{}
-				retry.Do(
+				var v string
+				err = retry.Do(
 					func() error {
-						r.Val, r.Err = c.Get(ctx, m).Result()
-						return r.Err
+						var er error
+						v, er = c.Get(ctx, m).Result()
+						return er
 					},
 					retry.Attempts(retries),
 				)
-				r.Err = faults.Wrap(r.Err)
-				ch <- r
+				ch <- result{Val: v, Err: faults.Wrap(err)}
 			}(memberID)
 		}
 		for _, memberID := range members {
@@ -139,10 +140,10 @@ func (r *RedisMemberList) list(ctx context.Context, c *redis.Client) ([]MemberWo
 
 func (r *RedisMemberList) Register(ctx context.Context, workers []string) error {
 	s := strings.Join(workers, separator)
-	_, err := r.doAsync(func(c *redis.Client) (interface{}, error) {
+	_, err := doAsync(r, func(c *redis.Client) (string, error) {
 		status, err := c.Set(ctx, r.name, s, r.expiration).Result()
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return "", faults.Wrap(err)
 		}
 		return status, nil
 	})
@@ -150,26 +151,26 @@ func (r *RedisMemberList) Register(ctx context.Context, workers []string) error 
 }
 
 func (r *RedisMemberList) Unregister(ctx context.Context) error {
-	_, err := r.doAsync(func(c *redis.Client) (interface{}, error) {
+	_, err := doAsync(r, func(c *redis.Client) (int64, error) {
 		status, err := c.Del(ctx, r.name).Result()
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return 0, faults.Wrap(err)
 		}
 		return status, nil
 	})
 	return faults.Wrap(err)
 }
 
-func (r *RedisMemberList) doAsync(actFn func(*redis.Client) (interface{}, error)) ([]interface{}, error) {
-	type result struct {
-		Val interface{}
-		Err error
-	}
+type result[T any] struct {
+	Val T
+	Err error
+}
 
-	ch := make(chan result, len(r.pool))
+func doAsync[T any](r *RedisMemberList, actFn func(*redis.Client) (T, error)) ([]T, error) {
+	ch := make(chan result[T], len(r.pool))
 	for _, client := range r.pool {
 		go func(client *redis.Client) {
-			r := result{}
+			var r result[T]
 			retry.Do(
 				func() error {
 					r.Val, r.Err = actFn(client)
@@ -180,7 +181,7 @@ func (r *RedisMemberList) doAsync(actFn func(*redis.Client) (interface{}, error)
 			ch <- r
 		}(client)
 	}
-	results := make([]interface{}, 0, len(r.pool))
+	results := make([]T, 0, len(r.pool))
 	var err error
 	for range r.pool {
 		r := <-ch

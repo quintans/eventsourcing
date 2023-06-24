@@ -4,7 +4,7 @@ services:
   M1:
     hostname: mongodb
     container_name: mongodb
-    image: mongo:latest
+    image: mongo:4.2.15
     environment:
       MONGO_INITDB_DATABASE: eventsourcing
       MONGO_REPLICA_SET_NAME: rs0
@@ -16,7 +16,7 @@ services:
     entrypoint: [ "/usr/bin/mongod", "--bind_ip_all", "--replSet", "rs0" ]
 
   mongosetup:
-    image: mongo:latest
+    image: mongo:4.2.15
     links:
       - M1:M1
     depends_on:

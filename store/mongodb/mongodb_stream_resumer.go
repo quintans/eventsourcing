@@ -23,8 +23,9 @@ type StreamResumer struct {
 	collection *mongo.Collection
 }
 
-func NewStreamResumer(connString string, dbName string, collection string) (StreamResumer, error) {
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+func NewStreamResumer(connString, dbName, collection string) (StreamResumer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
 	if err != nil {
 		return StreamResumer{}, faults.Wrap(err)
@@ -37,26 +38,26 @@ func NewStreamResumer(connString string, dbName string, collection string) (Stre
 	}, nil
 }
 
-func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
+func (m StreamResumer) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (projection.Token, error) {
 	opts := options.FindOne()
 	row := StreamResumerRow{}
 	if err := m.collection.FindOne(ctx, bson.D{{"_id", key.String()}}, opts).Decode(&row); err != nil {
 		if err == mongo.ErrNoDocuments {
-			return "", faults.Wrap(projection.ErrResumeTokenNotFound)
+			return projection.Token{}, faults.Wrap(projection.ErrResumeTokenNotFound)
 		}
-		return "", faults.Errorf("Failed to get resume token for key '%s': %w", key, err)
+		return projection.Token{}, faults.Errorf("Failed to get resume token for key '%s': %w", key, err)
 	}
 
-	return row.Token, nil
+	return projection.ParseToken(row.Token)
 }
 
-func (m StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token string) error {
+func (m StreamResumer) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token projection.Token) error {
 	opts := options.Update().SetUpsert(true)
 	_, err := m.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": key.String()},
 		bson.M{
-			"$set": bson.M{"token": token},
+			"$set": bson.M{"token": token.String()},
 		},
 		opts,
 	)

@@ -18,7 +18,7 @@ type DBConfig struct {
 	Port     int
 }
 
-func (c DBConfig) Url() string {
+func (c DBConfig) URL() string {
 	return fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", c.Host, c.Port, c.Database)
 }
 

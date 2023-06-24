@@ -1,3 +1,5 @@
+//go:build consul
+
 package consullock_test
 
 import (
@@ -34,7 +36,7 @@ func SetupConsul(ctx context.Context) (testcontainers.Container, string, error) 
 
 	ip, err := container.Host(ctx)
 	if err != nil {
-		container.Terminate(ctx)
+		_ = container.Terminate(ctx)
 		return nil, "", err
 	}
 	port, err := container.MappedPort(ctx, natPort)
@@ -49,7 +51,7 @@ func SetupConsul(ctx context.Context) (testcontainers.Container, string, error) 
 }
 
 func TestConsul(t *testing.T) {
-	LOCK_KEY := "123"
+	lockKey := "123"
 	ctx := context.Background()
 	container, addr, err := SetupConsul(ctx)
 	require.NoError(t, err)
@@ -58,7 +60,7 @@ func TestConsul(t *testing.T) {
 	pool1, err := consullock.NewPool(addr)
 	require.NoError(t, err)
 
-	lock1 := pool1.NewLock(LOCK_KEY, 10*time.Second)
+	lock1 := pool1.NewLock(lockKey, 10*time.Second)
 	done1, err := lock1.Lock(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, done1, "Expected to acquire lock")
@@ -68,7 +70,7 @@ func TestConsul(t *testing.T) {
 	pool2, err := consullock.NewPool(addr)
 	require.NoError(t, err)
 
-	lock2 := pool2.NewLock(LOCK_KEY, 10*time.Second)
+	lock2 := pool2.NewLock(lockKey, 10*time.Second)
 	_, err = lock2.Lock(ctx)
 	require.ErrorIs(t, err, lock.ErrLockAlreadyAcquired)
 
@@ -80,17 +82,17 @@ func TestConsul(t *testing.T) {
 	require.NotNil(t, done2, "Expected to acquire lock")
 
 	start := time.Now()
-	wait := 3 * time.Second
+	pause := 3 * time.Second
 
 	go func() {
-		time.Sleep(wait)
-		err := lock2.Unlock(ctx)
-		require.NoError(t, err)
+		time.Sleep(pause)
+		er := lock2.Unlock(ctx)
+		require.NoError(t, er)
 	}()
 
 	err = lock1.WaitForUnlock(ctx)
 	require.NoError(t, err)
-	require.True(t, time.Since(start) > wait, "Waiting duration for lock was too short")
+	require.True(t, time.Since(start) > pause, "Waiting duration for lock was too short")
 
 	_, err = lock1.Lock(ctx)
 	require.NoError(t, err)

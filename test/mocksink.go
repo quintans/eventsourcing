@@ -12,13 +12,13 @@ import (
 type MockSink struct {
 	mu         sync.Mutex
 	partitions uint32
-	events     map[uint32][]eventsourcing.Event
-	lastEvents map[uint32]eventsourcing.Event
+	events     map[uint32][]*eventsourcing.Event
+	lastEvents map[uint32]*eventsourcing.Event
 }
 
 func NewMockSink(partitions uint32) *MockSink {
-	events := map[uint32][]eventsourcing.Event{}
-	lastEvents := map[uint32]eventsourcing.Event{}
+	events := map[uint32][]*eventsourcing.Event{}
+	lastEvents := map[uint32]*eventsourcing.Event{}
 
 	return &MockSink{
 		events:     events,
@@ -27,7 +27,7 @@ func NewMockSink(partitions uint32) *MockSink {
 	}
 }
 
-func (s *MockSink) Sink(ctx context.Context, e eventsourcing.Event) error {
+func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event) error {
 	var partition uint32
 	if s.partitions <= 1 {
 		partition = 1
@@ -53,14 +53,14 @@ func (s *MockSink) LastMessage(ctx context.Context, partition uint32) (*eventsou
 	if !ok {
 		return nil, nil
 	}
-	return &e, nil
+	return e, nil
 }
 
 func (s *MockSink) Close() {}
 
-func (s *MockSink) GetEvents() []eventsourcing.Event {
+func (s *MockSink) GetEvents() []*eventsourcing.Event {
 	s.mu.Lock()
-	events := []eventsourcing.Event{}
+	events := []*eventsourcing.Event{}
 	for _, v := range s.events {
 		events = append(events, v...)
 	}
@@ -68,11 +68,11 @@ func (s *MockSink) GetEvents() []eventsourcing.Event {
 	return events
 }
 
-func (s *MockSink) LastMessages() map[uint32]eventsourcing.Event {
+func (s *MockSink) LastMessages() map[uint32]*eventsourcing.Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msgs := map[uint32]eventsourcing.Event{}
+	msgs := map[uint32]*eventsourcing.Event{}
 	for k, v := range s.lastEvents {
 		msgs[k] = v
 	}
@@ -80,7 +80,7 @@ func (s *MockSink) LastMessages() map[uint32]eventsourcing.Event {
 	return msgs
 }
 
-func (s *MockSink) SetLastMessages(lastEvents map[uint32]eventsourcing.Event) {
+func (s *MockSink) SetLastMessages(lastEvents map[uint32]*eventsourcing.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

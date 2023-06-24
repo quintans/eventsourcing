@@ -51,7 +51,7 @@ func (r *EsRepository) MigrateConsistentProjection(
 	}
 
 	go func() {
-		err := r.migrateProjection(ctx, locker, migrater, getByID)
+		err := r.migrateProjection(ctx, logger, locker, migrater, getByID)
 		if err != nil {
 			logger.WithError(err).Error("Failed to catchup projection '%s'", migrater.Name())
 		}
@@ -62,12 +62,13 @@ func (r *EsRepository) MigrateConsistentProjection(
 
 func (r *EsRepository) migrateProjection(
 	ctx context.Context,
+	logger log.Logger,
 	locker lock.WaitLocker,
 	migrater ProjectionMigrater,
 	getByID getByIDFunc,
 ) error {
 	// check
-	ok, err := r.shouldMigrate(ctx, migrater.Name())
+	ok, err := r.shouldMigrate(ctx)
 	if err != nil {
 		return err
 	}
@@ -78,17 +79,20 @@ func (r *EsRepository) migrateProjection(
 	for {
 		_, err = locker.Lock(ctx)
 		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
-			locker.WaitForUnlock(ctx)
+			er := locker.WaitForUnlock(ctx)
+			if er != nil {
+				logger.WithError(er).Error("waiting for unlock")
+			}
 			continue
 		} else if err != nil {
-			faults.Wrap(err)
+			return faults.Wrap(err)
 		}
 
 		defer locker.Unlock(context.Background())
 		break
 	}
 	// recheck
-	ok, err = r.shouldMigrate(ctx, migrater.Name())
+	ok, err = r.shouldMigrate(ctx)
 	if err != nil {
 		return err
 	}
@@ -102,7 +106,7 @@ func (r *EsRepository) migrateProjection(
 		err = r.distinctAggregates(ctx, s.AggregateKind, func(c context.Context, aggregateID string) error {
 			return retry.Do(
 				func() error {
-					return r.processAggregate(ctx, migrater, s.AggregateKind, aggregateID, getByID)
+					return r.processAggregate(ctx, migrater, aggregateID, getByID)
 				},
 				retry.Attempts(retries),
 				retry.RetryIf(isDup),
@@ -119,7 +123,6 @@ func (r *EsRepository) migrateProjection(
 func (r *EsRepository) processAggregate(
 	c context.Context,
 	migrater ProjectionMigrater,
-	aggregateKind eventsourcing.Kind,
 	aggregateID string,
 	getByID getByIDFunc,
 ) error {
@@ -152,7 +155,7 @@ func (r *EsRepository) createMigrationTable(ctx context.Context) error {
 	return nil
 }
 
-func (r *EsRepository) shouldMigrate(ctx context.Context, name string) (bool, error) {
+func (r *EsRepository) shouldMigrate(ctx context.Context) (bool, error) {
 	var value int
 	if err := r.db.GetContext(ctx, &value, "SELECT 1 FROM projection_migration WHERE name=$1"); err != nil {
 		if err != sql.ErrNoRows {
@@ -166,7 +169,7 @@ func (r *EsRepository) shouldMigrate(ctx context.Context, name string) (bool, er
 func (r *EsRepository) doneMigration(ctx context.Context, name string) error {
 	_, err := r.db.ExecContext(ctx, `INSERT INTO projection_migration (name) VALUES ($1)`, name)
 	if err != nil {
-		return faults.Errorf("failed to mark projection migration '%s' as done: %w", err)
+		return faults.Errorf("failed to mark projection migration '%s' as done: %w", name, err)
 	}
 
 	return nil
@@ -196,7 +199,7 @@ func (r *EsRepository) distinctAggregates(
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		} else if err != nil {
-			return faults.Errorf("unable to query aggregates IDs: %w\n%s", err, query)
+			return faults.Errorf("unable to query aggregates IDs: %w\n%s", err, query.String())
 		}
 
 		for _, aggID := range aggIDs {
@@ -225,7 +228,7 @@ func (r *EsRepository) addNoOp(ctx context.Context, metadata store.AggregateMeta
 		return faults.Wrap(err)
 	}
 	tx := TxFromContext(ctx)
-	err = r.saveEvent(ctx, tx, Event{
+	err = r.saveEvent(ctx, tx, &Event{
 		ID:               id,
 		AggregateID:      aggID,
 		AggregateIDHash:  int32ring(hash),

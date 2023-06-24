@@ -2,9 +2,11 @@ package util
 
 import (
 	"strconv"
+
+	"github.com/quintans/faults"
 )
 
-func PartitionTopic(topic string, hash, partitions uint32) Topic {
+func PartitionTopic(topic string, hash, partitions uint32) (Topic, error) {
 	if partitions == 0 {
 		return NewPartitionedTopic(topic, 0)
 	}
@@ -25,18 +27,18 @@ type Topic struct {
 	partition uint32
 }
 
-func NewTopic(root string) Topic {
+func NewTopic(root string) (Topic, error) {
 	return NewPartitionedTopic(root, 0)
 }
 
-func NewPartitionedTopic(root string, partition uint32) Topic {
+func NewPartitionedTopic(root string, partition uint32) (Topic, error) {
 	if root == "" {
-		panic("topic root cannot be empty")
+		return Topic{}, faults.New("topic root cannot be empty")
 	}
 	return Topic{
 		root:      root,
 		partition: partition,
-	}
+	}, nil
 }
 
 func (t Topic) String() string {

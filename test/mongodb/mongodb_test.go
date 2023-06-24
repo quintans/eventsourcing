@@ -1,3 +1,5 @@
+//go:build mongo
+
 package mongodb
 
 import (
@@ -23,7 +25,12 @@ import (
 	"github.com/quintans/eventsourcing/util"
 )
 
-var logger = log.NewLogrus(logrus.StandardLogger())
+var (
+	logger    = log.NewLogrus(logrus.StandardLogger())
+	esOptions = &eventsourcing.EsOptions{
+		SnapshotThreshold: 3,
+	}
+)
 
 const (
 	AggregateAccount    eventsourcing.Kind = "Account"
@@ -51,14 +58,15 @@ func TestSaveAndGet(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Withdraw(5)
 	err = es.Create(ctx, acc)
@@ -66,8 +74,7 @@ func TestSaveAndGet(t *testing.T) {
 	err = es.Update(
 		ctx,
 		id.String(),
-		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-			acc := a.(*test.Account)
+		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			acc.Deposit(1)
 			return acc, nil
@@ -94,9 +101,8 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, EventMoneyWithdrawn, evts[2].Kind)
 	assert.Equal(t, "idempotency-key", evts[3].IdempotencyKey)
 
-	a, err := es.Retrieve(ctx, id.String())
+	acc2, err := es.Retrieve(ctx, id.String())
 	require.NoError(t, err)
-	acc2 := a.(*test.Account)
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(111), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
@@ -108,8 +114,7 @@ func TestSaveAndGet(t *testing.T) {
 	err = es.Update(
 		ctx,
 		id.String(),
-		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-			acc := a.(*test.Account)
+		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
 		},
@@ -172,19 +177,19 @@ func TestPollListener(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Withdraw(5)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-		acc := a.(*test.Account)
+	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		return acc, nil
 	})
@@ -193,7 +198,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r, err = mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err = mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	lm := poller.New(logger, r)
@@ -210,7 +215,7 @@ func TestPollListener(t *testing.T) {
 		logger.Info("Cancelling...")
 		cancel()
 	}()
-	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -236,19 +241,19 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-		acc := a.(*test.Account)
+	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		return acc, nil
 	})
@@ -257,13 +262,13 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(logger, repository, poller.WithAggregateKinds(AggregateAccount))
 
 	done := make(chan struct{})
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -295,13 +300,14 @@ func TestListenerWithLabels(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
@@ -309,8 +315,7 @@ func TestListenerWithLabels(t *testing.T) {
 	err = es.Update(
 		ctx,
 		id.String(),
-		func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-			acc := a.(*test.Account)
+		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
 		},
@@ -322,13 +327,13 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
 
 	done := make(chan struct{})
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e eventsourcing.Event) error {
+	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -360,20 +365,20 @@ func TestForget(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
-	acc, _ := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-		acc := a.(*test.Account)
+	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		acc.Withdraw(15)
 		acc.UpdateOwner("Paulo Quintans Pereira")
@@ -404,8 +409,8 @@ func TestForget(t *testing.T) {
 	for _, e := range evts {
 		if e.Kind == "OwnerUpdated" {
 			foundEvent = true
-			event, err := codec.Decode(e.Body, e.Kind)
-			require.NoError(t, err)
+			event, er := codec.Decode(e.Body, e.Kind)
+			require.NoError(t, er)
 			evt := event.(*test.OwnerUpdated)
 			assert.NotEmpty(t, evt.Owner)
 		}
@@ -422,8 +427,8 @@ func TestForget(t *testing.T) {
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		a, err := codec.Decode(v.Body, test.KindAccount)
-		require.NoError(t, err)
+		a, er := codec.Decode(v.Body, test.KindAccount)
+		require.NoError(t, er)
 		snap := a.(*test.Account)
 		assert.NotEmpty(t, snap.Owner())
 	}
@@ -435,12 +440,12 @@ func TestForget(t *testing.T) {
 		},
 		func(i eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 			switch t := i.(type) {
-			case test.OwnerUpdated:
+			case *test.OwnerUpdated:
 				t.Owner = ""
 				return t, nil
-			case test.Account:
-				err := t.Forget()
-				return t, err
+			case *test.Account:
+				t.Forget()
+				return t, nil
 			}
 			return i, nil
 		},
@@ -466,8 +471,8 @@ func TestForget(t *testing.T) {
 	for _, e := range evts {
 		if e.Kind == "OwnerUpdated" {
 			foundEvent = true
-			event, err := codec.Decode(e.Body, e.Kind)
-			require.NoError(t, err)
+			event, er := codec.Decode(e.Body, e.Kind)
+			require.NoError(t, er)
 			evt := event.(*test.OwnerUpdated)
 			assert.Empty(t, evt.Owner)
 		}
@@ -498,17 +503,18 @@ func TestMigration(t *testing.T) {
 	defer tearDown()
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.Url(), dbConfig.Database)
+	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore(r, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
-	acc, _ := test.CreateAccount("Paulo Pereira", id, 100)
+	acc, err := test.CreateAccount("Paulo Pereira", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(20)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")
-	err = es.Create(ctx, acc)
+	err = es1.Create(ctx, acc)
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
@@ -516,8 +522,8 @@ func TestMigration(t *testing.T) {
 
 	// switching the aggregator factory
 	codec := test.NewJSONCodecWithUpcaster()
-	es = eventsourcing.NewEventStore(r, codec, eventsourcing.WithSnapshotThreshold(3))
-	err = es.MigrateInPlaceCopyReplace(ctx,
+	es2 := eventsourcing.NewEventStore[*test.AccountV2](r, codec, esOptions)
+	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
 		func(events []*eventsourcing.Event) ([]*eventsourcing.EventMigration, error) {
@@ -525,17 +531,17 @@ func TestMigration(t *testing.T) {
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store
 			for _, e := range events {
-				var err error
+				var er error
 				switch e.Kind {
 				case test.KindAccountCreated:
-					m, err = test.MigrateAccountCreated(e, codec)
+					m, er = test.MigrateAccountCreated(e, codec)
 				case test.KindOwnerUpdated:
-					m, err = test.MigrateOwnerUpdated(e, codec)
+					m, er = test.MigrateOwnerUpdated(e, codec)
 				default:
 					m = eventsourcing.DefaultEventMigration(e)
 				}
-				if err != nil {
-					return nil, err
+				if er != nil {
+					return nil, er
 				}
 				migration = append(migration, m)
 			}
@@ -622,9 +628,8 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, 0, evt.Migration)
 	assert.True(t, evt.Migrated)
 
-	a, err := es.Retrieve(ctx, id.String())
+	acc2, err := es2.Retrieve(ctx, id.String())
 	require.NoError(t, err)
-	acc2 := a.(*test.AccountV2)
 	assert.Equal(t, "Paulo", acc2.Owner().FirstName())
 	assert.Equal(t, "Quintans Pereira", acc2.Owner().LastName())
 }

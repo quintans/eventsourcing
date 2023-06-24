@@ -1,3 +1,5 @@
+//go:build pg
+
 package wal
 
 import (
@@ -19,6 +21,7 @@ import (
 	"github.com/quintans/eventsourcing/test"
 	tpg "github.com/quintans/eventsourcing/test/pg"
 	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/faults"
 )
 
 type slot struct {
@@ -27,6 +30,8 @@ type slot struct {
 }
 
 func TestListener(t *testing.T) {
+	t.Parallel()
+
 	testcases := []struct {
 		name           string
 		partitionSlots []slot
@@ -69,6 +74,7 @@ func TestListener(t *testing.T) {
 	}
 
 	for _, tt := range testcases {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -76,13 +82,13 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 			defer tearDown()
 
-			repository, err := postgresql.NewStore(dbConfig.Url())
+			repository, err := postgresql.NewStore(dbConfig.URL())
 			require.NoError(t, err)
 
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-			es := eventsourcing.NewEventStore(repository, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
 			partitions := partitionSize(tt.partitionSlots)
 			s := test.NewMockSink(partitions)
@@ -91,14 +97,14 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			id := util.MustNewULID()
-			acc, _ := test.CreateAccount("Paulo", id, 100)
+			acc, err := test.CreateAccount("Paulo", id, 100)
+			require.NoError(t, err)
 			acc.Deposit(10)
 			err = es.Create(ctx, acc)
 			require.NoError(t, err)
-			err = es.Update(ctx, id.String(), func(a eventsourcing.Aggregater) (eventsourcing.Aggregater, error) {
-				acc := a.(*test.Account)
-				acc.Withdraw(20)
-				return acc, nil
+			err = es.Update(ctx, id.String(), func(a *test.Account) (*test.Account, error) {
+				a.Withdraw(20)
+				return a, nil
 			})
 			require.NoError(t, err)
 
@@ -109,6 +115,7 @@ func TestListener(t *testing.T) {
 			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
 			assert.Equal(t, "MoneyWithdrawn", events[2].Kind.String())
 
+			// simulating shutdown
 			cancel()
 			for i := 0; i < len(tt.partitionSlots); i++ {
 				require.NoError(t, <-errs, "Error feeding #1: %d", i)
@@ -117,7 +124,8 @@ func TestListener(t *testing.T) {
 			ctx, cancel = context.WithCancel(context.Background())
 
 			id = util.MustNewULID()
-			acc, _ = test.CreateAccount("Quintans", id, 100)
+			acc, err = test.CreateAccount("Quintans", id, 100)
+			require.NoError(t, err)
 			acc.Deposit(30)
 			err = es.Create(ctx, acc)
 			require.NoError(t, err)
@@ -128,7 +136,7 @@ func TestListener(t *testing.T) {
 
 			time.Sleep(2 * time.Second)
 			events = s.GetEvents()
-			assert.Equal(t, 5, len(events), "event size")
+			assert.Len(t, events, 5, "event size")
 
 			cancel()
 			for i := 0; i < len(tt.partitionSlots); i++ {
@@ -167,11 +175,11 @@ func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slot
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for k, v := range slots {
-		wg.Add(1)
-		listener, err := postgresql.NewFeed(dbConfig.ReplicationUrl(), k+1, len(slots), sinker, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
+		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), sinker, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
 		if err != nil {
-			return nil, err
+			return nil, faults.Wrap(err)
 		}
+		wg.Add(1)
 		go func() {
 			wg.Done()
 			err := listener.Run(ctx)
@@ -184,6 +192,6 @@ func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slot
 	}
 	// wait for all goroutines to run
 	wg.Wait()
-	time.Sleep(5 * time.Second)
+	time.Sleep(2 * time.Second)
 	return errCh, nil
 }

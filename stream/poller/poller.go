@@ -108,7 +108,7 @@ func New(logger log.Logger, repository player.Repository, options ...Option) Pol
 	return p
 }
 
-func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handler projection.EventHandlerFunc) error {
+func (p *Poller) Poll(ctx context.Context, startOption player.StartOption, handler projection.EventHandlerFunc) error {
 	var afterMsgID eventid.EventID
 	var err error
 	switch startOption.StartFrom() {
@@ -124,7 +124,7 @@ func (p Poller) Poll(ctx context.Context, startOption player.StartOption, handle
 	return p.forward(ctx, afterMsgID, handler)
 }
 
-func (p Poller) forward(ctx context.Context, after eventid.EventID, handler projection.EventHandlerFunc) error {
+func (p *Poller) forward(ctx context.Context, after eventid.EventID, handler projection.EventHandlerFunc) error {
 	wait := p.pollInterval
 	filters := []store.FilterOption{
 		store.WithAggregateKinds(p.aggregateKinds...),
@@ -158,7 +158,7 @@ func (p Poller) forward(ctx context.Context, after eventid.EventID, handler proj
 
 // Feed forwars the handling to a sink.
 // eg: a message queue
-func (p Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
+func (p *Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
 	var afterEventID []byte
 	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, p.partitionsLow, p.partitionsHi, func(message *eventsourcing.Event) error {
 		if bytes.Compare(message.ResumeToken, afterEventID) > 0 {
@@ -176,7 +176,7 @@ func (p Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
 	}
 
 	p.logger.Info("Starting to feed from event ID: ", afterEventID)
-	return p.forward(ctx, eID, func(ctx context.Context, e eventsourcing.Event) error {
+	return p.forward(ctx, eID, func(ctx context.Context, e *eventsourcing.Event) error {
 		e.ResumeToken = []byte(e.ID.String())
 		return sinker.Sink(ctx, e)
 	})

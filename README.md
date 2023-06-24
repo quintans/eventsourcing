@@ -1,21 +1,20 @@
 # Event Sourcing
 a simple implementation of event sourcing using a database as an event store
 
-This an exercise on how I could implement event sourcing and how this could be used with CQRS.
+This is an exercise on how I could implement event sourcing and how this could be used with CQRS.
 
 ## Introduction
 
 The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture pattern where each side (write and read) can scale independently.
 
-This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS.
+This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS and eventually be consumed by a projector.
 
 To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
-We could write the read model into the same database in the same transaction as the write model (dual write), by adding adding an event handler for that but unfortunately this approach does not allow us to rebuild a projection or introduce new projections later on.
+We can write the read model into the same database in the same transaction as the write model (dual write).
 
-Other than the event store and the event streaming I also implemented an orchestration layer for the event consumer on the read side
-to be able to rebuild a projection on request.
+Other than the event store and the event streaming I also implemented a simple orchestration layer for the event consumer on the read side to create projections.
 
-> Rebuild a projection may take minutes or hours so it may not be a good idea to do it for a projection that is being used.
+> Creating a projection may take hours or even days, depending on the amount of event history so it is a good idea to create a projection on the side and start using it after it has catch up.
 
 **Components**:
 - utility to read/write to/from an event store
@@ -23,19 +22,17 @@ to be able to rebuild a projection on request.
 - message stream listeners to build read models (Projection)
 - message stream listeners to react to domain events (Reactors)
 
-> **Projections**: can be rebuild since the beginning of time and can group several stream topics
+> **Projections**: can be rebuild since the beginning of time
 
-> **Reactors**: start from the oldest available event and cannot replay events
 
-I first talk about the several challenges and then about the solutions for those challenges.
+## Eventually consistent projection
 
-## Pipeline
-
-This library implements the following pipeline:
 
 A service **writes** to a **database** (the event store), a **forwarder** component (can be on the write service or it can be an external service) listens to inserts into the database (change stream) and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary read models.
 
 ![Design](eventstore-design.png)
+
+> we still can still use consistent projections to build the current state of an aggregate
 
 ## How to
 

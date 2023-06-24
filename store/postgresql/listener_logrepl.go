@@ -94,7 +94,7 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, o
 
 // Run listens to replication logs and pushes them to sinker
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
-func (f FeedLogrepl) Run(ctx context.Context) error {
+func (f *FeedLogrepl) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
 	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
 		xLogPos, err := pglogrepl.ParseLSN(string(message.ResumeToken))
@@ -118,22 +118,22 @@ func (f FeedLogrepl) Run(ctx context.Context) error {
 
 	listSlots, err := f.listReplicationSlot(ctx, conn)
 	if err != nil {
-		faults.Errorf("listReplicationSlot failed: %w", err)
+		return faults.Errorf("listReplicationSlot failed: %w", err)
 	}
-	if err := f.dropSlotsInExcess(ctx, conn, listSlots); err != nil {
-		faults.Errorf("dropSlotsInExcess failed: %w", err)
+	if err = f.dropSlotsInExcess(ctx, conn, listSlots); err != nil {
+		return faults.Errorf("dropSlotsInExcess failed: %w", err)
 	}
 
 	slotName := f.publicationName + "_" + strconv.Itoa(f.slotIndex)
 	if !listSlots[slotName] {
 		_, err = pglogrepl.CreateReplicationSlot(ctx, conn, slotName, outputPlugin, pglogrepl.CreateReplicationSlotOptions{Temporary: false})
 		if err != nil {
-			faults.Errorf("CreateReplicationSlot failed: %w", err)
+			return faults.Errorf("CreateReplicationSlot failed: %w", err)
 		}
 	}
 
 	pluginArguments := []string{"proto_version '1'", fmt.Sprintf("publication_names '%s'", f.publicationName)}
-	if err := pglogrepl.StartReplication(ctx, conn, slotName, lastResumeToken, pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments}); err != nil {
+	if err = pglogrepl.StartReplication(ctx, conn, slotName, lastResumeToken, pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments}); err != nil {
 		return faults.Errorf("StartReplication failed: %w", err)
 	}
 
@@ -199,7 +199,7 @@ func (f FeedLogrepl) Run(ctx context.Context) error {
 						continue
 					}
 					event.ResumeToken = []byte(clientXLogPos.String())
-					err = f.sinker.Sink(context.Background(), *event)
+					err = f.sinker.Sink(context.Background(), event)
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
@@ -287,7 +287,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			AggregateKind:    eventsourcing.Kind(aggregateKind),
 			Kind:             eventsourcing.Kind(kind),
 			Body:             body,
-			Metadata:         encoding.JsonOfString(metadata),
+			Metadata:         encoding.JSONOfString(metadata),
 			IdempotencyKey:   idempotencyKey,
 			CreatedAt:        createdAt,
 			Migrated:         migrated,
@@ -312,7 +312,7 @@ func extract(values map[string]pgtype.Value, targets map[string]interface{}) err
 	return nil
 }
 
-func (f FeedLogrepl) listReplicationSlot(ctx context.Context, conn *pgconn.PgConn) (map[string]bool, error) {
+func (f *FeedLogrepl) listReplicationSlot(ctx context.Context, conn *pgconn.PgConn) (map[string]bool, error) {
 	sql := fmt.Sprintf("SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE '%s%%'", f.publicationName)
 	mrr := conn.Exec(ctx, sql)
 	results, err := mrr.ReadAll()
@@ -321,26 +321,23 @@ func (f FeedLogrepl) listReplicationSlot(ctx context.Context, conn *pgconn.PgCon
 	}
 
 	if len(results) != 1 {
-		return nil, faults.Errorf("expected 1 result set, got %d", len(results))
+		return nil, faults.Errorf("expected 1 result set for '%s', got %d", f.publicationName, len(results))
 	}
 
 	slots := map[string]bool{}
 	result := results[0]
-	if len(result.Rows) != 1 {
-		return slots, nil
-	}
-	for _, rows := range result.Rows {
-		row := rows[0]
-		if len(row) != 1 {
-			return nil, faults.Errorf("expected 1 result columns, got %d", len(row))
+	for _, cols := range result.Rows {
+		if len(cols) != 1 {
+			return nil, faults.Errorf("expected 1 result column for '%s', got %d: %s", f.publicationName, len(cols), string(cols[0]))
 		}
-		slots[string(row[0])] = true
+
+		slots[string(cols[0])] = true
 	}
 
 	return slots, nil
 }
 
-func (f FeedLogrepl) dropSlotsInExcess(ctx context.Context, conn *pgconn.PgConn, slots map[string]bool) error {
+func (f *FeedLogrepl) dropSlotsInExcess(ctx context.Context, conn *pgconn.PgConn, slots map[string]bool) error {
 	// we only do the clean up when the listener has index 0
 	if f.slotIndex != 1 {
 		return nil

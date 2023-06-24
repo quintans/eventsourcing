@@ -20,7 +20,6 @@ type EventHandler interface {
 
 func NewRootAggregate(aggregate EventHandler) RootAggregate {
 	return RootAggregate{
-		events:       []Eventer{},
 		eventHandler: aggregate,
 	}
 }
@@ -30,9 +29,9 @@ type RootAggregate struct {
 	eventHandler EventHandler
 }
 
-func (a RootAggregate) PopEvents() []Eventer {
+func (a *RootAggregate) PopEvents() []Eventer {
 	evs := a.events
-	a.events = []Eventer{}
+	a.events = nil
 	return evs
 }
 

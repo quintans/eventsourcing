@@ -76,7 +76,7 @@ type ChangeEvent struct {
 	FullDocument Event `bson:"fullDocument,omitempty"`
 }
 
-func (f Feed) Run(ctx context.Context) error {
+func (f *Feed) Run(ctx context.Context) error {
 	f.logger.Infof("Starting Feed for '%s.%s'", f.dbName, f.eventsCollection)
 	var lastResumeToken []byte
 	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
@@ -143,7 +143,7 @@ func (f Feed) Run(ctx context.Context) error {
 			if err != nil {
 				return faults.Wrap(backoff.Permanent(err))
 			}
-			event := eventsourcing.Event{
+			event := &eventsourcing.Event{
 				ID: id,
 				// the resume token should be from the last fully completed sinked doc, because it may fail midway.
 				// We should use the last eventID to filter out the ones that were successfully sent.
@@ -155,7 +155,7 @@ func (f Feed) Run(ctx context.Context) error {
 				Kind:             eventDoc.Kind,
 				Body:             eventDoc.Body,
 				IdempotencyKey:   eventDoc.IdempotencyKey,
-				Metadata:         encoding.JsonOfMap(eventDoc.Metadata),
+				Metadata:         encoding.JSONOfMap(eventDoc.Metadata),
 				CreatedAt:        eventDoc.CreatedAt,
 				Migrated:         eventDoc.Migrated,
 			}

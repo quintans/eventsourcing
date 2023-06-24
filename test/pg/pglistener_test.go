@@ -1,3 +1,5 @@
+//go:build pg
+
 package pg
 
 import (
@@ -27,7 +29,7 @@ func TestPgListener(t *testing.T) {
 	require.NoError(t, err)
 	defer tearDown()
 
-	repository, err := postgresql.NewStore(dbConfig.Url())
+	repository, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
 
 	quit := make(chan os.Signal, 1)
@@ -38,7 +40,7 @@ func TestPgListener(t *testing.T) {
 
 	errCh := feeding(ctx, dbConfig, repository, s)
 
-	es := eventsourcing.NewEventStore(repository, test.NewJSONCodec(), eventsourcing.WithSnapshotThreshold(3))
+	es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
 	acc, _ := test.CreateAccount("Paulo", id, 100)
@@ -62,7 +64,7 @@ func TestPgListener(t *testing.T) {
 func feeding(ctx context.Context, dbConfig DBConfig, repository player.Repository, sinker sink.Sinker) chan error {
 	errCh := make(chan error, 1)
 	done := make(chan struct{})
-	listener := postgresql.NewFeedListenNotify(logger, dbConfig.ReplicationUrl(), repository, "events_channel", sinker)
+	listener := postgresql.NewFeedListenNotify(logger, dbConfig.ReplicationURL(), repository, "events_channel", sinker)
 	go func() {
 		close(done)
 		err := listener.Run(ctx)

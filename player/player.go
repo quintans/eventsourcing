@@ -22,7 +22,7 @@ type Replayer interface {
 
 type Repository interface {
 	GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error)
-	GetEvents(ctx context.Context, afterMessageID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error)
+	GetEvents(ctx context.Context, afterMessageID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]*eventsourcing.Event, error)
 }
 
 type Start int
@@ -42,7 +42,7 @@ type Player struct {
 	batchSize int
 	// lag to account for on same millisecond concurrent inserts and clock skews
 	trailingLag  time.Duration
-	customFilter func(eventsourcing.Event) bool
+	customFilter func(*eventsourcing.Event) bool
 }
 
 func WithBatchSize(batchSize int) Option {
@@ -59,7 +59,7 @@ func WithTrailingLag(trailingLag time.Duration) Option {
 	}
 }
 
-func WithCustomFilter(fn func(events eventsourcing.Event) bool) Option {
+func WithCustomFilter(fn func(events *eventsourcing.Event) bool) Option {
 	return func(p *Player) {
 		p.customFilter = fn
 	}

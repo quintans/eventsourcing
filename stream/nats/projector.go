@@ -3,42 +3,51 @@ package nats
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/teris-io/shortid"
 
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
+	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/worker"
 )
-
-type Projector struct {
-	logger         log.Logger
-	nc             *nats.Conn
-	stream         nats.JetStreamContext
-	locker         lock.WaitLocker
-	resumeStore    projection.ResumeStore
-	projectionName string
-	handlers       []ProjectionHandler
-	workers        []worker.Worker
-}
 
 func NewProjector(
 	ctx context.Context,
 	logger log.Logger,
 	url string,
-	locker lock.WaitLocker,
+	lockerFactory projection.LockerFactory,
+	catchUpLockerFactory projection.WaitLockerFactory,
 	resumeStore projection.ResumeStore,
+	resumeKey projection.ResumeKey,
 	projectionName string,
-) (*Projector, error) {
+	topic string,
+	catchUpCallback projection.CatchUpCallback,
+	handler projection.EventHandlerFunc,
+) (*worker.RunWorker, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
 		return nil, faults.Errorf("Could not instantiate NATS connection: %w", err)
 	}
-	p, err := NewProjectorWithConn(ctx, logger, nc, locker, resumeStore, projectionName)
+	w, err := NewProjectorWithConn(
+		ctx,
+		logger,
+		nc,
+		lockerFactory,
+		catchUpLockerFactory,
+		resumeStore,
+		resumeKey,
+		projectionName,
+		topic,
+		catchUpCallback,
+		handler,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -47,17 +56,22 @@ func NewProjector(
 		nc.Close()
 	}()
 
-	return p, nil
+	return w, nil
 }
 
 func NewProjectorWithConn(
 	ctx context.Context,
 	logger log.Logger,
 	nc *nats.Conn,
-	locker lock.WaitLocker,
+	lockerFactory projection.LockerFactory,
+	catchUpLockerFactory projection.WaitLockerFactory,
 	resumeStore projection.ResumeStore,
+	resumeKey projection.ResumeKey,
 	projectionName string,
-) (*Projector, error) {
+	topic string,
+	catchUpCallback projection.CatchUpCallback,
+	handler projection.EventHandlerFunc,
+) (*worker.RunWorker, error) {
 	stream, err := nc.JetStream()
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -66,197 +80,210 @@ func NewProjectorWithConn(
 	logger = logger.WithTags(log.Tags{
 		"projection": projectionName,
 	})
-	return &Projector{
-		nc:             nc,
-		stream:         stream,
-		logger:         logger,
-		locker:         locker,
-		projectionName: projectionName,
-		resumeStore:    resumeStore,
-	}, nil
+	subscriber := NewSubscriber(logger, stream, resumeStore, resumeKey)
+	return projection.NewProjector(
+		ctx,
+		logger,
+		lockerFactory,
+		catchUpLockerFactory,
+		resumeStore,
+		subscriber,
+		catchUpCallback,
+		handler,
+	), nil
 }
 
-func (p *Projector) AddTopicHandler(topic string, partitions uint32, handler projection.EventHandlerFunc) {
-	p.handlers = append(p.handlers, ProjectionHandler{
-		topic:      topic,
-		partitions: partitions,
-		handler:    handler,
+type SubOption func(*Subscriber)
+
+func WithMsgCodec(codec sink.Codec) SubOption {
+	return func(r *Subscriber) {
+		r.messageCodec = codec
+	}
+}
+
+var _ projection.Subscriber = (*Subscriber)(nil)
+
+type Subscriber struct {
+	logger       log.Logger
+	jetStream    nats.JetStreamContext
+	resumeStore  projection.ResumeStore
+	resumeKey    projection.ResumeKey
+	messageCodec sink.Codec
+
+	mu           sync.RWMutex
+	done         chan struct{}
+	subscription *nats.Subscription
+}
+
+func NewSubscriber(
+	logger log.Logger,
+	jetStream nats.JetStreamContext,
+	resumeStore projection.ResumeStore,
+	resumeKey projection.ResumeKey,
+	options ...SubOption,
+) *Subscriber {
+	s := &Subscriber{
+		logger:       logger,
+		jetStream:    jetStream,
+		resumeStore:  resumeStore,
+		resumeKey:    resumeKey,
+		messageCodec: sink.JSONCodec{},
+	}
+	s.logger = logger.WithTags(log.Tags{
+		"id": shortid.MustGenerate(),
 	})
+
+	for _, o := range options {
+		o(s)
+	}
+
+	return s
 }
 
-/*
-	Project creates subscribes to all events streams and process them.
+func (s *Subscriber) ResumeKey() projection.ResumeKey {
+	return s.resumeKey
+}
 
-	It will check if it needs to do a catch up.
-	If so, it will try acquire a lock and run a projection catchup.
-	If it is unable to acquire the lock because it is held by another process, it will wait for its release.
-	In the end it will fire up the subscribers.
-	All this will happen in a separate go routine allowing the service to completely to start up.
+func (s *Subscriber) RetrieveLastResume(ctx context.Context) (projection.Resume, error) {
+	ch := make(chan projection.Resume)
+	// this will position the stream at the last position+1
+	sub, err := s.jetStream.Subscribe(
+		s.resumeKey.Topic().String(),
+		func(m *nats.Msg) {
+			evt, err := s.messageCodec.Decode(m.Data)
+			if err != nil {
+				s.logger.WithError(err).Errorf("unmarshal to event '%s'", string(m.Data))
+				er := m.Nak()
+				if er != nil {
+					s.logger.WithError(er).Errorf("NAK event '%s'", string(m.Data))
+				}
+				return
+			}
 
-	After a successfull projection creation, subsequent start up will no longer execute the catch up function. This can be used to migrate projections,
-	where a completely new projection will be populated.
+			seq := sequence(m)
+			token := strconv.FormatUint(seq, 10)
 
-	The catch up function should replay all events from all event stores needed for this projection.
-*/
-func (p *Projector) Project(
-	ctx context.Context,
-	catchUp func(context.Context, []projection.Resume) error,
-) (<-chan struct{}, error) {
-	if len(p.handlers) == 0 {
-		return nil, faults.Errorf("no handlers defined for projector %s", p.projectionName)
+			ch <- projection.Resume{
+				Topic:   s.resumeKey.Topic(),
+				EventID: evt.ID,
+				Token:   projection.NewToken(projection.ConsumerToken, token),
+			}
+			m.Ack()
+		},
+		nats.DeliverLast(),
+		nats.MaxDeliver(2),
+	)
+	if err != nil {
+		return projection.Resume{}, faults.Wrap(err)
+	}
+	defer sub.Unsubscribe()
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	var resume projection.Resume
+	select {
+	case resume = <-ch:
+	case <-ctx.Done():
+		return projection.Resume{}, faults.New("failed to get subscription to last event ID")
+	}
+	return resume, nil
+}
+
+func (s *Subscriber) RecordLastResume(ctx context.Context, token projection.Token) error {
+	return s.resumeStore.SetStreamResumeToken(ctx, s.resumeKey, token)
+}
+
+func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) error {
+	logger := s.logger.WithTags(log.Tags{"topic": s.resumeKey.Topic()})
+	opts := projection.ConsumerOptions{
+		AckWait: 30 * time.Second,
+	}
+	for _, v := range options {
+		v(&opts)
 	}
 
-	var subscribers []*Subscriber
-	consumerFactory := func(ctx context.Context, resume projection.ResumeKey) (projection.Consumer, error) {
-		sub := NewSubscriber(p.logger, p.stream, p.resumeStore, resume)
-		subscribers = append(subscribers, sub)
-		return sub, nil
+	var startOption nats.SubOpt
+	token, err := s.resumeStore.GetStreamResumeToken(ctx, s.resumeKey)
+	if err != nil && !errors.Is(err, projection.ErrResumeTokenNotFound) {
+		return faults.Errorf("Could not retrieve resume token for '%s': %w", s.resumeKey, err)
 	}
-
-	for _, h := range p.handlers {
-		// create workers according to the topic that we want to listen
-		w, err := projection.UnmanagedWorkers(ctx, p.logger, p.projectionName, h.topic, h.partitions, consumerFactory, h.handler)
-		if err != nil {
-			return nil, faults.Wrap(err)
+	if token.IsEmpty() {
+		logger.Infof("Starting consuming all available [token key: '%s']", s.resumeKey)
+		// startOption = nats.DeliverAll()
+		startOption = nats.StartSequence(1)
+	} else {
+		logger.Infof("Starting consuming from '%s' [token key: '%s']", token, s.resumeKey)
+		seq, er := strconv.ParseUint(token.Value(), 10, 64)
+		if er != nil {
+			return faults.Errorf("unable to parse resume token '%s': %w", token, er)
 		}
-		p.workers = append(p.workers, w...)
+		startOption = nats.StartSequence(seq + 1) // after seq
+	}
+
+	callback := func(m *nats.Msg) {
+		evt, er := s.messageCodec.Decode(m.Data)
+		if er != nil {
+			logger.WithError(er).Errorf("unable to unmarshal event '%s'", string(m.Data))
+			m.Nak()
+			return
+		}
+		if opts.Filter == nil || opts.Filter(evt) {
+			logger.Debugf("Handling received event '%+v'", evt)
+			er = handler(ctx, evt)
+			if er != nil {
+				logger.WithError(er).Errorf("Error when handling event with ID '%s'", evt.ID)
+				m.Nak()
+				return
+			}
+		}
+
+		seq := sequence(m)
+		if er := m.Ack(); er != nil {
+			logger.WithError(er).Errorf("failed to ACK seq=%d, event=%+v", seq, evt)
+			return
+		}
+	}
+	groupName := s.resumeKey.String()
+	natsOpts := []nats.SubOpt{
+		startOption,
+		nats.Durable(groupName),
+		nats.MaxAckPending(1),
+		nats.AckExplicit(),
+		nats.AckWait(opts.AckWait),
+	}
+	s.subscription, err = s.jetStream.QueueSubscribe(s.resumeKey.Topic().String(), groupName, callback, natsOpts...)
+	if err != nil {
+		return faults.Errorf("failed to subscribe to %s: %w", s.resumeKey.Topic(), err)
 	}
 
 	done := make(chan struct{})
-
+	s.mu.Lock()
+	s.done = done
+	s.mu.Unlock()
 	go func() {
-		err := p.catchUp(ctx, subscribers, catchUp)
-		if err != nil {
-			p.logger.WithError(err).Error("Failed to catchup projection '%s'", p.projectionName)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			s.StopConsumer(context.Background())
 		}
-		p.boot(ctx, done)
 	}()
-	return done, nil
-}
-
-func (p *Projector) catchUp(
-	ctx context.Context,
-	subscribers []*Subscriber,
-	catchUp func(context.Context, []projection.Resume) error,
-) error {
-	// check if it should catch up
-	ok, err := p.shouldCatchup(ctx, subscribers)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-	if !ok {
-		return nil
-	}
-	// lock
-	for {
-		_, err = p.locker.Lock(ctx)
-		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
-			p.locker.WaitForUnlock(ctx)
-			continue
-		} else if err != nil {
-			faults.Wrap(err)
-		}
-
-		defer p.locker.Unlock(context.Background())
-		break
-	}
-	// recheck if it should catch up
-	ok, err = p.shouldCatchup(ctx, subscribers)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-	if !ok {
-		return nil
-	}
-
-	logger := p.logger.WithTags(log.Tags{
-		"method": "Projector.catchUp",
-	})
-
-	logger.Info("Retrieving subscriptions last position")
-	resumes, err := retrieveResumes(ctx, subscribers)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-
-	logger.Info("Catching up projection")
-	err = catchUp(ctx, resumes)
-	if err != nil {
-		return faults.Errorf("failed executing catch up function for projection '%s': %w", p.projectionName, err)
-	}
-
-	logger.Info("Recording subscriptions positions")
-	err = recordResumeTokens(ctx, subscribers, resumes)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-
 	return nil
 }
 
-func (p *Projector) shouldCatchup(ctx context.Context, subscribers []*Subscriber) (bool, error) {
-	for _, sub := range subscribers {
-		_, err := p.resumeStore.GetStreamResumeToken(ctx, sub.resumeKey)
-		// if there is at leat one token that it is not defined it means that the last execution failed
-		// and needs to be attempted again.
-		if errors.Is(err, projection.ErrResumeTokenNotFound) {
-			return true, nil
-		}
-		if err != nil {
-			return false, faults.Wrap(err)
-		}
-
-	}
-	return false, nil
-}
-
-func (p *Projector) boot(ctx context.Context, done chan struct{}) {
-	for _, w := range p.workers {
-		w.Start(ctx)
+func (s *Subscriber) StopConsumer(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done == nil {
+		return
 	}
 
-	go func() {
-		<-ctx.Done()
-		for _, w := range p.workers {
-			w.Stop(context.Background())
-		}
-		close(done)
-	}()
-}
-
-func retrieveResumes(ctx context.Context, subscribers []*Subscriber) ([]projection.Resume, error) {
-	var max time.Time
-	var resumes []projection.Resume
-	for _, sub := range subscribers {
-		resume, err := sub.RetrieveLastResume(ctx)
-		if err != nil {
-			return nil, faults.Wrap(err)
-		}
-		// add offset to compensate clock skews
-		resume.EventID = resume.EventID.OffsetTime(time.Second)
-		resumes = append(resumes, resume)
-
-		// max time
-		t := resume.EventID.Time()
-		if t.After(max) {
-			max = t
-		}
+	err := s.subscription.Unsubscribe()
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to unsubscribe from '%s'", s.resumeKey.Topic())
+	} else {
+		s.logger.Infof("Unsubscribed from '%s'", s.resumeKey.Topic())
 	}
 
-	// wait for the safety offset to have passed
-	now := time.Now()
-	if max.After(now) {
-		time.Sleep(max.Sub(now))
-	}
-
-	return resumes, nil
-}
-
-func recordResumeTokens(ctx context.Context, subscribers []*Subscriber, resumes []projection.Resume) error {
-	for k, sub := range subscribers {
-		if err := sub.RecordLastResume(ctx, resumes[k].Token); err != nil {
-			return faults.Wrap(err)
-		}
-	}
-	return nil
+	s.subscription = nil
+	close(s.done)
+	s.done = nil
 }

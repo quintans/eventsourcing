@@ -1,3 +1,5 @@
+//go:build redis
+
 package redlock_test
 
 import (
@@ -49,7 +51,7 @@ func SetupRedis(ctx context.Context) (testcontainers.Container, string, error) {
 }
 
 func TestRedis(t *testing.T) {
-	LOCK_KEY := "123"
+	lockKey := "123"
 	ctx := context.Background()
 	container, addr, err := SetupRedis(ctx)
 	require.NoError(t, err)
@@ -58,7 +60,7 @@ func TestRedis(t *testing.T) {
 	pool1 := redlock.NewPool(addr)
 	require.NoError(t, err)
 
-	lock1 := pool1.NewLock(LOCK_KEY, redlock.WithExpiry(10*time.Second))
+	lock1 := pool1.NewLock(lockKey, redlock.WithExpiry(10*time.Second))
 	done1, err := lock1.Lock(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, done1, "Expected to acquire lock")
@@ -68,7 +70,7 @@ func TestRedis(t *testing.T) {
 	pool2 := redlock.NewPool(addr)
 	require.NoError(t, err)
 
-	lock2 := pool2.NewLock(LOCK_KEY, redlock.WithExpiry(10*time.Second))
+	lock2 := pool2.NewLock(lockKey, redlock.WithExpiry(10*time.Second))
 	_, err = lock2.Lock(ctx)
 	require.ErrorIs(t, err, lock.ErrLockAlreadyAcquired)
 
@@ -80,17 +82,17 @@ func TestRedis(t *testing.T) {
 	require.NotNil(t, done2, "Expected to acquire lock")
 
 	start := time.Now()
-	wait := 3 * time.Second
+	pause := 3 * time.Second
 
 	go func() {
-		time.Sleep(wait)
-		err := lock2.Unlock(ctx)
-		require.NoError(t, err)
+		time.Sleep(pause)
+		er := lock2.Unlock(ctx)
+		require.NoError(t, er)
 	}()
 
 	err = lock1.WaitForUnlock(ctx)
 	require.NoError(t, err)
-	require.True(t, time.Since(start) > wait, "Waiting duration for lock was too short")
+	require.True(t, time.Since(start) > pause, "Waiting duration for lock was too short")
 
 	_, err = lock1.Lock(ctx)
 	require.NoError(t, err)

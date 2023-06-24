@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -22,11 +23,11 @@ type DBConfig struct {
 	Password string
 }
 
-func (c DBConfig) ReplicationUrl() string {
-	return c.Url() + "&replication=database"
+func (c DBConfig) ReplicationURL() string {
+	return c.URL() + "&replication=database"
 }
 
-func (c DBConfig) Url() string {
+func (c DBConfig) URL() string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 
@@ -51,6 +52,7 @@ func setup() (DBConfig, func(), error) {
 		},
 		WaitingFor: wait.ForListeningPort(natPort),
 	}
+	time.Sleep(3 * time.Second)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,

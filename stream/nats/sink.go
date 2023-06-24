@@ -14,9 +14,9 @@ import (
 	"github.com/quintans/eventsourcing/util"
 )
 
-var _ sink.Sinker = (*NatsSink)(nil)
+var _ sink.Sinker = (*Sink)(nil)
 
-type NatsSink struct {
+type Sink struct {
 	logger     log.Logger
 	topic      string
 	nc         *nats.Conn
@@ -26,14 +26,14 @@ type NatsSink struct {
 }
 
 // NewSink instantiate nats sink
-func NewSink(logger log.Logger, topic string, partitions uint32, url string, options ...nats.Option) (_ *NatsSink, err error) {
+func NewSink(logger log.Logger, topic string, partitions uint32, url string, options ...nats.Option) (_ *Sink, err error) {
 	defer faults.Catch(&err, "NewSink(topic=%s, partitions=%d)", topic, partitions)
 
-	p := &NatsSink{
+	p := &Sink{
 		logger:     logger,
 		topic:      topic,
 		partitions: partitions,
-		codec:      sink.JsonCodec{},
+		codec:      sink.JSONCodec{},
 	}
 
 	nc, err := nats.Connect(url, options...)
@@ -48,12 +48,20 @@ func NewSink(logger log.Logger, topic string, partitions uint32, url string, opt
 	p.js = js
 
 	if partitions <= 1 {
-		if err := createStream(logger, js, util.NewPartitionedTopic(topic, 0)); err != nil {
+		t, err := util.NewPartitionedTopic(topic, 0)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		if err := createStream(logger, js, t); err != nil {
 			return nil, faults.Wrap(err)
 		}
 	} else {
 		for p := uint32(1); p <= partitions; p++ {
-			if err := createStream(logger, js, util.NewPartitionedTopic(topic, p)); err != nil {
+			t, err := util.NewPartitionedTopic(topic, 0)
+			if err != nil {
+				return nil, faults.Wrap(err)
+			}
+			if err := createStream(logger, js, t); err != nil {
 				return nil, faults.Wrap(err)
 			}
 		}
@@ -62,25 +70,28 @@ func NewSink(logger log.Logger, topic string, partitions uint32, url string, opt
 	return p, nil
 }
 
-func (p *NatsSink) SetCodec(codec sink.Codec) {
+func (p *Sink) SetCodec(codec sink.Codec) {
 	p.codec = codec
 }
 
-func (p *NatsSink) Close() {
+func (p *Sink) Close() {
 	if p.nc != nil {
 		p.nc.Close()
 	}
 }
 
 // LastMessage gets the last message sent to NATS
-func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsourcing.Event, error) {
+func (p *Sink) LastMessage(ctx context.Context, partition uint32) (*eventsourcing.Event, error) {
 	type message struct {
 		sequence uint64
 		data     []byte
 	}
-	topic := util.NewPartitionedTopic(p.topic, partition)
+	topic, err := util.NewPartitionedTopic(p.topic, partition)
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
 	ch := make(chan message)
-	_, err := p.js.Subscribe(
+	_, err = p.js.Subscribe(
 		topic.String(),
 		func(m *nats.Msg) {
 			ch <- message{
@@ -108,17 +119,25 @@ func (p *NatsSink) LastMessage(ctx context.Context, partition uint32) (*eventsou
 		return nil, err
 	}
 
-	return &event, nil
+	return event, nil
+}
+
+func sequence(m *nats.Msg) uint64 {
+	md, _ := m.Metadata()
+	return md.Sequence.Stream
 }
 
 // Sink sends the event to the message queue
-func (p *NatsSink) Sink(ctx context.Context, e eventsourcing.Event) error {
+func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event) error {
 	b, err := p.codec.Encode(e)
 	if err != nil {
 		return err
 	}
 
-	topic := util.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
+	topic, err := util.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
+	if err != nil {
+		return faults.Wrap(err)
+	}
 	p.logger.WithTags(log.Tags{
 		"topic": topic,
 	}).Debugf("publishing '%+v'", e)
@@ -128,11 +147,11 @@ func (p *NatsSink) Sink(ctx context.Context, e eventsourcing.Event) error {
 	bo.MaxElapsedTime = 10 * time.Second
 
 	err = backoff.Retry(func() error {
-		_, err := p.js.Publish(topic.String(), b)
-		if err != nil && p.nc.IsClosed() {
-			return backoff.Permanent(err)
+		_, er := p.js.Publish(topic.String(), b)
+		if er != nil && p.nc.IsClosed() {
+			return backoff.Permanent(er)
 		}
-		return err
+		return er
 	}, bo)
 	if err != nil {
 		return faults.Errorf("failed to send message %+v on topic %s: %w", e, topic, err)

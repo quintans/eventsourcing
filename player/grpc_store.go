@@ -54,7 +54,7 @@ func (c GrpcRepository) GetLastEventID(ctx context.Context, trailingLag time.Dur
 	return eID, nil
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]eventsourcing.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]*eventsourcing.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -75,7 +75,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 		return nil, faults.Errorf("could not get events: %w", err)
 	}
 
-	events := make([]eventsourcing.Event, len(r.Events))
+	events := make([]*eventsourcing.Event, len(r.Events))
 	for k, v := range r.Events {
 		createdAt, err := tsToTime(v.CreatedAt)
 		if err != nil {
@@ -85,7 +85,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 		if err != nil {
 			return nil, faults.Errorf("unable to parse message ID '%s': %w", v.Id, err)
 		}
-		events[k] = eventsourcing.Event{
+		events[k] = &eventsourcing.Event{
 			ID:               eID,
 			AggregateID:      v.AggregateId,
 			AggregateIDHash:  v.AggregateIdHash,
@@ -94,7 +94,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterEventID eventid.Even
 			Kind:             eventsourcing.Kind(v.Kind),
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
-			Metadata:         encoding.JsonOfString(v.Metadata),
+			Metadata:         encoding.JSONOfString(v.Metadata),
 			CreatedAt:        *createdAt,
 			Migrated:         v.Migrated,
 		}

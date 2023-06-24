@@ -33,7 +33,7 @@ type AccountCreated struct {
 }
 
 func (e AccountCreated) GetKind() eventsourcing.Kind {
-	return "AccountCreated"
+	return KindAccountCreated
 }
 
 type MoneyWithdrawn struct {
@@ -82,7 +82,7 @@ func NewJSONCodec() *jsoncodec.Codec {
 
 func CreateAccount(owner string, id ulid.ULID, money int64) (*Account, error) {
 	a := NewAccount()
-	if err := a.ApplyChange(AccountCreated{
+	if err := a.root.ApplyChange(&AccountCreated{
 		Id:    id,
 		Money: money,
 		Owner: owner,
@@ -94,12 +94,12 @@ func CreateAccount(owner string, id ulid.ULID, money int64) (*Account, error) {
 
 func NewAccount() *Account {
 	a := &Account{}
-	a.RootAggregate = eventsourcing.NewRootAggregate(a)
+	a.root = eventsourcing.NewRootAggregate(a)
 	return a
 }
 
 type Account struct {
-	eventsourcing.RootAggregate `json:"-"`
+	root eventsourcing.RootAggregate `json:"-"`
 
 	id      ulid.ULID
 	status  Status
@@ -107,37 +107,44 @@ type Account struct {
 	owner   string
 }
 
-func (a Account) GetID() string {
+func (a *Account) PopEvents() []eventsourcing.Eventer {
+	return a.root.PopEvents()
+}
+
+func (a *Account) GetID() string {
+	if a == nil {
+		return ""
+	}
 	return a.id.String()
 }
 
-func (a Account) ID() ulid.ULID {
+func (a *Account) ID() ulid.ULID {
 	return a.id
 }
 
-func (a Account) Status() Status {
+func (a *Account) Status() Status {
 	return a.status
 }
 
-func (a Account) Balance() int64 {
+func (a *Account) Balance() int64 {
 	return a.balance
 }
 
-func (a Account) Owner() string {
+func (a *Account) Owner() string {
 	return a.owner
 }
 
-func (a *Account) Forget() error {
-	return a.HandleEvent(OwnerUpdated{})
+func (a *Account) Forget() {
+	a.owner = ""
 }
 
-func (a Account) GetKind() eventsourcing.Kind {
+func (a *Account) GetKind() eventsourcing.Kind {
 	return KindAccount
 }
 
 func (a *Account) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		err := a.ApplyChange(MoneyWithdrawn{Money: money})
+		err := a.root.ApplyChange(&MoneyWithdrawn{Money: money})
 		if err != nil {
 			return false, err
 		}
@@ -147,23 +154,23 @@ func (a *Account) Withdraw(money int64) (bool, error) {
 }
 
 func (a *Account) Deposit(money int64) error {
-	return a.ApplyChange(MoneyDeposited{Money: money})
+	return a.root.ApplyChange(&MoneyDeposited{Money: money})
 }
 
 func (a *Account) UpdateOwner(owner string) error {
-	return a.ApplyChange(OwnerUpdated{Owner: owner})
+	return a.root.ApplyChange(&OwnerUpdated{Owner: owner})
 }
 
 func (a *Account) HandleEvent(event eventsourcing.Eventer) error {
 	switch t := event.(type) {
-	case AccountCreated:
-		a.HandleAccountCreated(t)
-	case MoneyDeposited:
-		a.HandleMoneyDeposited(t)
-	case MoneyWithdrawn:
-		a.HandleMoneyWithdrawn(t)
-	case OwnerUpdated:
-		a.HandleOwnerUpdated(t)
+	case *AccountCreated:
+		a.HandleAccountCreated(*t)
+	case *MoneyDeposited:
+		a.HandleMoneyDeposited(*t)
+	case *MoneyWithdrawn:
+		a.HandleMoneyWithdrawn(*t)
+	case *OwnerUpdated:
+		a.HandleOwnerUpdated(*t)
 	default:
 		return faults.Errorf("unknown event '%s' for '%s'", event.GetKind(), a.GetKind())
 	}

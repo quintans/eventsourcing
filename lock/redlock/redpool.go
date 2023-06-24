@@ -27,13 +27,13 @@ func NewPool(addresses string) *Pool {
 }
 
 // NewMutex returns a new distributed mutex with given name.
-func (r *Pool) NewLock(name string, options ...RedisOption) *Lock {
+func (p *Pool) NewLock(name string, options ...RedisOption) *Lock {
 	m := &Lock{
 		name:   name,
 		expiry: 8 * time.Second,
 		factor: 0.01,
-		quorum: len(r.pool)/2 + 1,
-		pool:   r,
+		quorum: len(p.pool)/2 + 1,
+		pool:   p,
 	}
 	for _, o := range options {
 		o(m)
