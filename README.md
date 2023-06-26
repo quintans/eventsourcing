@@ -247,14 +247,16 @@ A poller process can then poll the database for new events. The events can be pu
 
 > Consuming events is discuss in more detail below, in CQRS section. 
 
-But there is a catch, regarding the ID order of the events. Even if we use a single node writer, records might not become available in the same order as the ID order.
+But there is a catch. How do we decide what key to use as a cursor to track what event was already pushed to the MQ? 
+
+We could us a monotonic ID to track the events, but even if we use a single node writer, records might not become available in the same order as the ID order.
 
 Consider two concurrent transactions relying on database sequence. One acquires the ID 100 and the other the ID 101. If the one with ID 101 is faster to finish the transaction, it will show up first in a query than the one with ID 100. The same applies to time based IDs.
 Unless we take some precautions, records will not always be polled in the expected order.
 
 If we have a polling process that relies on this number to determine from where to start polling, it could miss the last added record, and this could lead to events not being tracked.
 
-But there is a solution. If we only retrieve events older than X milliseconds, we allow the concurrent transactions to complete and mitigate any clock skews.
+A possible solution is to only retrieve events older than X milliseconds, allowing any concurrent transactions to complete and mitigate any clock skews.
 
 An example of how this could be done in PostgreSQL:
 
@@ -266,14 +268,18 @@ ORDER BY id ASC
 LIMIT 100
 ```
 
-This polling strategy can be used both with SQL and NoSQL databases, like Postgresql or MongoDB, to name a few.
+Unfortunately clock skews can be bigger than 1s, although this is unlikely. Also, events that depend on others will have an accumulated delay due to the time delay applied to the query.
+
+Because of the concerns above I ended up using a different solution. Whenever we publish an event to a MQ we mark the event record as published with the sequence value returned by the MQ. It is assumed that the a monotonic sequence is returned. Systems like NATS JetStream or Apache Pulsar, return a monotonic number on publish.
+
+This kind of polling strategy can be used both with SQL and NoSQL databases, like Postgresql or MongoDB, to name a few.
 
 Advantages:
 * Easy to implement
 
 Disadvantages
 * Network costs. If the data is updated infrequently we will be polling with no results. On the other hand, if the data change frequency is hight then there will be no difference.
-* events that depend on others will have an accumulated delay due to the time delay applied to the query.
+
 
 ### NoSQL
 
@@ -442,25 +448,26 @@ Next I present a possible architecture.
 
 ![CQRS](cqrs-es.png)
 
-The write service writes to the database, the changes are captured by the Forwarder service and published to the event bus. The read service listen to the event bus and updates the views according to the received events.
+The write service writes to the database, the changes are captured by the Forwarder component and published to the event bus. The read service listen to the event bus and updates the views according to the received events.
 
-> The Forwarder service process could instead be inside the write service since it has direct access to the database.
-> 
-> **Pros**: it decreasing the complexity of the architecture
-> 
-> **Cons**: if we want to cut off the stream of events (for example, to increase partitions) it would be more work. This could be easily overcome by using some flag to enable/disable the forwarding of events.
+The forwarder cold be a separate service but that would mean accessing a database of another service, but that usually is frown upon.
 
-If the Forwarder service fails to write into the event bus, it will try again. If it restarts, it queries the event bus for the last message and start polling the database from there.
+If the Forwarder component fails to write into the event bus, it will try again. If it restarts, it queries the event bus for the last message and start polling the database from there.
 > If it is not possible to get the last published message to the event bus, we can store it in a database.
 > Writing repeated messages to the event bus is not a concern, since it is the job of the projector to be idempotent, discarding repeated messages.
 
 ### Replay
 
-Considering that the event bus should have a limited message retention window, replaying messages from a certain point in time can be achieved in the following manner:
-1) Stop the respective consumer
+Every time a forwarder component restarts, it needs to replay all the events that were generated while it was offline
+(if there is another replica, probably it took over).
+
+Considering that the event bus should have a limited message retention window (X days), replaying messages from a certain point in time can be achieved in the following manner:
 1) get the position of the last message from the event bus
-1) consume events from the event store until we reach the event matching the previous event bus position
-1) resume listening the event bus from the position of 2)
+1) get the position(s) of the last event(s) consumed by the projection
+1) replay events from the event store from the last stored position until we reach the event matching the previous event bus position
+1) resume listening the event bus from the position of 1)
+
+Whenever a projection needs a breaking change, it is better to create a new version of the projection, let it catch up and then switch to it.
 
 ### GDPR
 
