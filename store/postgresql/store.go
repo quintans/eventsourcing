@@ -40,6 +40,7 @@ type Event struct {
 	CreatedAt        time.Time          `db:"created_at"`
 	Migration        int                `db:"migration"`
 	Migrated         bool               `db:"migrated"`
+	Sequence         uint64             `db:"sink_seq"`
 }
 
 // NilString converts nil to empty string
@@ -341,57 +342,68 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	return nil
 }
 
-func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error) {
+func (r *EsRepository) GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error) {
 	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events ")
+	query.WriteString("SELECT MAX(sink_seq) FROM events WHERE migration = 0")
 	args := []interface{}{}
-	if trailingLag != time.Duration(0) {
-		safetyMargin := time.Now().UTC().Add(-trailingLag)
-		args = append(args, safetyMargin)
-		query.WriteString("created_at <= $1 ")
-	}
 	args = buildFilter(filter, &query, args)
-	query.WriteString(" ORDER BY id DESC LIMIT 1")
-	var eventID eventid.EventID
-	if err := r.db.GetContext(ctx, &eventID, query.String(), args...); err != nil {
+	var seq uint64
+	if err := r.db.GetContext(ctx, &seq, query.String(), args...); err != nil {
 		if err != sql.ErrNoRows {
-			return eventid.Zero, faults.Errorf("unable to get the last event ID: %w", err)
+			return 0, faults.Errorf("unable to get the last event ID: %w", err)
 		}
 	}
 
-	return eventID, nil
+	return seq, nil
 }
 
-func (r *EsRepository) GetEvents(ctx context.Context, afterEventID eventid.EventID, batchSize int, trailingLag time.Duration, filter store.Filter) ([]*eventsourcing.Event, error) {
-	var records []*eventsourcing.Event
-	for len(records) < batchSize {
-		var query bytes.Buffer
-		query.WriteString("SELECT * FROM events WHERE id > $1 ")
-		args := []interface{}{afterEventID.String()}
-		if trailingLag != time.Duration(0) {
-			safetyMargin := time.Now().UTC().Add(-trailingLag)
-			args = append(args, safetyMargin)
-			query.WriteString("AND created_at <= $2 ")
-		}
-		args = buildFilter(filter, &query, args)
-		query.WriteString(" ORDER BY id ASC")
-		if batchSize > 0 {
-			query.WriteString(" LIMIT ")
-			query.WriteString(strconv.Itoa(batchSize))
-		}
-
-		rows, err := r.queryEvents(ctx, query.String(), args...)
-		if err != nil {
-			return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", afterEventID, filter, err)
-		}
-		if len(rows) == 0 {
-			return records, nil
-		}
-
-		afterEventID = rows[len(rows)-1].ID
-		records = rows
+func (r *EsRepository) GetEvents(ctx context.Context, afterSeq uint64, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
+	var query bytes.Buffer
+	query.WriteString("SELECT * FROM events WHERE sink_seq > $1 AND migration = 0")
+	args := []interface{}{afterSeq}
+	args = buildFilter(filter, &query, args)
+	query.WriteString(" ORDER BY sink_seq ASC")
+	if batchSize > 0 {
+		query.WriteString(" LIMIT ")
+		query.WriteString(strconv.Itoa(batchSize))
 	}
-	return records, nil
+
+	rows, err := r.queryEvents(ctx, query.String(), args...)
+	if err != nil {
+		return nil, faults.Errorf("unable to get events after '%d' for filter %+v: %w", afterSeq, filter, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	return rows, nil
+}
+
+func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
+	var query bytes.Buffer
+	query.WriteString("SELECT * FROM events WHERE sink_seq = 0 AND migration = 0")
+	args := []interface{}{}
+	args = buildFilter(filter, &query, args)
+	query.WriteString(" ORDER BY id ASC")
+	if batchSize > 0 {
+		query.WriteString(" LIMIT ")
+		query.WriteString(strconv.Itoa(batchSize))
+	}
+
+	rows, err := r.queryEvents(ctx, query.String(), args...)
+	if err != nil {
+		return nil, faults.Errorf("unable to get pending events after for filter %+v: %w", filter, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	return rows, nil
+}
+
+func (r *EsRepository) SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE events SET sink_seq = $1 WHERE ID = $2", seq, eID.String())
+	return faults.Wrapf(err, "unable to forget event ID '%s'", eID, err)
 }
 
 func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {

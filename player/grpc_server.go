@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"time"
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/quintans/faults"
@@ -13,7 +12,6 @@ import (
 	"github.com/quintans/eventsourcing"
 
 	pb "github.com/quintans/eventsourcing/api/proto"
-	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
 )
 
@@ -21,22 +19,19 @@ type GrpcServer struct {
 	store Repository
 }
 
-func (s *GrpcServer) GetLastEventID(ctx context.Context, r *pb.GetLastEventIDRequest) (*pb.GetLastEventIDReply, error) {
+func (s *GrpcServer) GetMaxSeq(ctx context.Context, r *pb.GetMaxSeqRequest) (*pb.GetMaxSeqReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
-	eID, err := s.store.GetLastEventID(ctx, time.Duration(r.TrailingLag)*time.Millisecond, filter)
+	seq, err := s.store.GetMaxSeq(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
-	return &pb.GetLastEventIDReply{EventId: eID.String()}, nil
+	return &pb.GetMaxSeqReply{Sequence: seq}, nil
 }
 
 func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb.GetEventsReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
-	afterEventID, err := eventid.Parse(r.GetAfterEventId())
-	if err != nil {
-		return nil, faults.Errorf("unable to parse afterEventID '%s': %w", r.GetAfterEventId(), err)
-	}
-	events, err := s.store.GetEvents(ctx, afterEventID, int(r.GetLimit()), time.Duration(r.TrailingLag)*time.Millisecond, filter)
+	afterSeq := r.GetAfterSequence()
+	events, err := s.store.GetEvents(ctx, afterSeq, int(r.GetLimit()), filter)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +56,6 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         string(metadata),
 			CreatedAt:        createdAt,
-			Migrated:         v.Migrated,
 		}
 	}
 	return &pb.GetEventsReply{Events: pbEvents}, nil

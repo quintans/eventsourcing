@@ -16,7 +16,6 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/stream/poller"
@@ -153,21 +152,13 @@ func TestPollListener(t *testing.T) {
 	counter := 0
 	repository, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
-	lm := poller.New(logger, repository)
+	p := poller.New(logger, repository)
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-done:
-			logger.Info("Done...")
-		case <-time.After(2 * time.Second):
-			logger.Info("Timeout...")
-		}
-		logger.Info("Cancelling...")
-		cancel()
-	}()
-	err = lm.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
+
+	mockSink := test.NewMockSink(1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if er := es.ApplyChangeFromHistory(acc2, e); er != nil {
 				return er
@@ -180,7 +171,18 @@ func TestPollListener(t *testing.T) {
 		}
 		return nil
 	})
-	require.NoError(t, err)
+
+	go p.Feed(ctx, mockSink)
+
+	select {
+	case <-done:
+		logger.Info("Done...")
+	case <-time.After(2 * time.Second):
+		logger.Info("Timeout...")
+	}
+	logger.Info("Cancelling...")
+	cancel()
+	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, 4, counter)
 	assert.Equal(t, id, acc2.ID())
@@ -221,7 +223,9 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	p := poller.New(logger, repository, poller.WithAggregateKinds(test.KindAccount))
 
 	done := make(chan struct{})
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
+
+	mockSink := test.NewMockSink(1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -234,6 +238,8 @@ func TestListenerWithAggregateKind(t *testing.T) {
 		}
 		return nil
 	})
+
+	go p.Feed(ctx, mockSink)
 
 	select {
 	case <-done:
@@ -288,19 +294,22 @@ func TestListenerWithLabels(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 	errCh := make(chan error, 1)
-	go func() {
-		err := p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
-			if e.AggregateID == id.String() {
-				if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
-					return err
-				}
-				mu.Lock()
-				counter++
-				mu.Unlock()
+
+	mockSink := test.NewMockSink(1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
+		if e.AggregateID == id.String() {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
+				return err
 			}
-			return nil
-		})
-		errCh <- err
+			mu.Lock()
+			counter++
+			mu.Unlock()
+		}
+		return nil
+	})
+
+	go func() {
+		errCh <- p.Feed(ctx, mockSink)
 	}()
 
 	time.Sleep(time.Second)

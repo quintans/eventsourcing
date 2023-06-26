@@ -1,31 +1,31 @@
 package poller
 
 import (
-	"bytes"
 	"context"
 	"time"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/player"
-	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/faults"
 )
 
 const (
 	maxWait = time.Minute
 )
 
+type Repository interface {
+	GetPendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error)
+	SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error
+}
+
 type Poller struct {
-	logger       log.Logger
-	store        player.Repository
-	pollInterval time.Duration
-	limit        int
-	play         player.Player
-	// lag to account for on same millisecond concurrent inserts and clock skews
-	trailingLag    time.Duration
+	logger         log.Logger
+	store          Repository
+	pullInterval   time.Duration
+	limit          int
 	aggregateKinds []eventsourcing.Kind
 	metadata       store.Metadata
 	partitions     uint32
@@ -35,15 +35,9 @@ type Poller struct {
 
 type Option func(*Poller)
 
-func WithTrailingLag(trailingLag time.Duration) Option {
-	return func(r *Poller) {
-		r.trailingLag = trailingLag
-	}
-}
-
 func WithPollInterval(pollInterval time.Duration) Option {
 	return func(p *Poller) {
-		p.pollInterval = pollInterval
+		p.pullInterval = pollInterval
 	}
 }
 
@@ -90,11 +84,10 @@ func WithMetadata(metadata store.Metadata) Option {
 	}
 }
 
-func New(logger log.Logger, repository player.Repository, options ...Option) Poller {
+func New(logger log.Logger, repository Repository, options ...Option) Poller {
 	p := Poller{
 		logger:       logger,
-		pollInterval: 200 * time.Millisecond,
-		trailingLag:  player.TrailingLag,
+		pullInterval: 200 * time.Millisecond,
 		limit:        20,
 		store:        repository,
 	}
@@ -103,36 +96,24 @@ func New(logger log.Logger, repository player.Repository, options ...Option) Pol
 		o(&p)
 	}
 
-	p.play = player.New(repository, player.WithBatchSize(p.limit), player.WithTrailingLag(p.trailingLag))
-
 	return p
 }
 
-func (p *Poller) Poll(ctx context.Context, startOption player.StartOption, handler projection.EventHandlerFunc) error {
-	var afterMsgID eventid.EventID
-	var err error
-	switch startOption.StartFrom() {
-	case player.END:
-		afterMsgID, err = p.store.GetLastEventID(ctx, p.trailingLag, store.Filter{})
-		if err != nil {
-			return err
-		}
-	case player.BEGINNING:
-	case player.SEQUENCE:
-		afterMsgID = startOption.AfterMsgID()
-	}
-	return p.forward(ctx, afterMsgID, handler)
+// Feed forwards the handling to a sink.
+// eg: a message queue
+func (p *Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
+	p.logger.Info("Starting poller feed")
+	p.pull(ctx, sinker)
+	p.logger.Info("Poller feed stopped")
+	return nil
 }
 
-func (p *Poller) forward(ctx context.Context, after eventid.EventID, handler projection.EventHandlerFunc) error {
-	wait := p.pollInterval
-	filters := []store.FilterOption{
-		store.WithAggregateKinds(p.aggregateKinds...),
-		store.WithMetadata(p.metadata),
-		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
-	}
+func (p *Poller) pull(ctx context.Context, sinker sink.Sinker) {
+	wait := p.pullInterval
+
 	for {
-		eid, err := p.play.Replay(ctx, handler, after, filters...)
+		now := time.Now()
+		err := p.catchUp(ctx, sinker)
 		if err != nil {
 			wait += 2 * wait
 			if wait > maxWait {
@@ -142,42 +123,54 @@ func (p *Poller) forward(ctx context.Context, after eventid.EventID, handler pro
 				WithError(err).
 				Error("Failure retrieving events. Backing off.")
 		} else {
-			after = eid
-			wait = p.pollInterval
+			wait = p.pullInterval - time.Since(now)
+			if wait < 0 {
+				wait = 0
+			}
 		}
 
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return nil
+			return
 		case <-t.C:
 		}
 	}
 }
 
-// Feed forwars the handling to a sink.
-// eg: a message queue
-func (p *Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
-	var afterEventID []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, sinker, p.partitionsLow, p.partitionsHi, func(message *eventsourcing.Event) error {
-		if bytes.Compare(message.ResumeToken, afterEventID) > 0 {
-			afterEventID = message.ResumeToken
+func (p *Poller) catchUp(ctx context.Context, sinker sink.Sinker) error {
+	filters := []store.FilterOption{
+		store.WithAggregateKinds(p.aggregateKinds...),
+		store.WithMetadata(p.metadata),
+		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
+	}
+	filter := store.Filter{}
+	for _, f := range filters {
+		f(&filter)
+	}
+	loop := true
+	for loop {
+		events, err := p.store.GetPendingEvents(ctx, p.limit, filter)
+		if err != nil {
+			return faults.Wrap(err)
 		}
-		return nil
-	})
+		for _, evt := range events {
+			err = p.handle(ctx, evt, sinker)
+			if err != nil {
+				return faults.Wrap(err)
+			}
+		}
+		loop = len(events) != 0
+	}
+	return nil
+}
+
+func (p *Poller) handle(ctx context.Context, e *eventsourcing.Event, sinker sink.Sinker) error {
+	seq, err := sinker.Sink(ctx, e, sink.Meta{})
 	if err != nil {
 		return err
 	}
 
-	eID, err := eventid.Parse(string(afterEventID))
-	if err != nil {
-		return err
-	}
-
-	p.logger.Info("Starting to feed from event ID: ", afterEventID)
-	return p.forward(ctx, eID, func(ctx context.Context, e *eventsourcing.Event) error {
-		e.ResumeToken = []byte(e.ID.String())
-		return sinker.Sink(ctx, e)
-	})
+	return p.store.SetSinkSeq(ctx, e.ID, seq)
 }

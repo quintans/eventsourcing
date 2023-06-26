@@ -143,21 +143,9 @@ To avoid duplication and **keep the order of events** we can have only one activ
 
 ##### Rebuilding a projection
 
-I went the extra mile and also developed a projections rebuild capability where we replay all the events to rebuild any projection.
-To types are provided. One that allows to recreate the projection with the system up and running, and another that creates a projection on boot time. The latter should be used when introducing new projections.
+If a a projection needs to be rebuild the best strategy is to recreate a new projection and switch to it. This way will never have a down time for a projection.
 
-> For projection migrations that take too long one strategy we can use is to recreate a new projection and switch to it instead of recreating it from scratch. 
-
-The process for rebuilding an existing projection, when the system is up, is described as follow:
-
-Rebuild projections
-- Acquire Freeze Lock
-- Emit Cancel projection notification
-- Wait for all balancers listeners to acknowledge stopping
-- Retrieve resume position
-- Replay all events in the store
-- record resume position
-- Release Freeze Lock
+The process for creating a new projection at boot time, is described as follow:
 
 Boot Partitioned Projection
 - Wait for lock release (if any)
@@ -165,7 +153,7 @@ Boot Partitioned Projection
 - Start consuming the stream from the last event position
 - Listen to Cancel projection notification
 
-All this balancing and projection rebuilds assumes that a projection is idempotent.
+All this balancing and events replay assumes that a projection is idempotent.
 
 ### Event Migration
 TODO

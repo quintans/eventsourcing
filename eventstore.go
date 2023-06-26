@@ -42,10 +42,9 @@ type Aggregater interface {
 	HandleEvent(Eventer) error
 }
 
-// Event represents the event data
+// Event represents the event data stored in the event store
 type Event struct {
 	ID               eventid.EventID
-	ResumeToken      encoding.Base64
 	AggregateID      string
 	AggregateIDHash  uint32
 	AggregateVersion uint32
@@ -56,6 +55,7 @@ type Event struct {
 	Metadata         *encoding.JSON
 	CreatedAt        time.Time
 	Migrated         bool
+	Sequence         uint64
 }
 
 func (e *Event) IsZero() bool {

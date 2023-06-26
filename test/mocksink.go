@@ -6,19 +6,23 @@ import (
 	"sync"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/faults"
 )
 
 type MockSink struct {
 	mu         sync.Mutex
 	partitions uint32
-	events     map[uint32][]*eventsourcing.Event
-	lastEvents map[uint32]*eventsourcing.Event
+	events     map[uint32][]*sink.Message
+	lastEvents map[uint32]*sink.Message
+	sequence   uint64
+	onSink     func(ctx context.Context, e *eventsourcing.Event) error
 }
 
 func NewMockSink(partitions uint32) *MockSink {
-	events := map[uint32][]*eventsourcing.Event{}
-	lastEvents := map[uint32]*eventsourcing.Event{}
+	events := map[uint32][]*sink.Message{}
+	lastEvents := map[uint32]*sink.Message{}
 
 	return &MockSink{
 		events:     events,
@@ -27,7 +31,11 @@ func NewMockSink(partitions uint32) *MockSink {
 	}
 }
 
-func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event) error {
+func (s *MockSink) OnSink(handler func(ctx context.Context, e *eventsourcing.Event) error) {
+	s.onSink = handler
+}
+
+func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (uint64, error) {
 	var partition uint32
 	if s.partitions <= 1 {
 		partition = 1
@@ -35,32 +43,43 @@ func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event) error {
 		partition = util.WhichPartition(e.AggregateIDHash, s.partitions)
 	}
 	s.mu.Lock()
-	events := s.events[partition]
-	s.events[partition] = append(events, e)
-	s.lastEvents[partition] = e
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
-	return nil
+	events := s.events[partition]
+	msg := sink.ToMessage(e, m)
+	s.events[partition] = append(events, msg)
+	s.lastEvents[partition] = msg
+	s.sequence++
+
+	if s.onSink != nil {
+		err := s.onSink(ctx, e)
+		if err != nil {
+			return 0, faults.Wrap(err)
+		}
+	}
+
+	return s.sequence, nil
 }
 
-func (s *MockSink) LastMessage(ctx context.Context, partition uint32) (*eventsourcing.Event, error) {
+func (s *MockSink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink.Message, error) {
 	if partition == 0 {
 		partition = 1
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	e, ok := s.lastEvents[partition]
 	if !ok {
-		return nil, nil
+		return 0, nil, nil
 	}
-	return e, nil
+	return s.sequence, e, nil
 }
 
 func (s *MockSink) Close() {}
 
-func (s *MockSink) GetEvents() []*eventsourcing.Event {
+func (s *MockSink) GetEvents() []*sink.Message {
 	s.mu.Lock()
-	events := []*eventsourcing.Event{}
+	events := []*sink.Message{}
 	for _, v := range s.events {
 		events = append(events, v...)
 	}
@@ -68,11 +87,11 @@ func (s *MockSink) GetEvents() []*eventsourcing.Event {
 	return events
 }
 
-func (s *MockSink) LastMessages() map[uint32]*eventsourcing.Event {
+func (s *MockSink) LastMessages() map[uint32]*sink.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msgs := map[uint32]*eventsourcing.Event{}
+	msgs := map[uint32]*sink.Message{}
 	for k, v := range s.lastEvents {
 		msgs[k] = v
 	}
@@ -80,7 +99,7 @@ func (s *MockSink) LastMessages() map[uint32]*eventsourcing.Event {
 	return msgs
 }
 
-func (s *MockSink) SetLastMessages(lastEvents map[uint32]*eventsourcing.Event) {
+func (s *MockSink) SetLastMessages(lastEvents map[uint32]*sink.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

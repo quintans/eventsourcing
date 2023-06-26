@@ -42,6 +42,11 @@ type Feed struct {
 	flavour               string
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker
+	setSeqRepo            SetSeqRepository
+}
+
+type SetSeqRepository interface {
+	SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error
 }
 
 type FeedOption func(*Feed)
@@ -83,7 +88,7 @@ type DBConfig struct {
 	Password string
 }
 
-func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...FeedOption) Feed {
+func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, setSeqRepo SetSeqRepository, opts ...FeedOption) Feed {
 	feed := Feed{
 		logger:                logger,
 		config:                config,
@@ -91,6 +96,7 @@ func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...Fee
 		flavour:               "mariadb",
 		backoffMaxElapsedTime: 10 * time.Second,
 		sinker:                sinker,
+		setSeqRepo:            setSeqRepo,
 	}
 	for _, o := range opts {
 		o(&feed)
@@ -103,7 +109,7 @@ func (f *Feed) Run(ctx context.Context) error {
 	f.logger.Infof("Starting Feed for '%s'", f.eventsTable)
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
+	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(_ uint64, message *sink.Message) error {
 		p, err := parse(string(message.ResumeToken))
 		if err != nil {
 			return faults.Wrap(err)
@@ -146,6 +152,9 @@ func (f *Feed) Run(ctx context.Context) error {
 		partitionsLow:   f.partitionsLow,
 		partitionsHi:    f.partitionsHi,
 		backoff:         b,
+		chanel:          c,
+		eventsTable:     f.eventsTable,
+		setSeqRepo:      f.setSeqRepo,
 	}
 	c.SetEventHandler(blh)
 
@@ -232,6 +241,9 @@ type binlogHandler struct {
 	partitionsLow           uint32
 	partitionsHi            uint32
 	backoff                 *backoff.ExponentialBackOff
+	chanel                  *canal.Canal
+	eventsTable             string
+	setSeqRepo              SetSeqRepository
 }
 
 func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
@@ -355,8 +367,11 @@ func (h *binlogHandler) OnXID(xid mysql.Position) error {
 			// we update the resume token on the last event of the transaction
 			h.lastResumeToken = format(xid)
 		}
-		event.ResumeToken = h.lastResumeToken
-		err := h.sinker.Sink(context.Background(), event)
+		seq, err := h.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: h.lastResumeToken})
+		if err != nil {
+			return faults.Wrap(backoff.Permanent(err))
+		}
+		err = h.setSeqRepo.SetSinkSeq(context.Background(), event.ID, seq)
 		if err != nil {
 			return faults.Wrap(backoff.Permanent(err))
 		}

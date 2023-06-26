@@ -37,6 +37,7 @@ type Event struct {
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
 	Migration        int                `bson:"migration"`
 	Migrated         bool               `bson:"migrated"`
+	Sequence         uint64             `bson:"sink_seq"`
 }
 
 type Snapshot struct {
@@ -377,68 +378,99 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	return nil
 }
 
-func (r *EsRepository) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error) {
-	flt := bson.D{}
+func (r *EsRepository) GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error) {
+	flt := bson.D{
+		{"migration", bson.D{{"$eq", 0}}},
+	}
 
-	if trailingLag != time.Duration(0) {
-		safetyMargin := time.Now().UTC().Add(-trailingLag)
-		flt = append(flt, bson.E{"created_at", bson.D{{"$lte", safetyMargin}}})
+	flt = buildFilter(filter, flt)
+
+	pipeline := []bson.M{
+		{
+			"$match": flt,
+		},
+		{
+			"$group": bson.M{
+				"_id":      nil,
+				"sink_seq": bson.M{"$max": "$sink_seq"},
+			},
+		},
+	}
+
+	cursor, err := r.eventsCollection().Aggregate(ctx, pipeline)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return 0, nil
+		}
+		return 0, faults.Errorf("getting the cursor for the max sequence: %w", err)
+	}
+
+	evt := Event{}
+	for cursor.Next(ctx) {
+		err = cursor.Decode(&evt)
+		if err != nil {
+			return 0, faults.Errorf("decoding to max sequence: %w", err)
+		}
+	}
+
+	return evt.Sequence, nil
+}
+
+func (r *EsRepository) GetEvents(ctx context.Context, afterSeq uint64, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
+	flt := bson.D{
+		{"sink_seq", bson.D{{"$gt", afterSeq}}},
+		{"migration", bson.D{{"$eq", 0}}},
+	}
+
+	flt = buildFilter(filter, flt)
+
+	opts := options.Find().SetSort(bson.D{{"sink_seq", 1}})
+	if batchSize > 0 {
+		opts.SetBatchSize(int32(batchSize))
+	} else {
+		opts.SetBatchSize(-1)
+	}
+
+	rows, _, err := r.queryEvents(ctx, flt, opts)
+	if err != nil {
+		return nil, faults.Errorf("Unable to get events after '%d' for filter %+v: %w", afterSeq, filter, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	return rows, nil
+}
+
+func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
+	flt := bson.D{
+		{"migration", bson.D{{"$eq", 0}}},
 	}
 	flt = buildFilter(filter, flt)
 
-	opts := options.FindOne().
-		SetSort(bson.D{{"_id", -1}}).
-		SetProjection(bson.D{{"_id", 1}})
-	evt := Event{}
-	if err := r.eventsCollection().FindOne(ctx, flt, opts).Decode(&evt); err != nil {
-		if err == mongo.ErrNoDocuments {
-			return eventid.Zero, nil
-		}
-		return eventid.Zero, faults.Errorf("Unable to get the last event ID: %w", err)
+	opts := options.Find().SetSort(bson.D{{"_id", 1}})
+	if batchSize > 0 {
+		opts.SetBatchSize(int32(batchSize))
+	} else {
+		opts.SetBatchSize(-1)
 	}
 
-	eID, err := eventid.Parse(evt.ID)
+	rows, _, err := r.queryEvents(ctx, flt, opts)
 	if err != nil {
-		return eventid.Zero, err
+		return nil, faults.Errorf("Unable to get pending events for filter %+v: %w", filter, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
 	}
 
-	return eID, nil
+	return rows, nil
 }
 
-func (r *EsRepository) GetEvents(ctx context.Context, afterEventID eventid.EventID, batchSize int, trailingLag time.Duration, filter store.Filter) ([]*eventsourcing.Event, error) {
-	lastMessageID := afterEventID
-	var records []*eventsourcing.Event
-	for len(records) < batchSize {
-		flt := bson.D{
-			{"_id", bson.D{{"$gt", lastMessageID.String()}}},
-		}
-
-		if trailingLag != time.Duration(0) {
-			safetyMargin := time.Now().UTC().Add(-trailingLag)
-			flt = append(flt, bson.E{"created_at", bson.D{{"$lte", safetyMargin}}})
-		}
-		flt = buildFilter(filter, flt)
-
-		opts := options.Find().SetSort(bson.D{{"_id", 1}})
-		if batchSize > 0 {
-			opts.SetBatchSize(int32(batchSize))
-		} else {
-			opts.SetBatchSize(-1)
-		}
-
-		rows, eID, err := r.queryEvents(ctx, flt, opts)
-		if err != nil {
-			return nil, faults.Errorf("Unable to get events after '%s' for filter %+v: %w", lastMessageID, filter, err)
-		}
-		if len(rows) == 0 {
-			return records, nil
-		}
-
-		lastMessageID = eID
-		records = rows
-	}
-
-	return records, nil
+func (r *EsRepository) SetSinkSeq(ctx context.Context, evtID eventid.EventID, seq uint64) error {
+	_, err := r.eventsCollection().UpdateByID(ctx, evtID.String(), bson.M{
+		"$set": bson.M{"sink_seq": seq},
+	})
+	return faults.Wrapf(err, "setting publish sequence %d for event id '%s'", seq, evtID)
 }
 
 func buildFilter(filter store.Filter, flt bson.D) bson.D {
@@ -501,31 +533,32 @@ func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint3
 	}
 }
 
-func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event, eventid.EventID, error) {
+func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event, uint64, error) {
 	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return nil, eventid.Zero, nil
+			return nil, 0, nil
 		}
-		return nil, eventid.Zero, faults.Wrap(err)
+		return nil, 0, faults.Wrap(err)
 	}
 
 	evts := []*Event{}
 	if err = cursor.All(ctx, &evts); err != nil {
-		return nil, eventid.Zero, faults.Wrap(err)
+		return nil, 0, faults.Wrap(err)
 	}
 
 	events := []*eventsourcing.Event{}
-	var lastEventID eventid.EventID
+	var lastSeq uint64
 	for _, evt := range evts {
-		lastEventID, err = eventid.Parse(evt.ID)
+		lastEventID, err := eventid.Parse(evt.ID)
 		if err != nil {
-			return nil, eventid.Zero, faults.Errorf("unable to parse message ID '%s': %w", evt.ID, err)
+			return nil, 0, faults.Errorf("unable to parse message ID '%s': %w", evt.ID, err)
 		}
 		events = append(events, toEventsourcingEvent(evt, lastEventID))
+		lastSeq = evt.Sequence
 	}
 
-	return events, lastEventID, nil
+	return events, lastSeq, nil
 }
 
 func toEventsourcingEvent(e *Event, id eventid.EventID) *eventsourcing.Event {
@@ -541,5 +574,6 @@ func toEventsourcingEvent(e *Event, id eventid.EventID) *eventsourcing.Event {
 		Metadata:         encoding.JSONOfMap(e.Metadata),
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
+		Sequence:         e.Sequence,
 	}
 }

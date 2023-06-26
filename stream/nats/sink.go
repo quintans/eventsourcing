@@ -81,14 +81,14 @@ func (p *Sink) Close() {
 }
 
 // LastMessage gets the last message sent to NATS
-func (p *Sink) LastMessage(ctx context.Context, partition uint32) (*eventsourcing.Event, error) {
+func (p *Sink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink.Message, error) {
 	type message struct {
 		sequence uint64
 		data     []byte
 	}
 	topic, err := util.NewPartitionedTopic(p.topic, partition)
 	if err != nil {
-		return nil, faults.Wrap(err)
+		return 0, nil, faults.Wrap(err)
 	}
 	ch := make(chan message)
 	_, err = p.js.Subscribe(
@@ -102,7 +102,7 @@ func (p *Sink) LastMessage(ctx context.Context, partition uint32) (*eventsourcin
 		nats.DeliverLast(),
 	)
 	if err != nil {
-		return nil, faults.Wrap(err)
+		return 0, nil, faults.Wrap(err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
@@ -112,14 +112,14 @@ func (p *Sink) LastMessage(ctx context.Context, partition uint32) (*eventsourcin
 	case msg = <-ch:
 	case <-ctx.Done():
 		// no last message
-		return nil, nil
+		return 0, nil, nil
 	}
 	event, err := p.codec.Decode(msg.data)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
-	return event, nil
+	return msg.sequence, event, nil
 }
 
 func sequence(m *nats.Msg) uint64 {
@@ -128,15 +128,15 @@ func sequence(m *nats.Msg) uint64 {
 }
 
 // Sink sends the event to the message queue
-func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event) error {
-	b, err := p.codec.Encode(e)
+func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (uint64, error) {
+	b, err := p.codec.Encode(e, m)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	topic, err := util.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
 	if err != nil {
-		return faults.Wrap(err)
+		return 0, faults.Wrap(err)
 	}
 	p.logger.WithTags(log.Tags{
 		"topic": topic,
@@ -146,17 +146,19 @@ func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event) error {
 	bo := backoff.NewExponentialBackOff()
 	bo.MaxElapsedTime = 10 * time.Second
 
+	var sequence uint64
 	err = backoff.Retry(func() error {
-		_, er := p.js.Publish(topic.String(), b)
+		ack, er := p.js.Publish(topic.String(), b)
 		if er != nil && p.nc.IsClosed() {
 			return backoff.Permanent(er)
 		}
+		sequence = ack.Sequence
 		return er
 	}, bo)
 	if err != nil {
-		return faults.Errorf("failed to send message %+v on topic %s: %w", e, topic, err)
+		return 0, faults.Errorf("failed to send message %+v on topic %s: %w", e, topic, err)
 	}
-	return nil
+	return sequence, nil
 }
 
 func createStream(logger log.Logger, js nats.JetStreamContext, streamName util.Topic) error {

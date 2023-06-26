@@ -2,7 +2,6 @@ package player
 
 import (
 	"context"
-	"time"
 
 	"github.com/quintans/faults"
 
@@ -12,17 +11,13 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-const (
-	TrailingLag = 250 * time.Millisecond
-)
-
 type Replayer interface {
 	Replay(ctx context.Context, handler projection.EventHandlerFunc, afterEventID eventid.EventID, filters ...store.FilterOption) (string, error)
 }
 
 type Repository interface {
-	GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error)
-	GetEvents(ctx context.Context, afterMessageID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]*eventsourcing.Event, error)
+	GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error)
+	GetEvents(ctx context.Context, afterSeq uint64, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error)
 }
 
 type Start int
@@ -33,15 +28,15 @@ const (
 	SEQUENCE
 )
 
+const defEventsBatchSize = 1000
+
 type Cancel func()
 
 type Option func(*Player)
 
 type Player struct {
-	store     Repository
-	batchSize int
-	// lag to account for on same millisecond concurrent inserts and clock skews
-	trailingLag  time.Duration
+	store        Repository
+	batchSize    int
 	customFilter func(*eventsourcing.Event) bool
 }
 
@@ -53,12 +48,6 @@ func WithBatchSize(batchSize int) Option {
 	}
 }
 
-func WithTrailingLag(trailingLag time.Duration) Option {
-	return func(r *Player) {
-		r.trailingLag = trailingLag
-	}
-}
-
 func WithCustomFilter(fn func(events *eventsourcing.Event) bool) Option {
 	return func(p *Player) {
 		p.customFilter = fn
@@ -66,13 +55,10 @@ func WithCustomFilter(fn func(events *eventsourcing.Event) bool) Option {
 }
 
 // New instantiates a new Player.
-//
-// trailingLag: lag to account for on same millisecond concurrent inserts and clock skews. A good lag is 200ms.
 func New(repository Repository, options ...Option) Player {
 	p := Player{
-		store:       repository,
-		batchSize:   20,
-		trailingLag: TrailingLag,
+		store:     repository,
+		batchSize: defEventsBatchSize,
 	}
 
 	for _, f := range options {
@@ -83,16 +69,16 @@ func New(repository Repository, options ...Option) Player {
 }
 
 type StartOption struct {
-	startFrom  Start
-	afterMsgID eventid.EventID
+	startFrom Start
+	afterSeq  uint64
 }
 
 func (so StartOption) StartFrom() Start {
 	return so.startFrom
 }
 
-func (so StartOption) AfterMsgID() eventid.EventID {
-	return so.afterMsgID
+func (so StartOption) AfterSeq() uint64 {
+	return so.afterSeq
 }
 
 func StartEnd() StartOption {
@@ -107,46 +93,46 @@ func StartBeginning() StartOption {
 	}
 }
 
-func StartAt(after eventid.EventID) StartOption {
+func StartAt(sequence uint64) StartOption {
 	return StartOption{
-		startFrom:  SEQUENCE,
-		afterMsgID: after,
+		startFrom: SEQUENCE,
+		afterSeq:  sequence,
 	}
 }
 
-func (p Player) ReplayUntil(ctx context.Context, handler projection.EventHandlerFunc, untilEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
-	return p.ReplayFromUntil(ctx, handler, eventid.Zero, untilEventID, filters...)
+func (p Player) ReplayUntil(ctx context.Context, handler projection.EventHandlerFunc, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
+	return p.ReplayFromUntil(ctx, handler, 0, untilSequence, filters...)
 }
 
-func (p Player) Replay(ctx context.Context, handler projection.EventHandlerFunc, afterEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
-	return p.ReplayFromUntil(ctx, handler, afterEventID, eventid.Zero, filters...)
+func (p Player) Replay(ctx context.Context, handler projection.EventHandlerFunc, afterEventID uint64, filters ...store.FilterOption) (uint64, error) {
+	return p.ReplayFromUntil(ctx, handler, afterEventID, 0, filters...)
 }
 
-func (p Player) ReplayFromUntil(ctx context.Context, handler projection.EventHandlerFunc, afterEventID, untilEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
+func (p Player) ReplayFromUntil(ctx context.Context, handler projection.EventHandlerFunc, afterSequence, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
 	filter := store.Filter{}
 	for _, f := range filters {
 		f(&filter)
 	}
 	loop := true
 	for loop {
-		events, err := p.store.GetEvents(ctx, afterEventID, p.batchSize, p.trailingLag, filter)
+		events, err := p.store.GetEvents(ctx, afterSequence, p.batchSize, filter)
 		if err != nil {
-			return eventid.Zero, err
+			return 0, err
 		}
 		for _, evt := range events {
 			if p.customFilter == nil || p.customFilter(evt) {
 				err := handler(ctx, evt)
 				if err != nil {
-					return eventid.Zero, faults.Wrap(err)
+					return 0, faults.Wrap(err)
 				}
 			}
-			afterEventID = evt.ID
+			afterSequence = evt.Sequence
 
-			if !untilEventID.IsZero() && evt.ID.Compare(untilEventID) >= 0 {
-				return evt.ID, nil
+			if untilSequence != 0 && evt.Sequence >= untilSequence {
+				return evt.Sequence, nil
 			}
 		}
 		loop = len(events) != 0
 	}
-	return afterEventID, nil
+	return afterSequence, nil
 }

@@ -99,7 +99,7 @@ func TestListener(t *testing.T) {
 			partitions := partitionSize(tt.partitionSlots)
 			s := test.NewMockSink(partitions)
 			ctx, cancel := context.WithCancel(context.Background())
-			errs := feeding(ctx, cfg, partitions, tt.partitionSlots, s)
+			errs := feeding(ctx, cfg, partitions, tt.partitionSlots, s, repository)
 
 			id := util.MustNewULID()
 			acc, err := test.CreateAccount("Paulo", id, 100)
@@ -110,16 +110,17 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			time.Sleep(5 * time.Second)
+			cancel()
+			for i := 0; i < len(tt.partitionSlots); i++ {
+				require.NoError(t, <-errs, "Error feeding #1: %d", i)
+			}
+
 			events := s.GetEvents()
 			require.Equal(t, 3, len(events), "event size")
 			assert.Equal(t, "AccountCreated", events[0].Kind.String())
 			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
 			assert.Equal(t, "MoneyDeposited", events[2].Kind.String())
 
-			cancel()
-			for i := 0; i < len(tt.partitionSlots); i++ {
-				require.NoError(t, <-errs, "Error feeding #1: %d", i)
-			}
 			ctx, cancel = context.WithCancel(context.Background())
 
 			id = util.MustNewULID()
@@ -130,7 +131,7 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, s)
+			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, s, repository)
 
 			time.Sleep(5 * time.Second)
 			events = s.GetEvents()
@@ -144,7 +145,7 @@ func TestListener(t *testing.T) {
 			// resume from the beginning
 			s = test.NewMockSink(0)
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, s)
+			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, s, repository)
 
 			time.Sleep(5 * time.Second)
 			events = s.GetEvents()
@@ -168,12 +169,12 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig mysql.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) chan error {
+func feeding(ctx context.Context, dbConfig mysql.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker, setSeqRepo mysql.SetSeqRepository) chan error {
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)
-		listener := mysql.NewFeed(logger, dbConfig, sinker, mysql.WithPartitions(partitions, v.low, v.high))
+		listener := mysql.NewFeed(logger, dbConfig, sinker, setSeqRepo, mysql.WithPartitions(partitions, v.low, v.high))
 		go func() {
 			wg.Done()
 			err := listener.Run(ctx)

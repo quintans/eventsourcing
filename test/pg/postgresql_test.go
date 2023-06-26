@@ -18,7 +18,6 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/stream/poller"
 	"github.com/quintans/eventsourcing/test"
@@ -156,11 +155,13 @@ func TestPollListener(t *testing.T) {
 	counter := 0
 	repository, err := postgresql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
-	p := poller.New(logger, repository)
-
-	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
+
+	p := poller.New(logger, repository)
+	ctx, cancel := context.WithCancel(ctx)
+
+	mockSink := test.NewMockSink(1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -171,6 +172,8 @@ func TestPollListener(t *testing.T) {
 		}
 		return nil
 	})
+
+	go p.Feed(ctx, mockSink)
 
 	time.Sleep(time.Second)
 	cancel()
@@ -215,7 +218,9 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
+
+	mockSink := test.NewMockSink(1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -226,6 +231,8 @@ func TestListenerWithAggregateKind(t *testing.T) {
 		}
 		return nil
 	})
+
+	go p.Feed(ctx, mockSink)
 
 	time.Sleep(time.Second)
 	cancel()
@@ -276,7 +283,9 @@ func TestListenerWithMetadata(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
-	go p.Poll(ctx, player.StartBeginning(), func(ctx context.Context, e *eventsourcing.Event) error {
+
+	mockSink := test.NewMockSink(1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -287,6 +296,8 @@ func TestListenerWithMetadata(t *testing.T) {
 		}
 		return nil
 	})
+
+	go p.Feed(ctx, mockSink)
 
 	time.Sleep(time.Second)
 	cancel()

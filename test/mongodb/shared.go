@@ -119,6 +119,15 @@ func dbSchema(cli *mongo.Client) error {
 				},
 				{
 					{"key", bson.D{
+						{"sink_seq", 1},
+						{"migration", 1},
+					}},
+					{"name", "evt_sink_seq_idx"},
+					{"unique", false},
+					{"background", true},
+				},
+				{
+					{"key", bson.D{
 						{"aggregate_kind", 1},
 						{"migration", 1},
 					}},

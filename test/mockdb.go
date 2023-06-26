@@ -16,6 +16,7 @@ import (
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/worker"
+	"github.com/quintans/faults"
 )
 
 var _ player.Repository = (*InMemDB)(nil)
@@ -37,9 +38,7 @@ func (db *InMemDB) Add(event *eventsourcing.Event) *eventsourcing.Event {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	index := len(db.events)
 	event.ID = NewID(db.entropy)
-	event.ResumeToken = encoding.Base64(strconv.Itoa(index))
 	event.CreatedAt = time.Now().UTC()
 	db.events = append(db.events, event)
 
@@ -128,24 +127,27 @@ func (db *InMemDB) ReadAt(idx int) (*eventsourcing.Event, bool) {
 	return db.events[idx], true
 }
 
-func (db *InMemDB) GetLastEventID(ctx context.Context, trailingLag time.Duration, filter store.Filter) (eventid.EventID, error) {
+func (db *InMemDB) GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	if len(db.events) == 0 {
-		return eventid.Zero, nil
+	var maxSeq uint64
+	for _, v := range db.events {
+		if v.Sequence > maxSeq {
+			maxSeq = v.Sequence
+		}
 	}
-	e := db.events[len(db.events)-1]
-	return e.ID, nil
+
+	return maxSeq, nil
 }
 
-func (db *InMemDB) GetEvents(ctx context.Context, afterMessageID eventid.EventID, limit int, trailingLag time.Duration, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (db *InMemDB) GetEvents(ctx context.Context, afterSeq uint64, limit int, filter store.Filter) ([]*eventsourcing.Event, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	var events []*eventsourcing.Event
 	for _, v := range db.events {
-		if v.ID.Compare(afterMessageID) > 0 {
+		if v.Sequence > afterSeq {
 			events = append(events, v)
 		}
 		if len(events) == limit {
@@ -153,6 +155,20 @@ func (db *InMemDB) GetEvents(ctx context.Context, afterMessageID eventid.EventID
 		}
 	}
 	return events, nil
+}
+
+func (db *InMemDB) SetSinkSeq(ctx context.Context, id eventid.EventID, seq uint64) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	for _, v := range db.events {
+		if v.ID.Compare(id) == 0 {
+			v.Sequence = seq
+			return nil
+		}
+	}
+
+	return faults.Errorf("unknown sequence: %s", id)
 }
 
 type Cursor struct {
@@ -197,7 +213,7 @@ func InMemDBNewFeed(db *InMemDB, sinker sink.Sinker) worker.Tasker {
 
 func (f InMemDBFeed) Run(ctx context.Context) error {
 	var lastResumeToken []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, 0, 0, func(message *eventsourcing.Event) error {
+	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, 0, 0, func(_ uint64, message *sink.Message) error {
 		if bytes.Compare(message.ResumeToken, lastResumeToken) > 0 {
 			lastResumeToken = message.ResumeToken
 		}
@@ -220,10 +236,16 @@ func (f InMemDBFeed) Run(ctx context.Context) error {
 				return nil
 			default:
 			}
-			err = f.sinker.Sink(ctx, e)
+			seq, err := f.sinker.Sink(ctx, e, sink.Meta{ResumeToken: encoding.Base64(e.ID.String())})
 			if err != nil {
 				return err
 			}
+
+			err = f.db.SetSinkSeq(ctx, e.ID, seq)
+			if err != nil {
+				return err
+			}
+
 		} else {
 			select {
 			case <-ctx.Done():

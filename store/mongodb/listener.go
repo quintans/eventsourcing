@@ -33,6 +33,11 @@ type Feed struct {
 	partitionsLow    uint32
 	partitionsHi     uint32
 	sinker           sink.Sinker
+	setSeqRepo       SetSeqRepository
+}
+
+type SetSeqRepository interface {
+	SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error
 }
 
 type FeedOption func(*Feed)
@@ -57,13 +62,14 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) Feed {
+func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, setSeqRepo SetSeqRepository, opts ...FeedOption) Feed {
 	m := Feed{
 		logger:           logger,
 		dbName:           database,
 		connString:       connString,
 		eventsCollection: "events",
 		sinker:           sinker,
+		setSeqRepo:       setSeqRepo,
 	}
 
 	for _, o := range opts {
@@ -79,7 +85,7 @@ type ChangeEvent struct {
 func (f *Feed) Run(ctx context.Context) error {
 	f.logger.Infof("Starting Feed for '%s.%s'", f.dbName, f.eventsCollection)
 	var lastResumeToken []byte
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
+	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(_ uint64, message *sink.Message) error {
 		if bytes.Compare(message.ResumeToken, lastResumeToken) > 0 {
 			lastResumeToken = message.ResumeToken
 		}
@@ -144,10 +150,7 @@ func (f *Feed) Run(ctx context.Context) error {
 				return faults.Wrap(backoff.Permanent(err))
 			}
 			event := &eventsourcing.Event{
-				ID: id,
-				// the resume token should be from the last fully completed sinked doc, because it may fail midway.
-				// We should use the last eventID to filter out the ones that were successfully sent.
-				ResumeToken:      lastResumeToken,
+				ID:               id,
 				AggregateID:      eventDoc.AggregateID,
 				AggregateIDHash:  eventDoc.AggregateIDHash,
 				AggregateVersion: eventDoc.AggregateVersion,
@@ -159,10 +162,16 @@ func (f *Feed) Run(ctx context.Context) error {
 				CreatedAt:        eventDoc.CreatedAt,
 				Migrated:         eventDoc.Migrated,
 			}
-			err = f.sinker.Sink(ctx, event)
+			seq, err := f.sinker.Sink(ctx, event, sink.Meta{ResumeToken: lastResumeToken})
 			if err != nil {
 				return backoff.Permanent(err)
 			}
+
+			err = f.setSeqRepo.SetSinkSeq(ctx, id, seq)
+			if err != nil {
+				return faults.Wrap(backoff.Permanent(err))
+			}
+
 			b.Reset()
 		}
 
