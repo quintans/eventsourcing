@@ -55,7 +55,7 @@ func PartitionedWorkers(
 	subscriberFactory SubscriberFactory,
 	projectionName string, topic string, partitions uint32,
 	catchUpCallback CatchUpCallback,
-	handler EventHandlerFunc,
+	handler MessageHandlerFunc,
 ) ([]worker.Worker, error) {
 	workerLockerFactory := func(lockName string) lock.Locker {
 		return nil
@@ -85,7 +85,7 @@ func PartitionedCompetingWorkers(
 	subscriberFactory SubscriberFactory,
 	projectionName string, topic string, partitions uint32,
 	catchUpCallback CatchUpCallback,
-	handler EventHandlerFunc,
+	handler MessageHandlerFunc,
 ) ([]worker.Worker, error) {
 	if partitions <= 1 {
 		w, err := createProjector(
@@ -142,7 +142,7 @@ func createProjector(
 	topic string,
 	partition uint32,
 	catchUpCallback CatchUpCallback,
-	handler EventHandlerFunc,
+	handler MessageHandlerFunc,
 ) (worker.Worker, error) {
 	t, err := util.NewPartitionedTopic(topic, partition)
 	if err != nil {

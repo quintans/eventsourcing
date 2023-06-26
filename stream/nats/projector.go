@@ -29,7 +29,7 @@ func NewProjector(
 	projectionName string,
 	topic string,
 	catchUpCallback projection.CatchUpCallback,
-	handler projection.EventHandlerFunc,
+	handler projection.MessageHandlerFunc,
 ) (*worker.RunWorker, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
@@ -70,7 +70,7 @@ func NewProjectorWithConn(
 	projectionName string,
 	topic string,
 	catchUpCallback projection.CatchUpCallback,
-	handler projection.EventHandlerFunc,
+	handler projection.MessageHandlerFunc,
 ) (*worker.RunWorker, error) {
 	stream, err := nc.JetStream()
 	if err != nil {
@@ -192,7 +192,7 @@ func (s *Subscriber) RecordLastResume(ctx context.Context, token projection.Toke
 	return s.resumeStore.SetStreamResumeToken(ctx, s.resumeKey, token)
 }
 
-func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.EventHandlerFunc, options ...projection.ConsumerOption) error {
+func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.MessageHandlerFunc, options ...projection.ConsumerOption) error {
 	logger := s.logger.WithTags(log.Tags{"topic": s.resumeKey.Topic()})
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,

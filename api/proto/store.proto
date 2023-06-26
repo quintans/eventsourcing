@@ -7,24 +7,22 @@ package proto;
 option go_package="/api/proto";
 
 service Store {
-  rpc GetLastEventID (GetLastEventIDRequest) returns (GetLastEventIDReply) {}
+  rpc GetMaxSeq (GetMaxSeqRequest) returns (GetMaxSeqReply) {}
   rpc GetEvents (GetEventsRequest) returns (GetEventsReply) {}
 }
 
-message GetLastEventIDRequest {
-  int64 trailing_lag = 1;
-  Filter filter = 2;
+message GetMaxSeqRequest {
+  Filter filter = 1;
 }
 
-message GetLastEventIDReply {
-  string event_id = 1;
+message GetMaxSeqReply {
+  uint64 sequence = 1;
 }
 
 message GetEventsRequest {
-  string after_event_id = 1;
+  uint64 after_sequence = 1;
   int32 limit = 2;
-  int64 trailing_lag = 3;
-  Filter filter = 4;
+  Filter filter = 3;
 }
 
 message Filter {
@@ -55,5 +53,4 @@ message Event {
 	string idempotency_key = 8;
 	string metadata = 9;
 	google.protobuf.Timestamp created_at = 10;
-	bool migrated = 11;
 }

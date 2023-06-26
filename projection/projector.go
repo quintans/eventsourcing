@@ -10,9 +10,11 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
 
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
 )
@@ -50,13 +52,13 @@ func (r ResumeKey) String() string {
 }
 
 type ConsumerOptions struct {
-	Filter  func(e *eventsourcing.Event) bool
+	Filter  func(e *sink.Message) bool
 	AckWait time.Duration
 }
 
 type ConsumerOption func(*ConsumerOptions)
 
-func WithFilter(filter func(e *eventsourcing.Event) bool) ConsumerOption {
+func WithFilter(filter func(e *sink.Message) bool) ConsumerOption {
 	return func(o *ConsumerOptions) {
 		o.Filter = filter
 	}
@@ -69,7 +71,7 @@ func WithAckWait(ackWait time.Duration) ConsumerOption {
 }
 
 type Consumer interface {
-	StartConsumer(ctx context.Context, handler EventHandlerFunc, options ...ConsumerOption) error
+	StartConsumer(ctx context.Context, handler MessageHandlerFunc, options ...ConsumerOption) error
 	StopConsumer(ctx context.Context)
 }
 
@@ -80,7 +82,53 @@ type Subscriber interface {
 	RecordLastResume(ctx context.Context, token Token) error
 }
 
-type EventHandlerFunc func(ctx context.Context, e *eventsourcing.Event) error
+type (
+	EventHandlerFunc   func(ctx context.Context, e *eventsourcing.Event) error
+	MessageHandlerFunc func(ctx context.Context, e *sink.Message) error
+)
+
+type Event struct {
+	ID               eventid.EventID
+	AggregateID      string
+	AggregateIDHash  uint32
+	AggregateVersion uint32
+	AggregateKind    eventsourcing.Kind
+	Kind             eventsourcing.Kind
+	Body             encoding.Base64
+	IdempotencyKey   string
+	Metadata         *encoding.JSON
+	CreatedAt        time.Time
+}
+
+func FromEvent(e *eventsourcing.Event) *Event {
+	return &Event{
+		ID:               e.ID,
+		AggregateID:      e.AggregateID,
+		AggregateIDHash:  e.AggregateIDHash,
+		AggregateVersion: e.AggregateVersion,
+		AggregateKind:    e.AggregateKind,
+		Kind:             e.Kind,
+		Body:             e.Body,
+		IdempotencyKey:   e.IdempotencyKey,
+		Metadata:         e.Metadata,
+		CreatedAt:        e.CreatedAt,
+	}
+}
+
+func FromMessage(m *sink.Message) *Event {
+	return &Event{
+		ID:               m.ID,
+		AggregateID:      m.AggregateID,
+		AggregateIDHash:  m.AggregateIDHash,
+		AggregateVersion: m.AggregateVersion,
+		AggregateKind:    m.AggregateKind,
+		Kind:             m.Kind,
+		Body:             m.Body,
+		IdempotencyKey:   m.IdempotencyKey,
+		Metadata:         m.Metadata,
+		CreatedAt:        m.CreatedAt,
+	}
+}
 
 type TokenKind string
 
@@ -165,8 +213,8 @@ type (
 // In the end it will fire up the subscribers.
 // All this will happen in a separate go routine allowing the service to completely start up.
 //
-// After a successfully projection creation, subsequent start up will no longer execute the catch up function. This can be used to migrate projections,
-// where a completely new projection will be populated.
+// After a successfully projection creation, subsequent start up will no longer execute the catch up function.
+// This can be used to migrate projections, where a completely new projection will be populated.
 //
 // The catch up function should replay all events from all event stores needed for this
 func NewProjector(
@@ -177,7 +225,7 @@ func NewProjector(
 	resumeStore ResumeStore,
 	subscriber Subscriber,
 	catchUpCallback CatchUpCallback,
-	handler EventHandlerFunc,
+	handler MessageHandlerFunc,
 ) *worker.RunWorker {
 	rk := subscriber.ResumeKey()
 	logger = logger.WithTags(log.Tags{
@@ -314,6 +362,7 @@ func retrieveResumeFromSubscriber(ctx context.Context, subscriber Subscriber) (R
 	if err != nil {
 		return Resume{}, faults.Wrap(err)
 	}
+	// ! FIXME
 	// add offset to compensate clock skews and the safety margin used on catch up
 	resume.EventID = resume.EventID.OffsetTime(time.Second)
 

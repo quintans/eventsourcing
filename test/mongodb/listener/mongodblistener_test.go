@@ -91,7 +91,7 @@ func TestMongoListenere(t *testing.T) {
 			mockSink := test.NewMockSink(partitions)
 
 			ctx, cancel := context.WithCancel(context.Background())
-			errs := feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
+			errs := feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink, repository)
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
@@ -103,12 +103,6 @@ func TestMongoListenere(t *testing.T) {
 			require.NoError(t, err)
 
 			time.Sleep(500 * time.Millisecond)
-			events := mockSink.GetEvents()
-
-			require.Equal(t, 3, len(events), "event size")
-			assert.Equal(t, "AccountCreated", events[0].Kind.String())
-			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
-			assert.Equal(t, "MoneyDeposited", events[2].Kind.String())
 
 			// cancel current listeners
 			cancel()
@@ -116,9 +110,16 @@ func TestMongoListenere(t *testing.T) {
 				require.NoError(t, <-errs, "Error feeding #1")
 			}
 
+			events := mockSink.GetEvents()
+
+			require.Equal(t, 3, len(events), "event size")
+			assert.Equal(t, "AccountCreated", events[0].Kind.String())
+			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
+			assert.Equal(t, "MoneyDeposited", events[2].Kind.String())
+
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
+			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink, repository)
 
 			time.Sleep(time.Second)
 			events = mockSink.GetEvents()
@@ -148,7 +149,7 @@ func TestMongoListenere(t *testing.T) {
 
 			// connecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
+			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink, repository)
 
 			time.Sleep(500 * time.Millisecond)
 			events = mockSink.GetEvents()
@@ -167,7 +168,7 @@ func TestMongoListenere(t *testing.T) {
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
+			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink, repository)
 
 			time.Sleep(500 * time.Millisecond)
 			events = mockSink.GetEvents()
@@ -193,12 +194,12 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tmg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) chan error {
+func feeding(ctx context.Context, dbConfig tmg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker, setSeqRepo mongodb.SetSeqRepository) chan error {
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		wg.Add(1)
-		listener := mongodb.NewFeed(logger, dbConfig.URL(), dbConfig.Database, sinker, mongodb.WithPartitions(partitions, v.low, v.high))
+		listener := mongodb.NewFeed(logger, dbConfig.URL(), dbConfig.Database, sinker, setSeqRepo, mongodb.WithPartitions(partitions, v.low, v.high))
 		go func() {
 			wg.Done()
 			err := listener.Run(ctx)

@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	defaultSlotName = "events_pub"
-	outputPlugin    = "pgoutput"
+	defaultSlotName    = "events_pub"
+	outputPlugin       = "pgoutput"
+	defaultEventsTable = "events"
 )
 
 type FeedLogreplOption func(*FeedLogrepl)
@@ -55,6 +56,12 @@ func WithBackoffMaxElapsedTime(duration time.Duration) FeedLogreplOption {
 	}
 }
 
+func WithEventsTable(col string) FeedLogreplOption {
+	return func(p *FeedLogrepl) {
+		p.eventsTable = col
+	}
+}
+
 var _ worker.Tasker = (*FeedLogrepl)(nil)
 
 type FeedLogrepl struct {
@@ -67,12 +74,18 @@ type FeedLogrepl struct {
 	totalSlots            int
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker
+	eventsTable           string
+	setSeqRepo            SetSeqRepository
+}
+
+type SetSeqRepository interface {
+	SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error
 }
 
 // NewFeed creates a new Postgresql 10+ logic replication feed.
 // slotIndex is the index of this feed in a group of feeds. Its value should be between 1 and totalSlots.
 // slotIndex=1 has a special maintenance behaviour of dropping any slot above totalSlots.
-func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, options ...FeedLogreplOption) (FeedLogrepl, error) {
+func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, setSeqRepo SetSeqRepository, options ...FeedLogreplOption) (FeedLogrepl, error) {
 	if slotIndex < 1 || slotIndex > totalSlots {
 		return FeedLogrepl{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
 	}
@@ -83,6 +96,8 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, o
 		totalSlots:            totalSlots,
 		backoffMaxElapsedTime: 10 * time.Second,
 		sinker:                sinker,
+		eventsTable:           defaultEventsTable,
+		setSeqRepo:            setSeqRepo,
 	}
 
 	for _, o := range options {
@@ -96,7 +111,7 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, o
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
 func (f *FeedLogrepl) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
-	err := store.ForEachResumeTokenInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(message *eventsourcing.Event) error {
+	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(_ uint64, message *sink.Message) error {
 		xLogPos, err := pglogrepl.ParseLSN(string(message.ResumeToken))
 		if err != nil {
 			return faults.Errorf("ParseLSN failed: %w", err)
@@ -198,8 +213,11 @@ func (f *FeedLogrepl) Run(ctx context.Context) error {
 					if event == nil {
 						continue
 					}
-					event.ResumeToken = []byte(clientXLogPos.String())
-					err = f.sinker.Sink(context.Background(), event)
+					seq, err := f.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: []byte(clientXLogPos.String())})
+					if err != nil {
+						return faults.Wrap(backoff.Permanent(err))
+					}
+					err = f.setSeqRepo.SetSinkSeq(ctx, event.ID, seq)
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
