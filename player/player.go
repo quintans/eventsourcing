@@ -6,13 +6,16 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/projection"
+	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 )
 
-type Replayer interface {
-	Replay(ctx context.Context, handler projection.EventHandlerFunc, afterEventID eventid.EventID, filters ...store.FilterOption) (string, error)
+type (
+	MessageHandlerFunc func(ctx context.Context, meta Meta, e *sink.Message) error
+)
+
+type Meta struct {
+	Sequence uint64
 }
 
 type Repository interface {
@@ -100,15 +103,15 @@ func StartAt(sequence uint64) StartOption {
 	}
 }
 
-func (p Player) ReplayUntil(ctx context.Context, handler projection.EventHandlerFunc, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
+func (p Player) ReplayUntil(ctx context.Context, handler MessageHandlerFunc, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
 	return p.ReplayFromUntil(ctx, handler, 0, untilSequence, filters...)
 }
 
-func (p Player) Replay(ctx context.Context, handler projection.EventHandlerFunc, afterEventID uint64, filters ...store.FilterOption) (uint64, error) {
+func (p Player) Replay(ctx context.Context, handler MessageHandlerFunc, afterEventID uint64, filters ...store.FilterOption) (uint64, error) {
 	return p.ReplayFromUntil(ctx, handler, afterEventID, 0, filters...)
 }
 
-func (p Player) ReplayFromUntil(ctx context.Context, handler projection.EventHandlerFunc, afterSequence, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
+func (p Player) ReplayFromUntil(ctx context.Context, handler MessageHandlerFunc, afterSequence, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
 	filter := store.Filter{}
 	for _, f := range filters {
 		f(&filter)
@@ -121,7 +124,7 @@ func (p Player) ReplayFromUntil(ctx context.Context, handler projection.EventHan
 		}
 		for _, evt := range events {
 			if p.customFilter == nil || p.customFilter(evt) {
-				err := handler(ctx, evt)
+				err := handler(ctx, Meta{Sequence: evt.Sequence}, sink.ToMessage(evt, sink.Meta{}))
 				if err != nil {
 					return 0, faults.Wrap(err)
 				}
@@ -132,7 +135,7 @@ func (p Player) ReplayFromUntil(ctx context.Context, handler projection.EventHan
 				return evt.Sequence, nil
 			}
 		}
-		loop = len(events) != 0
+		loop = len(events) == p.batchSize
 	}
 	return afterSequence, nil
 }

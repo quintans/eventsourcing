@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/teris-io/shortid"
@@ -9,6 +10,7 @@ import (
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/worker"
+	"github.com/quintans/faults"
 )
 
 type InMemLockerPool struct {
@@ -33,13 +35,13 @@ type InMemLocker struct {
 	name  string
 }
 
-func (l *InMemLocker) Lock(context.Context) (<-chan struct{}, error) {
-	done := make(chan struct{})
-	_, loaded := l.locks.LoadOrStore(l.name, done)
+func (l *InMemLocker) Lock(ctx context.Context) (context.Context, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	_, loaded := l.locks.LoadOrStore(l.name, cancel)
 	if !loaded {
-		return done, nil
+		return ctx, nil
 	}
-
+	cancel()
 	return nil, lock.ErrLockAlreadyHeld
 }
 
@@ -48,7 +50,7 @@ func (l *InMemLocker) Unlock(context.Context) error {
 	if !loaded {
 		return lock.ErrLockNotHeld
 	}
-	close(done.(chan struct{}))
+	done.(context.CancelFunc)()
 	return nil
 }
 
@@ -59,6 +61,20 @@ func (l *InMemLocker) WaitForUnlock(context.Context) error {
 	}
 	<-done.(chan struct{})
 	return nil
+}
+
+func (l *InMemLocker) WaitForLock(ctx context.Context) (context.Context, error) {
+	for {
+		ctx2, err := l.Lock(ctx)
+		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+			_ = l.WaitForUnlock(ctx)
+			continue
+		} else if err != nil {
+			return nil, faults.Wrap(err)
+		}
+
+		return ctx2, nil
+	}
 }
 
 type InMemMemberList struct {

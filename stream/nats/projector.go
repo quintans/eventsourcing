@@ -3,7 +3,6 @@ package nats
 import (
 	"context"
 	"errors"
-	"strconv"
 	"sync"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/worker"
@@ -28,8 +28,9 @@ func NewProjector(
 	resumeKey projection.ResumeKey,
 	projectionName string,
 	topic string,
-	catchUpCallback projection.CatchUpCallback,
-	handler projection.MessageHandlerFunc,
+	esRepo player.Repository,
+	handler player.MessageHandlerFunc,
+	options projection.ProjectorOptions,
 ) (*worker.RunWorker, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
@@ -45,8 +46,9 @@ func NewProjector(
 		resumeKey,
 		projectionName,
 		topic,
-		catchUpCallback,
+		esRepo,
 		handler,
+		options,
 	)
 	if err != nil {
 		return nil, err
@@ -69,8 +71,9 @@ func NewProjectorWithConn(
 	resumeKey projection.ResumeKey,
 	projectionName string,
 	topic string,
-	catchUpCallback projection.CatchUpCallback,
-	handler projection.MessageHandlerFunc,
+	esRepo player.Repository,
+	handler player.MessageHandlerFunc,
+	options projection.ProjectorOptions,
 ) (*worker.RunWorker, error) {
 	stream, err := nc.JetStream()
 	if err != nil {
@@ -88,8 +91,9 @@ func NewProjectorWithConn(
 		catchUpLockerFactory,
 		resumeStore,
 		subscriber,
-		catchUpCallback,
+		esRepo,
 		handler,
+		options,
 	), nil
 }
 
@@ -144,55 +148,37 @@ func (s *Subscriber) ResumeKey() projection.ResumeKey {
 	return s.resumeKey
 }
 
-func (s *Subscriber) RetrieveLastResume(ctx context.Context) (projection.Resume, error) {
-	ch := make(chan projection.Resume)
+func (s *Subscriber) RetrieveLastSequence(ctx context.Context) (uint64, error) {
+	ch := make(chan uint64)
 	// this will position the stream at the last position+1
 	sub, err := s.jetStream.Subscribe(
 		s.resumeKey.Topic().String(),
 		func(m *nats.Msg) {
-			evt, err := s.messageCodec.Decode(m.Data)
-			if err != nil {
-				s.logger.WithError(err).Errorf("unmarshal to event '%s'", string(m.Data))
-				er := m.Nak()
-				if er != nil {
-					s.logger.WithError(er).Errorf("NAK event '%s'", string(m.Data))
-				}
-				return
-			}
-
-			seq := sequence(m)
-			token := strconv.FormatUint(seq, 10)
-
-			ch <- projection.Resume{
-				Topic:   s.resumeKey.Topic(),
-				EventID: evt.ID,
-				Token:   projection.NewToken(projection.ConsumerToken, token),
-			}
+			ch <- sequence(m)
 			m.Ack()
 		},
 		nats.DeliverLast(),
 		nats.MaxDeliver(2),
 	)
 	if err != nil {
-		return projection.Resume{}, faults.Wrap(err)
+		return 0, faults.Wrap(err)
 	}
 	defer sub.Unsubscribe()
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	var resume projection.Resume
+	var resume uint64
+	// will wait until a message is available
 	select {
 	case resume = <-ch:
 	case <-ctx.Done():
-		return projection.Resume{}, faults.New("failed to get subscription to last event ID")
+		return 0, faults.New("failed to get subscription to last event ID")
 	}
 	return resume, nil
 }
 
-func (s *Subscriber) RecordLastResume(ctx context.Context, token projection.Token) error {
-	return s.resumeStore.SetStreamResumeToken(ctx, s.resumeKey, token)
+func (s *Subscriber) SaveLastSequence(ctx context.Context, token uint64) error {
+	return s.resumeStore.SetStreamResumeToken(ctx, s.resumeKey, projection.NewToken(projection.ConsumerToken, token))
 }
 
-func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.MessageHandlerFunc, options ...projection.ConsumerOption) error {
+func (s *Subscriber) StartConsumer(ctx context.Context, handler player.MessageHandlerFunc, options ...projection.ConsumerOption) error {
 	logger := s.logger.WithTags(log.Tags{"topic": s.resumeKey.Topic()})
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
@@ -212,11 +198,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.Messa
 		startOption = nats.StartSequence(1)
 	} else {
 		logger.Infof("Starting consuming from '%s' [token key: '%s']", token, s.resumeKey)
-		seq, er := strconv.ParseUint(token.Value(), 10, 64)
-		if er != nil {
-			return faults.Errorf("unable to parse resume token '%s': %w", token, er)
-		}
-		startOption = nats.StartSequence(seq + 1) // after seq
+		startOption = nats.StartSequence(token.Value() + 1) // after seq
 	}
 
 	callback := func(m *nats.Msg) {
@@ -228,7 +210,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.Messa
 		}
 		if opts.Filter == nil || opts.Filter(evt) {
 			logger.Debugf("Handling received event '%+v'", evt)
-			er = handler(ctx, evt)
+			er = handler(ctx, player.Meta{Sequence: sequence(m)}, evt)
 			if er != nil {
 				logger.WithError(er).Errorf("Error when handling event with ID '%s'", evt.ID)
 				m.Nak()

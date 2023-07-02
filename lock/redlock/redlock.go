@@ -64,7 +64,7 @@ func (m *Lock) iAmDone() {
 }
 
 // Lock locks m. In case it returns an error on failure, you may retry to acquire the lock by calling this method again.
-func (m *Lock) Lock(ctx context.Context) (<-chan struct{}, error) {
+func (m *Lock) Lock(ctx context.Context) (context.Context, error) {
 	if m.isLockAcquired() {
 		return nil, faults.Errorf("failed to acquire lock: '%s': %w", m.name, lock.ErrLockAlreadyHeld)
 	}
@@ -89,8 +89,8 @@ func (m *Lock) Lock(ctx context.Context) (<-chan struct{}, error) {
 		m.value = value
 
 		// auto renew session
-		done := m.heartbeat(m.expiry / 2)
-		return done, nil
+		ctx = m.heartbeat(ctx, m.expiry/2)
+		return ctx, nil
 	}
 	// release any previously acquired lock
 	_, _ = m.pool.DoAsync(func(client *redis.Client) (bool, error) {
@@ -100,11 +100,13 @@ func (m *Lock) Lock(ctx context.Context) (<-chan struct{}, error) {
 	return nil, faults.Wrap(lock.ErrLockAlreadyAcquired)
 }
 
-func (m *Lock) heartbeat(expiry time.Duration) <-chan struct{} {
+func (m *Lock) heartbeat(ctx context.Context, expiry time.Duration) context.Context {
 	done := make(chan struct{})
 	m.lockAcquired(done)
 	ticker := time.NewTicker(expiry)
+	ctx, cancel := context.WithCancel(ctx)
 	go func() {
+		defer cancel()
 		defer ticker.Stop()
 		for {
 			select {
@@ -119,7 +121,7 @@ func (m *Lock) heartbeat(expiry time.Duration) <-chan struct{} {
 			}
 		}
 	}()
-	return done
+	return ctx
 }
 
 // Unlock unlocks m and returns the status of unlock.
@@ -246,4 +248,18 @@ func (m *Lock) exists(ctx context.Context, client *redis.Client) (bool, error) {
 		return false, faults.Errorf("failed to check if key '%s' exists: %w", m.name, err)
 	}
 	return reply != 0, nil
+}
+
+func (m *Lock) WaitForLock(ctx context.Context) (context.Context, error) {
+	for {
+		ctx2, err := m.Lock(ctx)
+		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+			_ = m.WaitForUnlock(ctx)
+			continue
+		} else if err != nil {
+			return nil, faults.Wrap(err)
+		}
+
+		return ctx2, nil
+	}
 }

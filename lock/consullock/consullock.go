@@ -2,6 +2,7 @@ package consullock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -19,11 +20,11 @@ type Lock struct {
 	sID      string
 	lockName string
 	expiry   time.Duration
-	done     chan struct{}
+	done     context.CancelFunc
 	mu       sync.Mutex
 }
 
-func (l *Lock) Lock(ctx context.Context) (<-chan struct{}, error) {
+func (l *Lock) Lock(ctx context.Context) (context.Context, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -60,17 +61,16 @@ func (l *Lock) Lock(ctx context.Context) (<-chan struct{}, error) {
 	}
 
 	// auto renew session
-	done := make(chan struct{})
-	l.done = done
+	ctx2, cancel := context.WithCancel(ctx)
+	l.done = cancel
 	go func() {
-		// we use a new options because context may no longer be usable
-		err := l.client.Session().RenewPeriodic(sEntry.TTL, sID, &api.WriteOptions{}, done)
+		err := l.client.Session().RenewPeriodic(sEntry.TTL, sID, &api.WriteOptions{}, ctx2.Done())
 		if err != nil {
 			l.Unlock(context.Background())
 		}
 	}()
 
-	return l.done, nil
+	return ctx2, nil
 }
 
 func (l *Lock) Unlock(ctx context.Context) error {
@@ -92,7 +92,7 @@ func (l *Lock) Unlock(ctx context.Context) error {
 		return faults.Errorf("failed to release lock: %w", err)
 	}
 
-	close(l.done)
+	l.done()
 	l.done = nil
 
 	return nil
@@ -124,4 +124,18 @@ func (l *Lock) WaitForUnlock(ctx context.Context) error {
 	err := <-done
 
 	return err
+}
+
+func (l *Lock) WaitForLock(ctx context.Context) (context.Context, error) {
+	for {
+		ctx2, err := l.Lock(ctx)
+		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+			_ = l.WaitForUnlock(ctx)
+			continue
+		} else if err != nil {
+			return nil, faults.Wrap(err)
+		}
+
+		return ctx2, nil
+	}
 }
