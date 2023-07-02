@@ -15,7 +15,6 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
@@ -74,7 +73,7 @@ func WithAckWait(ackWait time.Duration) ConsumerOption {
 }
 
 type Consumer interface {
-	StartConsumer(ctx context.Context, handler player.MessageHandlerFunc, options ...ConsumerOption) error
+	StartConsumer(ctx context.Context, handler MessageHandlerFunc, options ...ConsumerOption) error
 	StopConsumer(ctx context.Context)
 }
 
@@ -228,8 +227,8 @@ func NewProjector(
 	catchUpLockerFactory WaitLockerFactory,
 	resumeStore ResumeStore,
 	subscriber Subscriber,
-	esRepo player.Repository,
-	handler player.MessageHandlerFunc,
+	esRepo Repository,
+	handler MessageHandlerFunc,
 	options ProjectorOptions,
 ) *worker.RunWorker {
 	rk := subscriber.ResumeKey()
@@ -270,8 +269,8 @@ func catchUp(
 	locker lock.WaitLocker,
 	resumeStore ResumeStore,
 	subscriber Subscriber,
-	esRepo player.Repository,
-	handler player.MessageHandlerFunc,
+	esRepo Repository,
+	handler MessageHandlerFunc,
 	options ProjectorOptions,
 ) error {
 	token, err := getSavedToken(ctx, resumeStore, subscriber.ResumeKey())
@@ -303,7 +302,7 @@ func catchUp(
 		return nil
 	}
 
-	handler = func(ctx context.Context, meta player.Meta, e *sink.Message) error {
+	handler = func(ctx context.Context, meta Meta, e *sink.Message) error {
 		err := handler(ctx, meta, e)
 		if err != nil {
 			return err
@@ -326,9 +325,9 @@ func catching(
 	ctx context.Context,
 	logger log.Logger,
 	subscriber Subscriber,
-	esRepo player.Repository,
+	esRepo Repository,
 	startAt uint64,
-	handler player.MessageHandlerFunc,
+	handler MessageHandlerFunc,
 	options ProjectorOptions,
 ) (uint64, error) {
 	logger.Info("Retrieving subscriptions last position for the first run")
@@ -337,7 +336,7 @@ func catching(
 		option(&filter)
 	}
 
-	p := player.New(esRepo)
+	p := New(esRepo)
 
 	// loop until it is safe to switch to the subscriber
 	var seq uint64

@@ -5,7 +5,7 @@ import (
 
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/jsoncodec"
+	"github.com/quintans/eventsourcing/encoding/jsoncodec"
 
 	"github.com/quintans/eventsourcing"
 )

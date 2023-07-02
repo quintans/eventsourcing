@@ -8,7 +8,6 @@ import (
 
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
 )
@@ -55,8 +54,8 @@ func PartitionedWorkers(
 	resumeStore ResumeStore,
 	subscriberFactory SubscriberFactory,
 	projectionName string, topic string, partitions uint32,
-	esRepo player.Repository,
-	handler player.MessageHandlerFunc,
+	esRepo Repository,
+	handler MessageHandlerFunc,
 	options ProjectorOptions,
 ) ([]worker.Worker, error) {
 	workerLockerFactory := func(lockName string) lock.Locker {
@@ -87,8 +86,8 @@ func PartitionedCompetingWorkers(
 	resumeStore ResumeStore,
 	subscriberFactory SubscriberFactory,
 	projectionName string, topic string, partitions uint32,
-	esRepo player.Repository,
-	handler player.MessageHandlerFunc,
+	esRepo Repository,
+	handler MessageHandlerFunc,
 	options ProjectorOptions,
 ) ([]worker.Worker, error) {
 	if partitions <= 1 {
@@ -147,8 +146,8 @@ func createProjector(
 	projectionName string,
 	topic string,
 	partition uint32,
-	esRepo player.Repository,
-	handler player.MessageHandlerFunc,
+	esRepo Repository,
+	handler MessageHandlerFunc,
 	options ProjectorOptions,
 ) (worker.Worker, error) {
 	t, err := util.NewPartitionedTopic(topic, partition)

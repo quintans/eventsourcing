@@ -8,7 +8,7 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/jsoncodec"
+	"github.com/quintans/eventsourcing/encoding/jsoncodec"
 )
 
 // This represent the new software version after a migration

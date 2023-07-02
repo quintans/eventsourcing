@@ -12,14 +12,14 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/player"
+	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/worker"
 	"github.com/quintans/faults"
 )
 
-var _ player.Repository = (*InMemDB)(nil)
+var _ projection.Repository = (*InMemDB)(nil)
 
 type InMemDB struct {
 	mu      sync.RWMutex

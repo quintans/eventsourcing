@@ -12,7 +12,6 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/player"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/worker"
@@ -28,8 +27,8 @@ func NewProjector(
 	resumeKey projection.ResumeKey,
 	projectionName string,
 	topic string,
-	esRepo player.Repository,
-	handler player.MessageHandlerFunc,
+	esRepo projection.Repository,
+	handler projection.MessageHandlerFunc,
 	options projection.ProjectorOptions,
 ) (*worker.RunWorker, error) {
 	nc, err := nats.Connect(url)
@@ -71,8 +70,8 @@ func NewProjectorWithConn(
 	resumeKey projection.ResumeKey,
 	projectionName string,
 	topic string,
-	esRepo player.Repository,
-	handler player.MessageHandlerFunc,
+	esRepo projection.Repository,
+	handler projection.MessageHandlerFunc,
 	options projection.ProjectorOptions,
 ) (*worker.RunWorker, error) {
 	stream, err := nc.JetStream()
@@ -178,7 +177,7 @@ func (s *Subscriber) SaveLastSequence(ctx context.Context, token uint64) error {
 	return s.resumeStore.SetStreamResumeToken(ctx, s.resumeKey, projection.NewToken(projection.ConsumerToken, token))
 }
 
-func (s *Subscriber) StartConsumer(ctx context.Context, handler player.MessageHandlerFunc, options ...projection.ConsumerOption) error {
+func (s *Subscriber) StartConsumer(ctx context.Context, handler projection.MessageHandlerFunc, options ...projection.ConsumerOption) error {
 	logger := s.logger.WithTags(log.Tags{"topic": s.resumeKey.Topic()})
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
@@ -210,7 +209,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, handler player.MessageHa
 		}
 		if opts.Filter == nil || opts.Filter(evt) {
 			logger.Debugf("Handling received event '%+v'", evt)
-			er = handler(ctx, player.Meta{Sequence: sequence(m)}, evt)
+			er = handler(ctx, projection.Meta{Sequence: sequence(m)}, evt)
 			if er != nil {
 				logger.WithError(er).Errorf("Error when handling event with ID '%s'", evt.ID)
 				m.Nak()
@@ -268,4 +267,9 @@ func (s *Subscriber) StopConsumer(ctx context.Context) {
 	s.subscription = nil
 	close(s.done)
 	s.done = nil
+}
+
+func sequence(m *nats.Msg) uint64 {
+	md, _ := m.Metadata()
+	return md.Sequence.Stream
 }
