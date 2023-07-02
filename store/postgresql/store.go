@@ -344,7 +344,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 
 func (r *EsRepository) GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error) {
 	var query bytes.Buffer
-	query.WriteString("SELECT MAX(sink_seq) FROM events WHERE migration = 0")
+	query.WriteString("SELECT COALESCE(MAX(sink_seq), 0) FROM events WHERE migration = 0")
 	args := []interface{}{}
 	args = buildFilter(filter, &query, args)
 	var seq uint64

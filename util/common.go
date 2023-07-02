@@ -3,21 +3,10 @@ package util
 import (
 	"hash/fnv"
 	"math/rand"
-	"reflect"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 )
-
-// Dereference returns the underlying struct dereference
-func Dereference(i interface{}) interface{} {
-	v := reflect.ValueOf(i)
-	if v.Kind() != reflect.Ptr {
-		return i
-	}
-	v = v.Elem()
-	return v.Interface()
-}
 
 // Hash returns the hash code for s
 func Hash(s string) uint32 {

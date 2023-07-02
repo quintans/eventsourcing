@@ -54,8 +54,9 @@ func PartitionedWorkers(
 	resumeStore ResumeStore,
 	subscriberFactory SubscriberFactory,
 	projectionName string, topic string, partitions uint32,
-	catchUpCallback CatchUpCallback,
+	esRepo Repository,
 	handler MessageHandlerFunc,
+	options ProjectorOptions,
 ) ([]worker.Worker, error) {
 	workerLockerFactory := func(lockName string) lock.Locker {
 		return nil
@@ -68,8 +69,9 @@ func PartitionedWorkers(
 		resumeStore,
 		subscriberFactory,
 		projectionName, topic, partitions,
-		catchUpCallback,
+		esRepo,
 		handler,
+		options,
 	)
 }
 
@@ -84,8 +86,9 @@ func PartitionedCompetingWorkers(
 	resumeStore ResumeStore,
 	subscriberFactory SubscriberFactory,
 	projectionName string, topic string, partitions uint32,
-	catchUpCallback CatchUpCallback,
+	esRepo Repository,
 	handler MessageHandlerFunc,
+	options ProjectorOptions,
 ) ([]worker.Worker, error) {
 	if partitions <= 1 {
 		w, err := createProjector(
@@ -98,8 +101,9 @@ func PartitionedCompetingWorkers(
 			projectionName,
 			topic,
 			0,
-			catchUpCallback,
+			esRepo,
 			handler,
+			options,
 		)
 		if err != nil {
 			return nil, faults.Wrap(err)
@@ -119,8 +123,9 @@ func PartitionedCompetingWorkers(
 			projectionName,
 			topic,
 			x+1,
-			catchUpCallback,
+			esRepo,
 			handler,
+			options,
 		)
 		if err != nil {
 			return nil, faults.Wrap(err)
@@ -141,8 +146,9 @@ func createProjector(
 	projectionName string,
 	topic string,
 	partition uint32,
-	catchUpCallback CatchUpCallback,
+	esRepo Repository,
 	handler MessageHandlerFunc,
+	options ProjectorOptions,
 ) (worker.Worker, error) {
 	t, err := util.NewPartitionedTopic(topic, partition)
 	if err != nil {
@@ -160,7 +166,8 @@ func createProjector(
 		catchUpLockerFactory,
 		resumeStore,
 		subscriberFactory(ctx, sr),
-		catchUpCallback,
+		esRepo,
 		handler,
+		options,
 	), nil
 }

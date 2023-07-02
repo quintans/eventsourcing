@@ -1,4 +1,4 @@
-package player
+package projection
 
 import (
 	"context"

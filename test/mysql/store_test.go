@@ -16,9 +16,9 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/log"
+	"github.com/quintans/eventsourcing/sink/poller"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/store/postgresql"
-	"github.com/quintans/eventsourcing/stream/poller"
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/util"
 )

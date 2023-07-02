@@ -90,7 +90,7 @@ func (w *RunWorker) Start(ctx context.Context) bool {
 		w.cancelLock = cancel
 		w.mu.Unlock()
 		go func() {
-			<-release
+			<-release.Done()
 			w.Stop(context.Background())
 		}()
 	}
