@@ -164,10 +164,10 @@ func countRunningWorkers(workers []worker.Worker) int {
 
 func getWorkers(suffix string) []worker.Worker {
 	return []worker.Worker{
-		NewRunner("W1", "W1-"+suffix),
-		NewRunner("W2", "W2-"+suffix),
-		NewRunner("W3", "W3-"+suffix),
-		NewRunner("W4", "W4-"+suffix),
+		NewRunner("W1", suffix+"-W1"),
+		NewRunner("W2", suffix+"-W2"),
+		NewRunner("W3", suffix+"-W3"),
+		NewRunner("W4", suffix+"-W4"),
 	}
 }
 
@@ -184,20 +184,16 @@ func dumpRunningTasks() {
 }
 
 func NewRunner(name, tag string) *worker.RunWorker {
-	return worker.NewRunWorker(logger, name, "workers", lockerPool.NewLock(name), Task{name: tag})
-}
-
-type Task struct {
-	name string
-}
-
-func (t Task) Run(context.Context) error {
-	runningTasks.Store(t.name, true)
-	fmt.Println("starting ✅", t.name)
-	return nil
-}
-
-func (t Task) Cancel(context.Context, bool) {
-	runningTasks.Delete(t.name)
-	fmt.Println("stopping ❌", t.name)
+	return worker.NewRunWorker(logger, name, "workers", lockerPool.NewLock(name), func(ctx context.Context) error {
+		go func() {
+			runningTasks.Store(name, true)
+			fmt.Printf("starting ✅ %s\n", tag)
+			go func() {
+				<-ctx.Done()
+				runningTasks.Delete(name)
+				fmt.Printf("stopping ❌ %s\n", tag)
+			}()
+		}()
+		return nil
+	})
 }

@@ -15,7 +15,7 @@ type (
 )
 
 type Meta struct {
-	Sequence uint64
+	Token Token
 }
 
 type Repository interface {
@@ -57,8 +57,8 @@ func WithCustomFilter(fn func(events *eventsourcing.Event) bool) Option {
 	}
 }
 
-// New instantiates a new Player.
-func New(repository Repository, options ...Option) Player {
+// NewPlayer instantiates a new Player.
+func NewPlayer(repository Repository, options ...Option) Player {
 	p := Player{
 		store:     repository,
 		batchSize: defEventsBatchSize,
@@ -103,15 +103,7 @@ func StartAt(sequence uint64) StartOption {
 	}
 }
 
-func (p Player) ReplayUntil(ctx context.Context, handler MessageHandlerFunc, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
-	return p.ReplayFromUntil(ctx, handler, 0, untilSequence, filters...)
-}
-
-func (p Player) Replay(ctx context.Context, handler MessageHandlerFunc, afterEventID uint64, filters ...store.FilterOption) (uint64, error) {
-	return p.ReplayFromUntil(ctx, handler, afterEventID, 0, filters...)
-}
-
-func (p Player) ReplayFromUntil(ctx context.Context, handler MessageHandlerFunc, afterSequence, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
+func (p Player) Replay(ctx context.Context, handler MessageHandlerFunc, afterSequence, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
 	filter := store.Filter{}
 	for _, f := range filters {
 		f(&filter)
@@ -124,7 +116,7 @@ func (p Player) ReplayFromUntil(ctx context.Context, handler MessageHandlerFunc,
 		}
 		for _, evt := range events {
 			if p.customFilter == nil || p.customFilter(evt) {
-				err := handler(ctx, Meta{Sequence: evt.Sequence}, sink.ToMessage(evt, sink.Meta{}))
+				err := handler(ctx, Meta{Token: NewToken(CatchUpToken, evt.Sequence)}, sink.ToMessage(evt, sink.Meta{}))
 				if err != nil {
 					return 0, faults.Wrap(err)
 				}

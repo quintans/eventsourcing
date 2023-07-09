@@ -13,12 +13,6 @@ import (
 	"github.com/quintans/eventsourcing/log"
 )
 
-// Tasker is the interface for tasks that need to be balanced among a set of workers
-type Tasker interface {
-	Run(context.Context) error
-	Cancel(ctx context.Context, hard bool)
-}
-
 var _ Worker = (*RunWorker)(nil)
 
 // RunWorker is responsible for refreshing the lease
@@ -27,18 +21,17 @@ type RunWorker struct {
 	name       string
 	group      string
 	locker     lock.Locker
-	runner     Tasker
-	paused     bool
-	running    bool
+	task       Task
+	cancel     context.CancelFunc
 	cancelLock context.CancelFunc
 	mu         sync.RWMutex
 }
 
-func NewRunWorker(logger log.Logger, name, group string, locker lock.Locker, runner Tasker) *RunWorker {
-	return newRunWorker(logger, name, group, locker, runner)
+func NewRunWorker(logger log.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
+	return newRunWorker(logger, name, group, locker, task)
 }
 
-func newRunWorker(logger log.Logger, name, group string, locker lock.Locker, runner Tasker) *RunWorker {
+func newRunWorker(logger log.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
 	logger = logger.WithTags(log.Tags{
 		"id": shortid.MustGenerate(),
 	})
@@ -47,7 +40,7 @@ func newRunWorker(logger log.Logger, name, group string, locker lock.Locker, run
 		name:   name,
 		group:  group,
 		locker: locker,
-		runner: runner,
+		task:   task,
 	}
 }
 
@@ -62,26 +55,21 @@ func (w *RunWorker) Group() string {
 func (w *RunWorker) IsRunning() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.running
+	return w.isRunning()
 }
 
-func (w *RunWorker) IsPaused() bool {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.paused
+func (w *RunWorker) isRunning() bool {
+	return w.cancel != nil
 }
 
 func (w *RunWorker) Start(ctx context.Context) bool {
-	w.mu.Lock()
-	if w.running {
-		w.mu.Unlock()
+	if w.IsRunning() {
 		return true
 	}
-	w.mu.Unlock()
 
 	if w.locker != nil {
-		ctx2, cancel := context.WithCancel(context.Background())
-		release, err := w.locker.Lock(ctx2)
+		ctx, cancel := context.WithCancel(ctx)
+		release, err := w.locker.Lock(ctx)
 		if err != nil {
 			cancel()
 			return false
@@ -95,23 +83,19 @@ func (w *RunWorker) Start(ctx context.Context) bool {
 		}()
 	}
 
-	w.mu.Lock()
-	w.start(ctx)
-	w.mu.Unlock()
-
-	return true
+	return w.start(ctx)
 }
 
 func (w *RunWorker) Stop(ctx context.Context) {
 	w.mu.Lock()
-	w.stop(ctx, false)
+	w.stop(ctx)
 	w.mu.Unlock()
 }
 
-func (w *RunWorker) stop(ctx context.Context, hard bool) {
-	if w.running {
+func (w *RunWorker) stop(ctx context.Context) {
+	if w.isRunning() {
 		w.logger.Infof("Stopping worker '%s'", w.name)
-		w.runner.Cancel(ctx, hard)
+		w.cancel()
 		if w.locker != nil {
 			err := w.locker.Unlock(ctx)
 			if err != nil {
@@ -119,37 +103,31 @@ func (w *RunWorker) stop(ctx context.Context, hard bool) {
 			}
 			w.cancelLock()
 		}
-		w.running = false
+		w.cancel = nil
 	}
 }
 
-func (w *RunWorker) start(ctx context.Context) {
+func (w *RunWorker) start(ctx context.Context) bool {
+	ctx, cancel := context.WithCancel(ctx)
+
+	w.mu.Lock()
 	w.logger.Infof("Starting worker '%s'", w.name)
 
-	err := w.runner.Run(ctx)
+	err := w.task(ctx)
 	if err != nil {
+		w.mu.Unlock()
+		cancel()
 		w.logger.Errorf("Error while running: %+v", err)
 		w.Stop(context.Background())
-		return
+		return false
 	}
-	w.running = true
-	w.paused = false
-}
+	w.cancel = cancel
+	w.mu.Unlock()
 
-func (w *RunWorker) Pause(ctx context.Context, pause bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if pause {
-		w.stop(ctx, true)
-	}
-	w.paused = pause
+	return true
 }
 
 func (w *RunWorker) IsBalanceable() bool {
-	return !w.paused && w.isBalanceable()
-}
-
-func (w *RunWorker) isBalanceable() bool {
 	return w.locker != nil
 }
 
@@ -194,24 +172,4 @@ func ParseSlot(slot string) (PartitionSlot, error) {
 	return s, nil
 }
 
-var _ Tasker = (*Task)(nil)
-
-type Task struct {
-	run    func(ctx context.Context) error
-	cancel func(ctx context.Context, hard bool)
-}
-
-func NewTask(run func(ctx context.Context) error, cancel func(ctx context.Context, hard bool)) *Task {
-	return &Task{
-		run:    run,
-		cancel: cancel,
-	}
-}
-
-func (t *Task) Run(ctx context.Context) error {
-	return t.run(ctx)
-}
-
-func (t *Task) Cancel(ctx context.Context, hard bool) {
-	t.cancel(ctx, hard)
-}
+type Task func(ctx context.Context) error

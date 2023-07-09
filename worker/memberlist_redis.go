@@ -89,8 +89,9 @@ func (r *RedisMemberList) list(ctx context.Context, c *redis.Client) ([]MemberWo
 	membersWorkers := []MemberWorkers{}
 
 	type result struct {
-		Val string
-		Err error
+		MemberID string
+		Val      string
+		Err      error
 	}
 
 	var allErr error
@@ -113,17 +114,17 @@ func (r *RedisMemberList) list(ctx context.Context, c *redis.Client) ([]MemberWo
 					},
 					retry.Attempts(retries),
 				)
-				ch <- result{Val: v, Err: faults.Wrap(err)}
+				ch <- result{MemberID: m, Val: v, Err: faults.Wrap(err)}
 			}(memberID)
 		}
-		for _, memberID := range members {
+		for range members {
 			r := <-ch
 			if r.Err != nil {
 				allErr = multierror.Append(err, r.Err)
 			} else {
 				s := strings.Split(r.Val, separator)
 				membersWorkers = append(membersWorkers, MemberWorkers{
-					Name:    memberID,
+					Name:    r.MemberID,
 					Workers: s,
 				})
 			}

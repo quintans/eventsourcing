@@ -32,8 +32,6 @@ type Worker interface {
 	Group() string
 	IsRunning() bool
 	IsBalanceable() bool
-	Pause(context.Context, bool)
-	IsPaused() bool
 	Start(context.Context) bool
 	Stop(ctx context.Context)
 }
@@ -41,8 +39,6 @@ type Worker interface {
 type Balancer interface {
 	Name() string
 	Start(ctx context.Context)
-	Pause(ctx context.Context, group string)
-	Resume(ctx context.Context, group string)
 	Stop(ctx context.Context)
 }
 
@@ -50,7 +46,11 @@ var _ Balancer = (*MembersBalancer)(nil)
 
 type MembersBalancerOption func(*MembersBalancer)
 
-// MembersBalancer manages the lifecycle of workers as well balance them over all members
+// MembersBalancer manages the lifecycle of workers as well balance them over all members.
+//
+// A worker can be unbalanced or paused.
+//   - Unbalanced worker will never be balanced across the different members and will always run.
+//   - Paused worker will hold its execution and will not be balanced-
 type MembersBalancer struct {
 	name             string
 	logger           log.Logger
@@ -145,29 +145,13 @@ func (b *MembersBalancer) Stop(ctx context.Context) {
 	b.done = nil
 }
 
-func (b *MembersBalancer) Pause(ctx context.Context, group string) {
-	for _, w := range b.workers {
-		if w.Group() == group {
-			w.Pause(ctx, true)
-		}
-	}
-}
-
-func (b *MembersBalancer) Resume(ctx context.Context, group string) {
-	for _, w := range b.workers {
-		if w.Group() == group {
-			w.Pause(ctx, false)
-		}
-	}
-}
-
 func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 	members, err := b.member.List(ctx)
 	if err != nil {
 		return err
 	}
-	workers := b.filterBalancedWorkers()
-	members = filterMemberWorkers(members, workers)
+	balancedWorkers := b.filterBalancedWorkers()
+	members = filterMemberWorkers(members, balancedWorkers)
 
 	// if current member is not in the list, add it to the member count
 	present := false
@@ -182,7 +166,7 @@ func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 		membersCount++
 	}
 
-	monitorsNo := len(workers)
+	monitorsNo := len(balancedWorkers)
 	minWorkersToAcquire := monitorsNo / membersCount
 
 	// check if all members have the minimum workers. Only after that, any additional can be picked up.
@@ -203,7 +187,7 @@ func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 	}
 	// mapping my current workers
 	myRunningWorkers := map[string]bool{}
-	for _, v := range workers {
+	for _, v := range balancedWorkers {
 		if v.IsRunning() {
 			workersInUse[v.Name()] = true
 			myRunningWorkers[v.Name()] = true
@@ -218,10 +202,18 @@ func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 		minWorkersToAcquire++
 	}
 
-	locks := b.balance(ctx, workers, minWorkersToAcquire, workersInUse, myRunningWorkers)
+	// make sure that all unpaused and unbalanced workers are running
+	for _, w := range b.workers {
+		if !w.IsBalanceable() {
+			w.Start(ctx)
+		}
+	}
+
+	locks := b.balance(ctx, balancedWorkers, minWorkersToAcquire, workersInUse, myRunningWorkers)
 
 	// reset ticker if needed
-	if b.enableTurbo(workers, members, locks, minWorkersToAcquire) {
+	if b.enableTurbo(balancedWorkers, members, locks, minWorkersToAcquire) {
+		// turbo is activated when there is a need to rebalance workers
 		if b.currentHeartbeat != b.turbo {
 			b.currentHeartbeat = b.turbo
 			ticker.Reset(b.turbo)
@@ -280,13 +272,6 @@ func filterMemberWorkers(members []MemberWorkers, workers []Worker) []MemberWork
 }
 
 func (b *MembersBalancer) balance(ctx context.Context, workers []Worker, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
-	// make sure that all unpaused unbalanced workers are running
-	for _, w := range b.workers {
-		if !w.IsPaused() && !w.IsBalanceable() {
-			w.Start(ctx)
-		}
-	}
-
 	running := len(myRunningWorkers)
 	if running == workersToAcquire {
 		return mapToString(myRunningWorkers)
@@ -372,18 +357,6 @@ func (b *SingleBalancer) Start(ctx context.Context) {
 			}
 		}
 	}()
-}
-
-func (b *SingleBalancer) Pause(ctx context.Context, group string) {
-	if b.worker.Group() == group {
-		b.worker.Pause(ctx, true)
-	}
-}
-
-func (b *SingleBalancer) Resume(ctx context.Context, group string) {
-	if b.worker.Group() == group {
-		b.worker.Pause(ctx, false)
-	}
 }
 
 func (b *SingleBalancer) Stop(ctx context.Context) {

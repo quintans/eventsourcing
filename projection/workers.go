@@ -6,13 +6,12 @@ import (
 
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
 )
 
-type TaskerFactory func(partitionLow, partitionHi uint32) worker.Tasker
+type TaskerFactory func(partitionLow, partitionHi uint32) worker.Task
 
 // PartitionedEventForwarderWorkers create workers responsible to forward events to their managed topic partition
 // each worker is responsible to forward a range of partitions
@@ -33,7 +32,7 @@ func PartitionedEventForwarderWorkers(ctx context.Context, logger log.Logger, na
 }
 
 // PartitionedEventForwarderWorker creates a single worker responsible of forwarding
-func PartitionedEventForwarderWorker(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, feeder worker.Tasker) worker.Worker {
+func PartitionedEventForwarderWorker(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, feeder worker.Task) worker.Worker {
 	return worker.NewRunWorker(
 		logger,
 		name+"-worker",
@@ -50,28 +49,20 @@ type SubscriberFactory func(context.Context, ResumeKey) Subscriber
 func PartitionedWorkers(
 	ctx context.Context,
 	logger log.Logger,
-	catchUpLockerFactory WaitLockerFactory,
-	resumeStore ResumeStore,
+	lockerFactory LockerFactory,
 	subscriberFactory SubscriberFactory,
-	projectionName string, topic string, partitions uint32,
+	topic string, partitions uint32,
 	esRepo Repository,
-	handler MessageHandlerFunc,
-	options ProjectorOptions,
-) ([]worker.Worker, error) {
-	workerLockerFactory := func(lockName string) lock.Locker {
-		return nil
-	}
+	projection Projection,
+) error {
 	return PartitionedCompetingWorkers(
 		ctx,
 		logger,
-		workerLockerFactory,
-		catchUpLockerFactory,
-		resumeStore,
+		lockerFactory,
 		subscriberFactory,
-		projectionName, topic, partitions,
+		topic, partitions,
 		esRepo,
-		handler,
-		options,
+		projection,
 	)
 }
 
@@ -81,93 +72,75 @@ func PartitionedWorkers(
 func PartitionedCompetingWorkers(
 	ctx context.Context,
 	logger log.Logger,
-	workerLockerFactory LockerFactory,
-	catchUpLockerFactory WaitLockerFactory,
-	resumeStore ResumeStore,
+	lockerFactory LockerFactory,
 	subscriberFactory SubscriberFactory,
-	projectionName string, topic string, partitions uint32,
+	topic string, partitions uint32,
 	esRepo Repository,
-	handler MessageHandlerFunc,
-	options ProjectorOptions,
-) ([]worker.Worker, error) {
+	projection Projection,
+) error {
 	if partitions <= 1 {
-		w, err := createProjector(
+		err := createProjector(
 			ctx,
 			logger,
-			workerLockerFactory,
-			catchUpLockerFactory,
-			resumeStore,
+			lockerFactory,
 			subscriberFactory,
-			projectionName,
 			topic,
 			0,
 			esRepo,
-			handler,
-			options,
+			projection,
 		)
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return faults.Wrap(err)
 		}
-		return []worker.Worker{w}, nil
+		return nil
 	}
-	workers := make([]worker.Worker, partitions)
 	for x := uint32(0); x < partitions; x++ {
-		var err error
-		workers[x], err = createProjector(
+		err := createProjector(
 			ctx,
 			logger,
-			workerLockerFactory,
-			catchUpLockerFactory,
-			resumeStore,
+			lockerFactory,
 			subscriberFactory,
-			projectionName,
 			topic,
 			x+1,
 			esRepo,
-			handler,
-			options,
+			projection,
 		)
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return faults.Wrap(err)
 		}
 	}
 
-	return workers, nil
+	return nil
 }
 
 // CreateWorker creates a worker that will run if acquires the lock
 func createProjector(
 	ctx context.Context,
 	logger log.Logger,
-	workerLockerFactory LockerFactory,
-	catchUpLockerFactory WaitLockerFactory,
-	resumeStore ResumeStore,
+	lockerFactory LockerFactory,
 	subscriberFactory SubscriberFactory,
-	projectionName string,
 	topic string,
 	partition uint32,
 	esRepo Repository,
-	handler MessageHandlerFunc,
-	options ProjectorOptions,
-) (worker.Worker, error) {
+	projection Projection,
+) error {
 	t, err := util.NewPartitionedTopic(topic, partition)
 	if err != nil {
-		return nil, faults.Wrap(err)
+		return faults.Wrap(err)
 	}
-	sr, err := NewStreamResume(t, projectionName)
+	sr, err := NewStreamResume(t, projection.Name())
 	if err != nil {
-		return nil, faults.Wrap(err)
+		return faults.Wrap(err)
 	}
 
-	return NewProjector(
+	Project(
 		ctx,
 		logger,
-		workerLockerFactory,
-		catchUpLockerFactory,
-		resumeStore,
-		subscriberFactory(ctx, sr),
+		lockerFactory,
 		esRepo,
-		handler,
-		options,
-	), nil
+		subscriberFactory(ctx, sr),
+		projection,
+	)
+
+	return nil
 }

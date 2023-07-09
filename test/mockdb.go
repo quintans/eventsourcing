@@ -15,7 +15,6 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/worker"
 	"github.com/quintans/faults"
 )
 
@@ -197,14 +196,12 @@ func (c *Cursor) Close() {
 	c.db.RemoveCursor(c)
 }
 
-var _ worker.Tasker = (*InMemDBFeed)(nil)
-
 type InMemDBFeed struct {
 	db     *InMemDB
 	sinker sink.Sinker
 }
 
-func InMemDBNewFeed(db *InMemDB, sinker sink.Sinker) worker.Tasker {
+func InMemDBNewFeed(db *InMemDB, sinker sink.Sinker) InMemDBFeed {
 	return InMemDBFeed{
 		db:     db,
 		sinker: sinker,
@@ -255,5 +252,3 @@ func (f InMemDBFeed) Run(ctx context.Context) error {
 		}
 	}
 }
-
-func (f InMemDBFeed) Cancel(ctx context.Context, hard bool) {}

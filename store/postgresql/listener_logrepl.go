@@ -22,7 +22,6 @@ import (
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
-	"github.com/quintans/eventsourcing/worker"
 )
 
 const (
@@ -61,8 +60,6 @@ func WithEventsTable(col string) FeedLogreplOption {
 		p.eventsTable = col
 	}
 }
-
-var _ worker.Tasker = (*FeedLogrepl)(nil)
 
 type FeedLogrepl struct {
 	dburl                 string
@@ -230,8 +227,6 @@ func (f *FeedLogrepl) Run(ctx context.Context) error {
 		}
 	}, b)
 }
-
-func (FeedLogrepl) Cancel(ctx context.Context, hard bool) {}
 
 func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool) (*eventsourcing.Event, error) {
 	m, err := pgoutput.Parse(WALData)

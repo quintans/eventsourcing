@@ -59,14 +59,17 @@ func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 		return nil, faults.Wrap(err)
 	}
 	type result struct {
-		KVPair *api.KVPair
-		Err    error
+		MemberID string
+		KVPair   *api.KVPair
+		Err      error
 	}
 	var allErr error
 	ch := make(chan result, len(members))
 	for _, memberID := range members {
 		go func(m string) {
-			r := result{}
+			r := result{
+				MemberID: m,
+			}
 			retry.Do(
 				func() error {
 					r.KVPair, _, r.Err = c.client.KV().Get(m, options)
@@ -77,14 +80,14 @@ func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 			r.Err = faults.Wrap(r.Err)
 			ch <- r
 		}(memberID)
-		for _, memberID := range members {
+		for range members {
 			r := <-ch
 			if r.Err != nil {
 				allErr = multierror.Append(err, r.Err)
 			} else if r.KVPair != nil {
 				s := strings.Split(string(r.KVPair.Value), ",")
 				membersWorkers = append(membersWorkers, MemberWorkers{
-					Name:    memberID,
+					Name:    r.MemberID,
 					Workers: s,
 				})
 			}

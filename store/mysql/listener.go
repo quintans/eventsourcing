@@ -25,12 +25,9 @@ import (
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
-	"github.com/quintans/eventsourcing/worker"
 )
 
 const resumeTokenSep = ":"
-
-var _ worker.Tasker = (*Feed)(nil)
 
 type Feed struct {
 	logger                log.Logger
@@ -184,8 +181,6 @@ func (f *Feed) Run(ctx context.Context) error {
 		return nil
 	}, b)
 }
-
-func (Feed) Cancel(ctx context.Context, hard bool) {}
 
 func (f *Feed) newCanal() (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()

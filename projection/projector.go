@@ -73,15 +73,13 @@ func WithAckWait(ackWait time.Duration) ConsumerOption {
 }
 
 type Consumer interface {
-	StartConsumer(ctx context.Context, handler MessageHandlerFunc, options ...ConsumerOption) error
-	StopConsumer(ctx context.Context)
+	StartConsumer(ctx context.Context, projection Projection, options ...ConsumerOption) error
+	Topic() util.Topic
 }
 
 type Subscriber interface {
 	Consumer
-	ResumeKey() ResumeKey
 	RetrieveLastSequence(ctx context.Context) (uint64, error)
-	SaveLastSequence(ctx context.Context, token uint64) error
 }
 
 type Event struct {
@@ -136,13 +134,13 @@ const (
 
 type Token struct {
 	kind  TokenKind
-	token uint64
+	value uint64
 }
 
 func NewToken(kind TokenKind, token uint64) Token {
 	return Token{
 		kind:  kind,
-		token: token,
+		value: token,
 	}
 }
 
@@ -164,12 +162,12 @@ func ParseToken(s string) (Token, error) {
 
 	return Token{
 		kind:  k,
-		token: seq,
+		value: seq,
 	}, nil
 }
 
 func (t Token) String() string {
-	return fmt.Sprintf("%v:%v", string(t.kind), t.token)
+	return fmt.Sprintf("%v:%v", string(t.kind), t.value)
 }
 
 func (t Token) Kind() TokenKind {
@@ -177,11 +175,11 @@ func (t Token) Kind() TokenKind {
 }
 
 func (t Token) Value() uint64 {
-	return t.token
+	return t.value
 }
 
 func (t Token) IsEmpty() bool {
-	return t.token == 0
+	return t.value == 0
 }
 
 func (t Token) IsZero() bool {
@@ -197,13 +195,20 @@ type ResumeStore interface {
 	SetStreamResumeToken(ctx context.Context, key ResumeKey, token Token) error
 }
 
+type Projection interface {
+	Name() string
+	StreamResumeToken(ctx context.Context, topic util.Topic) (Token, error)
+	Options() Options
+	Handler(ctx context.Context, meta Meta, e *sink.Message) error
+}
+
 type (
 	LockerFactory     func(lockName string) lock.Locker
 	WaitLockerFactory func(lockName string) lock.WaitLocker
 	CatchUpCallback   func(context.Context, eventid.EventID) (eventid.EventID, error)
 )
 
-type ProjectorOptions struct {
+type Options struct {
 	CatchUpSafetyMargin time.Duration
 	CatchUpFilters      []store.FilterOption
 }
@@ -220,44 +225,43 @@ type ProjectorOptions struct {
 // This can be used to migrate projections, where a completely new projection will be populated.
 //
 // The catch up function should replay all events from all event stores needed for this
-func NewProjector(
+func Project(
 	ctx context.Context,
 	logger log.Logger,
-	workerLockerFactory LockerFactory,
-	catchUpLockerFactory WaitLockerFactory,
-	resumeStore ResumeStore,
-	subscriber Subscriber,
+	lockerFactory LockerFactory,
 	esRepo Repository,
-	handler MessageHandlerFunc,
-	options ProjectorOptions,
+	subscriber Subscriber,
+	projection Projection,
 ) *worker.RunWorker {
-	rk := subscriber.ResumeKey()
-	logger = logger.WithTags(log.Tags{
-		"projection": rk.Projection(),
-	})
-
-	name := rk.String() + "-lock"
-	catchUpLocker := catchUpLockerFactory(name)
+	name := fmt.Sprintf("%s-%s-lock", projection.Name(), subscriber.Topic())
 	return worker.NewRunWorker(
 		logger,
 		name,
-		rk.Projection(),
-		workerLockerFactory(name),
-		worker.NewTask(
-			func(ctx context.Context) error {
-				err := catchUp(ctx, logger, catchUpLocker, resumeStore, subscriber, esRepo, handler, options)
+		projection.Name(),
+		nil,
+		func(ctx context.Context) error {
+			go func() {
+				err := catchUp(ctx, logger, lockerFactory, esRepo, subscriber, projection)
 				if err != nil {
-					logger.WithError(err).Error("catchup projection '%s'", rk.Projection())
+					if errors.Is(err, ctx.Err()) {
+						return
+					}
+					logger.WithError(err).Errorf("catchup projection '%s'", projection.Name())
+					return
 				}
 				logger.Info("Finished catching up")
 
-				err = subscriber.StartConsumer(ctx, handler)
-				return faults.Wrapf(err, "start consumer for %s", rk.String())
-			},
-			func(ctx context.Context, hard bool) {
-				subscriber.StopConsumer(ctx)
-			},
-		),
+				err = subscriber.StartConsumer(ctx, projection)
+				if err != nil {
+					if errors.Is(err, ctx.Err()) {
+						return
+					}
+					logger.WithError(err).Errorf("start consumer '%s' for projection %s", subscriber.Topic(), projection.Name())
+					return
+				}
+			}()
+			return nil
+		},
 	)
 }
 
@@ -266,14 +270,19 @@ func NewProjector(
 func catchUp(
 	ctx context.Context,
 	logger log.Logger,
-	locker lock.WaitLocker,
-	resumeStore ResumeStore,
-	subscriber Subscriber,
+	lockerFactory LockerFactory,
 	esRepo Repository,
-	handler MessageHandlerFunc,
-	options ProjectorOptions,
+	subscriber Subscriber,
+	projection Projection,
 ) error {
-	token, err := getSavedToken(ctx, resumeStore, subscriber.ResumeKey())
+	logger = logger.WithTags(log.Tags{
+		"projection": projection.Name(),
+	})
+
+	name := fmt.Sprintf("%s:%s-lock", subscriber.Topic(), projection.Name())
+	locker := lockerFactory(name)
+
+	token, err := getSavedToken(ctx, subscriber, projection)
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -291,10 +300,8 @@ func catchUp(
 		}
 	}()
 
-	resumeKey := subscriber.ResumeKey()
-
 	// recheck if we still need to do a catchup
-	token, err = getSavedToken(ctx, resumeStore, resumeKey)
+	token, err = getSavedToken(ctx, subscriber, projection)
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -302,41 +309,25 @@ func catchUp(
 		return nil
 	}
 
-	handler = func(ctx context.Context, meta Meta, e *sink.Message) error {
-		err := handler(ctx, meta, e)
-		if err != nil {
-			return err
-		}
-		return resumeStore.SetStreamResumeToken(ctx, resumeKey, NewToken(CatchUpToken, meta.Sequence))
-	}
-
-	seq, err := catching(ctx, logger, subscriber, esRepo, token.Value(), handler, options)
-
-	logger.Info("Recording subscriptions positions")
-	err = recordResumeToken(ctx, subscriber, seq)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-
-	return nil
+	return catching(ctx, logger, esRepo, subscriber, token.Value(), projection)
 }
 
 func catching(
 	ctx context.Context,
 	logger log.Logger,
-	subscriber Subscriber,
 	esRepo Repository,
+	subscriber Subscriber,
 	startAt uint64,
-	handler MessageHandlerFunc,
-	options ProjectorOptions,
-) (uint64, error) {
+	projection Projection,
+) error {
 	logger.Info("Retrieving subscriptions last position for the first run")
 	filter := store.Filter{}
+	options := projection.Options()
 	for _, option := range options.CatchUpFilters {
 		option(&filter)
 	}
 
-	p := New(esRepo)
+	player := NewPlayer(esRepo)
 
 	// loop until it is safe to switch to the subscriber
 	var seq uint64
@@ -345,14 +336,14 @@ func catching(
 
 		until, err := esRepo.GetMaxSeq(ctx, filter)
 		if err != nil {
-			return 0, faults.Wrap(err)
+			return faults.Wrap(err)
 		}
 
 		// first catch up (this can take days)
 		// catchUpCallback should take care of saving the resume value
-		seq, err = p.ReplayFromUntil(ctx, handler, startAt, until, options.CatchUpFilters...)
+		seq, err = player.Replay(ctx, projection.Handler, startAt, until, options.CatchUpFilters...)
 		if err != nil {
-			return 0, faults.Errorf("replaying events from '%d' until '%d': %w", startAt, until, err)
+			return faults.Errorf("replaying events from '%d' until '%d': %w", startAt, until, err)
 		}
 
 		catchUpSafetyMargin := options.CatchUpSafetyMargin
@@ -369,23 +360,23 @@ func catching(
 	// this call can hang if there is no message in the MQ but that is ok
 	resume, err := subscriber.RetrieveLastSequence(ctx)
 	if err != nil {
-		return 0, faults.Wrap(err)
+		return faults.Wrap(err)
 	}
 
 	if resume != seq {
 		logger.Info("Catching up projection for the second run")
 		// this should be very quick since the bulk of the work was already done
-		seq, err = p.ReplayFromUntil(ctx, handler, seq, resume, options.CatchUpFilters...)
+		seq, err = player.Replay(ctx, projection.Handler, seq, resume, options.CatchUpFilters...)
 		if err != nil {
-			return 0, faults.Errorf("replaying events from '%d' until '%d': %w", seq, resume, err)
+			return faults.Errorf("replaying events from '%d' until '%d': %w", seq, resume, err)
 		}
 	}
 
-	return seq, nil
+	return nil
 }
 
-func getSavedToken(ctx context.Context, resumeStore ResumeStore, resumeKey ResumeKey) (Token, error) {
-	token, err := resumeStore.GetStreamResumeToken(ctx, resumeKey)
+func getSavedToken(ctx context.Context, sub Consumer, projection Projection) (Token, error) {
+	token, err := projection.StreamResumeToken(ctx, sub.Topic())
 	if errors.Is(err, ErrResumeTokenNotFound) {
 		return NewToken(CatchUpToken, 0), nil
 	}
@@ -394,9 +385,4 @@ func getSavedToken(ctx context.Context, resumeStore ResumeStore, resumeKey Resum
 	}
 
 	return token, nil
-}
-
-func recordResumeToken(ctx context.Context, subscriber Subscriber, token uint64) error {
-	err := subscriber.SaveLastSequence(ctx, token)
-	return faults.Wrap(err)
 }
