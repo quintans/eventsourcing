@@ -185,14 +185,12 @@ func dumpRunningTasks() {
 
 func NewRunner(name, tag string) *worker.RunWorker {
 	return worker.NewRunWorker(logger, name, "workers", lockerPool.NewLock(name), func(ctx context.Context) error {
+		runningTasks.Store(name, true)
+		fmt.Printf("starting ✅ %s\n", tag)
 		go func() {
-			runningTasks.Store(name, true)
-			fmt.Printf("starting ✅ %s\n", tag)
-			go func() {
-				<-ctx.Done()
-				runningTasks.Delete(name)
-				fmt.Printf("stopping ❌ %s\n", tag)
-			}()
+			<-ctx.Done()
+			runningTasks.Delete(name)
+			fmt.Printf("stopping ❌ %s\n", tag)
 		}()
 		return nil
 	})

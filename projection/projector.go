@@ -240,26 +240,24 @@ func Project(
 		projection.Name(),
 		nil,
 		func(ctx context.Context) error {
-			go func() {
-				err := catchUp(ctx, logger, lockerFactory, esRepo, subscriber, projection)
-				if err != nil {
-					if errors.Is(err, ctx.Err()) {
-						return
-					}
-					logger.WithError(err).Errorf("catchup projection '%s'", projection.Name())
-					return
+			err := catchUp(ctx, logger, lockerFactory, esRepo, subscriber, projection)
+			if err != nil {
+				if errors.Is(err, ctx.Err()) {
+					return nil
 				}
-				logger.Info("Finished catching up")
+				logger.WithError(err).Errorf("catchup projection '%s'", projection.Name())
+				return err
+			}
+			logger.Info("Finished catching up")
 
-				err = subscriber.StartConsumer(ctx, projection)
-				if err != nil {
-					if errors.Is(err, ctx.Err()) {
-						return
-					}
-					logger.WithError(err).Errorf("start consumer '%s' for projection %s", subscriber.Topic(), projection.Name())
-					return
+			err = subscriber.StartConsumer(ctx, projection)
+			if err != nil {
+				if errors.Is(err, ctx.Err()) {
+					return nil
 				}
-			}()
+				logger.WithError(err).Errorf("start consumer '%s' for projection %s", subscriber.Topic(), projection.Name())
+				return err
+			}
 			return nil
 		},
 	)

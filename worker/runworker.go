@@ -13,6 +13,8 @@ import (
 	"github.com/quintans/eventsourcing/log"
 )
 
+type Task func(ctx context.Context) error
+
 var _ Worker = (*RunWorker)(nil)
 
 // RunWorker is responsible for refreshing the lease
@@ -62,6 +64,8 @@ func (w *RunWorker) isRunning() bool {
 	return w.cancel != nil
 }
 
+// Start attempts to execute the worker in a separate goroutine.
+// It returns true if it able to acquire the lock to execute, false otherwise.
 func (w *RunWorker) Start(ctx context.Context) bool {
 	if w.IsRunning() {
 		return true
@@ -83,7 +87,10 @@ func (w *RunWorker) Start(ctx context.Context) bool {
 		}()
 	}
 
-	return w.start(ctx)
+	w.mu.Lock()
+	w.start(ctx)
+	w.mu.Unlock()
+	return true
 }
 
 func (w *RunWorker) Stop(ctx context.Context) {
@@ -107,24 +114,20 @@ func (w *RunWorker) stop(ctx context.Context) {
 	}
 }
 
-func (w *RunWorker) start(ctx context.Context) bool {
+func (w *RunWorker) start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	w.mu.Lock()
 	w.logger.Infof("Starting worker '%s'", w.name)
 
-	err := w.task(ctx)
-	if err != nil {
-		w.mu.Unlock()
-		cancel()
-		w.logger.Errorf("Error while running: %+v", err)
-		w.Stop(context.Background())
-		return false
-	}
+	go func() {
+		err := w.task(ctx)
+		if err != nil {
+			w.logger.Errorf("Error while running: %+v", err)
+			w.Stop(context.Background())
+			return
+		}
+	}()
 	w.cancel = cancel
-	w.mu.Unlock()
-
-	return true
 }
 
 func (w *RunWorker) IsBalanceable() bool {
@@ -171,5 +174,3 @@ func ParseSlot(slot string) (PartitionSlot, error) {
 	}
 	return s, nil
 }
-
-type Task func(ctx context.Context) error
