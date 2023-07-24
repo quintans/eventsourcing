@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/jackc/pgconn"
 	"github.com/jackc/pglogrepl"
-	"github.com/jackc/pgproto3/v2"
 	"github.com/jackc/pgx/pgtype"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/kyleconroy/pgoutput"
 	"github.com/quintans/faults"
 

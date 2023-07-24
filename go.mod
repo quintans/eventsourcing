@@ -14,10 +14,9 @@ require (
 	github.com/golang/protobuf v1.5.2
 	github.com/hashicorp/consul/api v1.13.0
 	github.com/hashicorp/go-multierror v1.1.1
-	github.com/jackc/pgconn v1.8.1
-	github.com/jackc/pglogrepl v0.0.0-20210514235833-4afe73f2b337
-	github.com/jackc/pgproto3/v2 v2.0.7
+	github.com/jackc/pglogrepl v0.0.0-20230630212501-5fd22a600b50
 	github.com/jackc/pgx v3.6.2+incompatible
+	github.com/jackc/pgx/v5 v5.0.3
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/json-iterator/go v1.1.12
 	github.com/kyleconroy/pgoutput v0.1.0
@@ -27,7 +26,7 @@ require (
 	github.com/quintans/faults v1.5.0
 	github.com/quintans/toolkit v0.3.5
 	github.com/sirupsen/logrus v1.8.1
-	github.com/stretchr/testify v1.8.0
+	github.com/stretchr/testify v1.8.4
 	github.com/teris-io/shortid v0.0.0-20201117134242-e59966efd125
 	github.com/testcontainers/testcontainers-go v0.13.0
 	go.mongodb.org/mongo-driver v1.7.1
@@ -64,7 +63,6 @@ require (
 	github.com/hashicorp/go-rootcerts v1.0.2 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/hashicorp/serf v0.9.8 // indirect
-	github.com/jackc/chunkreader/v2 v2.0.1 // indirect
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -108,7 +106,6 @@ require (
 	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f // indirect
 	golang.org/x/sys v0.5.0 // indirect
 	golang.org/x/text v0.7.0 // indirect
-	golang.org/x/xerrors v0.0.0-20220609144429-65e65417b02f // indirect
 	google.golang.org/genproto v0.0.0-20220708155623-50e5f4832e73 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

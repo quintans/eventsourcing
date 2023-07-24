@@ -8,7 +8,7 @@ import (
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/lib/pq"
 	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
