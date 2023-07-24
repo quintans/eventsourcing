@@ -15,6 +15,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/quintans/faults"
 
@@ -352,7 +353,7 @@ func (r *rec) find(colName string) interface{} {
 
 func (h *binlogHandler) String() string { return "binlogHandler" }
 
-func (h *binlogHandler) OnXID(xid mysql.Position) error {
+func (h *binlogHandler) OnXID(header *replication.EventHeader, xid mysql.Position) error {
 	if len(h.events) == 0 {
 		return nil
 	}
