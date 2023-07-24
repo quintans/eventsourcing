@@ -403,7 +403,7 @@ func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filt
 
 func (r *EsRepository) SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error {
 	_, err := r.db.ExecContext(ctx, "UPDATE events SET sink_seq = $1 WHERE ID = $2", seq, eID.String())
-	return faults.Wrapf(err, "unable to forget event ID '%s'", eID, err)
+	return faults.Wrapf(err, "setting publish sequence %d for event id '%s'", seq, eID)
 }
 
 func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
@@ -484,5 +484,6 @@ func toEventsourcingEvent(e *Event) *eventsourcing.Event {
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
+		Sequence:         e.Sequence,
 	}
 }

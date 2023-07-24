@@ -8,6 +8,7 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 )
 
 type (
@@ -15,10 +16,11 @@ type (
 )
 
 type Meta struct {
+	Topic util.Topic
 	Token Token
 }
 
-type Repository interface {
+type EventsRepository interface {
 	GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error)
 	GetEvents(ctx context.Context, afterSeq uint64, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error)
 }
@@ -38,7 +40,7 @@ type Cancel func()
 type Option func(*Player)
 
 type Player struct {
-	store        Repository
+	store        EventsRepository
 	batchSize    int
 	customFilter func(*eventsourcing.Event) bool
 }
@@ -58,7 +60,7 @@ func WithCustomFilter(fn func(events *eventsourcing.Event) bool) Option {
 }
 
 // NewPlayer instantiates a new Player.
-func NewPlayer(repository Repository, options ...Option) Player {
+func NewPlayer(repository EventsRepository, options ...Option) Player {
 	p := Player{
 		store:     repository,
 		batchSize: defEventsBatchSize,

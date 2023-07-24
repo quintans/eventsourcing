@@ -6,6 +6,7 @@ import (
 
 	"github.com/quintans/faults"
 
+	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
@@ -15,15 +16,21 @@ type TaskerFactory func(partitionLow, partitionHi uint32) worker.Task
 
 // PartitionedEventForwarderWorkers create workers responsible to forward events to their managed topic partition
 // each worker is responsible to forward a range of partitions
-func PartitionedEventForwarderWorkers(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, taskerFactory TaskerFactory, partitionSlots []worker.PartitionSlot) []worker.Worker {
+func PartitionedEventForwarderWorkers(logger log.Logger, name string, lockerFactory LockerFactory, taskerFactory TaskerFactory, partitionSlots []worker.PartitionSlot) []worker.Worker {
 	workers := make([]worker.Worker, len(partitionSlots))
 	for i, v := range partitionSlots {
 		slotsName := fmt.Sprintf("%d-%d", v.From, v.To)
+
+		var locker lock.Locker
+		if lockerFactory != nil {
+			locker = lockerFactory(name + "-lock-" + slotsName)
+		}
+
 		workers[i] = worker.NewRunWorker(
 			logger,
 			name+"-worker-"+slotsName,
 			name,
-			lockerFactory(name+"-lock-"+slotsName),
+			locker,
 			taskerFactory(v.From, v.To),
 		)
 	}
@@ -32,13 +39,18 @@ func PartitionedEventForwarderWorkers(ctx context.Context, logger log.Logger, na
 }
 
 // PartitionedEventForwarderWorker creates a single worker responsible of forwarding
-func PartitionedEventForwarderWorker(ctx context.Context, logger log.Logger, name string, lockerFactory LockerFactory, feeder worker.Task) worker.Worker {
+func PartitionedEventForwarderWorker(logger log.Logger, name string, lockerFactory LockerFactory, task worker.Task) worker.Worker {
+	var locker lock.Locker
+	if lockerFactory != nil {
+		locker = lockerFactory(name + "-lock")
+	}
+
 	return worker.NewRunWorker(
 		logger,
 		name+"-worker",
 		name,
-		lockerFactory(name+"-lock"),
-		feeder,
+		locker,
+		task,
 	)
 }
 
@@ -52,7 +64,7 @@ func PartitionedWorkers(
 	lockerFactory LockerFactory,
 	subscriberFactory SubscriberFactory,
 	topic string, partitions uint32,
-	esRepo Repository,
+	esRepo EventsRepository,
 	projection Projection,
 ) error {
 	return PartitionedCompetingWorkers(
@@ -75,7 +87,7 @@ func PartitionedCompetingWorkers(
 	lockerFactory LockerFactory,
 	subscriberFactory SubscriberFactory,
 	topic string, partitions uint32,
-	esRepo Repository,
+	esRepo EventsRepository,
 	projection Projection,
 ) error {
 	if partitions <= 1 {
@@ -121,7 +133,7 @@ func createProjector(
 	subscriberFactory SubscriberFactory,
 	topic string,
 	partition uint32,
-	esRepo Repository,
+	esRepo EventsRepository,
 	projection Projection,
 ) error {
 	t, err := util.NewPartitionedTopic(topic, partition)

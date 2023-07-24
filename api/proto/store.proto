@@ -53,4 +53,5 @@ message Event {
 	string idempotency_key = 8;
 	string metadata = 9;
 	google.protobuf.Timestamp created_at = 10;
+  uint64 sequence = 11;
 }

@@ -4,12 +4,10 @@ package pg
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/oklog/ulid/v2"
 	"github.com/sirupsen/logrus"
@@ -32,19 +30,6 @@ var logger = log.NewLogrus(logrus.StandardLogger())
 
 var esOptions = &eventsourcing.EsOptions{
 	SnapshotThreshold: 3,
-}
-
-func connect(dbConfig DBConfig) (*sqlx.DB, error) {
-	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
-
-	db, err := sqlx.Open("postgres", dburl)
-	if err != nil {
-		return nil, err
-	}
-	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-	return db, nil
 }
 
 func TestSaveAndGet(t *testing.T) {

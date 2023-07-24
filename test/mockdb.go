@@ -18,7 +18,7 @@ import (
 	"github.com/quintans/faults"
 )
 
-var _ projection.Repository = (*InMemDB)(nil)
+var _ projection.EventsRepository = (*InMemDB)(nil)
 
 type InMemDB struct {
 	mu      sync.RWMutex

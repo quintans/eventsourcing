@@ -9,6 +9,7 @@ import (
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
+	"github.com/quintans/faults"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -25,7 +26,7 @@ func (c DBConfig) URL() string {
 	return fmt.Sprintf("%s:%s@(%s:%d)/%s?parseTime=true", c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 
-func setup() (DBConfig, func(), error) {
+func Setup() (DBConfig, func(), error) {
 	dbConfig := DBConfig{
 		Database: "eventsourcing",
 		Host:     "localhost",
@@ -88,7 +89,7 @@ func setup() (DBConfig, func(), error) {
 func dbSchema(dbURL string) error {
 	db, err := sqlx.Connect("mysql", dbURL)
 	if err != nil {
-		return err
+		return faults.Errorf("connecting to db: %w", err)
 	}
 	defer db.Close()
 

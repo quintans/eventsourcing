@@ -16,7 +16,7 @@ import (
 )
 
 type GrpcServer struct {
-	store Repository
+	store EventsRepository
 }
 
 func (s *GrpcServer) GetMaxSeq(ctx context.Context, r *pb.GetMaxSeqRequest) (*pb.GetMaxSeqReply, error) {
@@ -85,7 +85,7 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	}
 }
 
-func StartGrpcServer(ctx context.Context, address string, repo Repository) error {
+func StartGrpcServer(ctx context.Context, address string, repo EventsRepository) error {
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
 		return faults.Errorf("failed to listen: %w", err)

@@ -55,3 +55,7 @@ func (t Topic) Root() string {
 func (t Topic) Partition() uint32 {
 	return t.partition
 }
+
+func (t Topic) IsZero() bool {
+	return t == Topic{}
+}

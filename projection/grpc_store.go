@@ -20,7 +20,7 @@ type GrpcRepository struct {
 	address string
 }
 
-var _ Repository = (*GrpcRepository)(nil)
+var _ EventsRepository = (*GrpcRepository)(nil)
 
 func NewGrpcRepository(address string) GrpcRepository {
 	return GrpcRepository{
@@ -89,6 +89,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterSeq uint64, limit in
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         encoding.JSONOfString(v.Metadata),
 			CreatedAt:        *createdAt,
+			Sequence:         v.Sequence,
 		}
 	}
 	return events, nil

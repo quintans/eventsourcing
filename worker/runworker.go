@@ -35,7 +35,7 @@ func NewRunWorker(logger log.Logger, name, group string, locker lock.Locker, tas
 
 func newRunWorker(logger log.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
 	logger = logger.WithTags(log.Tags{
-		"id": shortid.MustGenerate(),
+		"id": "worker-" + shortid.MustGenerate(),
 	})
 	return &RunWorker{
 		logger: logger,

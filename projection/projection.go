@@ -229,11 +229,14 @@ func Project(
 	ctx context.Context,
 	logger log.Logger,
 	lockerFactory LockerFactory,
-	esRepo Repository,
+	esRepo EventsRepository,
 	subscriber Subscriber,
 	projection Projection,
 ) *worker.RunWorker {
 	name := fmt.Sprintf("%s-%s-lock", projection.Name(), subscriber.Topic())
+	logger = logger.WithTags(log.Tags{
+		"projection": projection.Name(),
+	})
 	return worker.NewRunWorker(
 		logger,
 		name,
@@ -245,10 +248,10 @@ func Project(
 				if errors.Is(err, ctx.Err()) {
 					return nil
 				}
-				logger.WithError(err).Errorf("catchup projection '%s'", projection.Name())
+				logger.WithError(err).Error("catching up projection")
 				return err
 			}
-			logger.Info("Finished catching up")
+			logger.Info("Finished catching up projection")
 
 			err = subscriber.StartConsumer(ctx, projection)
 			if err != nil {
@@ -269,42 +272,46 @@ func catchUp(
 	ctx context.Context,
 	logger log.Logger,
 	lockerFactory LockerFactory,
-	esRepo Repository,
+	esRepo EventsRepository,
 	subscriber Subscriber,
 	projection Projection,
 ) error {
-	logger = logger.WithTags(log.Tags{
-		"projection": projection.Name(),
-	})
-
-	name := fmt.Sprintf("%s:%s-lock", subscriber.Topic(), projection.Name())
-	locker := lockerFactory(name)
-
+	// first check without acquiring lock
 	token, err := getSavedToken(ctx, subscriber, projection)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-
-	// lock for catchup
-	ctx, err = locker.WaitForLock(ctx)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-
-	defer func() {
-		er := locker.Unlock(context.Background())
-		if er != nil {
-			logger.WithError(er).Error("unlock on catchUp")
-		}
-	}()
-
-	// recheck if we still need to do a catchup
-	token, err = getSavedToken(ctx, subscriber, projection)
 	if err != nil {
 		return faults.Wrap(err)
 	}
 	if token.Kind() != CatchUpToken {
 		return nil
+	}
+
+	if lockerFactory != nil {
+		name := fmt.Sprintf("%s:%s-lock", subscriber.Topic(), projection.Name())
+		locker := lockerFactory(name)
+
+		if locker != nil {
+			// lock for catchup
+			ctx, err = locker.WaitForLock(ctx)
+			if err != nil {
+				return faults.Wrap(err)
+			}
+
+			defer func() {
+				er := locker.Unlock(context.Background())
+				if er != nil {
+					logger.WithError(er).Error("unlock on catchUp")
+				}
+			}()
+		}
+
+		// recheck if we still need to do a catchup
+		token, err = getSavedToken(ctx, subscriber, projection)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+		if token.Kind() != CatchUpToken {
+			return nil
+		}
 	}
 
 	return catching(ctx, logger, esRepo, subscriber, token.Value(), projection)
@@ -313,12 +320,12 @@ func catchUp(
 func catching(
 	ctx context.Context,
 	logger log.Logger,
-	esRepo Repository,
+	esRepo EventsRepository,
 	subscriber Subscriber,
 	startAt uint64,
 	projection Projection,
 ) error {
-	logger.Info("Retrieving subscriptions last position for the first run")
+	logger.WithTags(log.Tags{"startAt": startAt}).Info("Catching up events")
 	filter := store.Filter{}
 	options := projection.Options()
 	for _, option := range options.CatchUpFilters {
@@ -328,7 +335,7 @@ func catching(
 	player := NewPlayer(esRepo)
 
 	// loop until it is safe to switch to the subscriber
-	var seq uint64
+	seq := startAt
 	for {
 		start := time.Now()
 
@@ -337,11 +344,12 @@ func catching(
 			return faults.Wrap(err)
 		}
 
+		logger.WithTags(log.Tags{"from": seq, "until": until}).Info("Replaying all events from the event store")
 		// first catch up (this can take days)
 		// catchUpCallback should take care of saving the resume value
-		seq, err = player.Replay(ctx, projection.Handler, startAt, until, options.CatchUpFilters...)
+		seq, err = player.Replay(ctx, projection.Handler, seq, until, options.CatchUpFilters...)
 		if err != nil {
-			return faults.Errorf("replaying events from '%d' until '%d': %w", startAt, until, err)
+			return faults.Errorf("replaying events from '%d' until '%d': %w", seq, until, err)
 		}
 
 		catchUpSafetyMargin := options.CatchUpSafetyMargin
@@ -349,25 +357,27 @@ func catching(
 			catchUpSafetyMargin = time.Hour
 		}
 
+		// if the catch up took less than catchUpSafetyMargin we can safely exit and switch to the event bus
 		if time.Since(start) < catchUpSafetyMargin {
 			break
 		}
 	}
 
-	logger.Info("Retrieving subscriptions last position for the second run")
 	// this call can hang if there is no message in the MQ but that is ok
 	resume, err := subscriber.RetrieveLastSequence(ctx)
 	if err != nil {
 		return faults.Wrap(err)
 	}
 
-	if resume != seq {
-		logger.Info("Catching up projection for the second run")
+	if resume > seq {
+		logger.WithTags(log.Tags{"from": seq, "until": resume}).Info("Catching up projection up to the subscription")
 		// this should be very quick since the bulk of the work was already done
 		seq, err = player.Replay(ctx, projection.Handler, seq, resume, options.CatchUpFilters...)
 		if err != nil {
 			return faults.Errorf("replaying events from '%d' until '%d': %w", seq, resume, err)
 		}
+	} else {
+		logger.WithTags(log.Tags{"from": seq, "until": resume}).Info("Skipping catching up the projection up to the subscription. All events already handled.")
 	}
 
 	return nil

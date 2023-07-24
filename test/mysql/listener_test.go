@@ -5,10 +5,7 @@ package mysql
 import (
 	"context"
 	"errors"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -76,15 +73,12 @@ func TestListener(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			dbConfig, tearDown, err := setup()
+			dbConfig, tearDown, err := Setup()
 			require.NoError(t, err)
 			defer tearDown()
 
 			repository, err := mysql.NewStore(dbConfig.URL())
 			require.NoError(t, err)
-
-			quit := make(chan os.Signal, 1)
-			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), esOptions)
 
@@ -97,9 +91,9 @@ func TestListener(t *testing.T) {
 			}
 
 			partitions := partitionSize(tt.partitionSlots)
-			s := test.NewMockSink(partitions)
+			sinker := test.NewMockSink(partitions)
 			ctx, cancel := context.WithCancel(context.Background())
-			errs := feeding(ctx, cfg, partitions, tt.partitionSlots, s, repository)
+			errs := feeding(ctx, cfg, partitions, tt.partitionSlots, sinker, repository)
 
 			id := util.MustNewULID()
 			acc, err := test.CreateAccount("Paulo", id, 100)
@@ -115,7 +109,7 @@ func TestListener(t *testing.T) {
 				require.NoError(t, <-errs, "Error feeding #1: %d", i)
 			}
 
-			events := s.GetEvents()
+			events := sinker.GetEvents()
 			require.Equal(t, 3, len(events), "event size")
 			assert.Equal(t, "AccountCreated", events[0].Kind.String())
 			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
@@ -131,10 +125,10 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, s, repository)
+			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, sinker, repository)
 
 			time.Sleep(5 * time.Second)
-			events = s.GetEvents()
+			events = sinker.GetEvents()
 			require.Equal(t, 5, len(events), "event size")
 
 			cancel()
@@ -143,17 +137,27 @@ func TestListener(t *testing.T) {
 			}
 
 			// resume from the beginning
-			s = test.NewMockSink(0)
+			sinker = test.NewMockSink(0)
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, s, repository)
+			errs = feeding(ctx, cfg, partitions, tt.partitionSlots, sinker, repository)
 
 			time.Sleep(5 * time.Second)
-			events = s.GetEvents()
+			events = sinker.GetEvents()
 			require.Equal(t, 5, len(events), "event size")
 
 			cancel()
 			for i := 0; i < len(tt.partitionSlots); i++ {
 				require.NoError(t, <-errs, "Error feeding #3: %d", i)
+			}
+
+			db, err := connect(dbConfig)
+			require.NoError(t, err)
+			evts := []mysql.Event{}
+			err = db.Select(&evts, "SELECT * FROM events ORDER by sink_seq ASC")
+			require.NoError(t, err)
+			require.Equal(t, 5, len(evts))
+			for k, v := range evts {
+				require.Equal(t, uint64(k+1), v.Sequence)
 			}
 		})
 	}

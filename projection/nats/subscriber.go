@@ -17,76 +17,51 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/util"
-	"github.com/quintans/eventsourcing/worker"
 )
 
-func NewProjector(
+func NewSubscriberWithURL(
 	ctx context.Context,
 	logger log.Logger,
 	url string,
-	lockerFactory projection.LockerFactory,
 	topic string,
-	esRepo projection.Repository,
-	proj projection.Projection,
-) (*worker.RunWorker, error) {
+) (*Subscriber, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
 		return nil, faults.Errorf("Could not instantiate NATS connection: %w", err)
 	}
-	w, err := NewProjectorWithConn(
-		ctx,
+	subscriber, err := NewSubscriberWithConn(
 		logger,
 		nc,
-		lockerFactory,
 		topic,
-		esRepo,
-		proj,
 	)
 	if err != nil {
-		return nil, err
+		return nil, faults.Wrap(err)
 	}
 	go func() {
 		<-ctx.Done()
+		subscriber.stopConsumer()
 		nc.Close()
 	}()
 
-	return w, nil
+	return subscriber, nil
 }
 
-func NewProjectorWithConn(
-	ctx context.Context,
+func NewSubscriberWithConn(
 	logger log.Logger,
 	nc *nats.Conn,
-	lockerFactory projection.LockerFactory,
 	topic string,
-	esRepo projection.Repository,
-	proj projection.Projection,
-) (*worker.RunWorker, error) {
+) (*Subscriber, error) {
 	stream, err := nc.JetStream()
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-
-	logger = logger.WithTags(log.Tags{
-		"projection": proj.Name(),
-	})
 
 	t, err := util.NewTopic(topic)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
 
-	subscriber := NewSubscriber(logger, stream, t)
-	w := projection.Project(
-		ctx,
-		logger,
-		lockerFactory,
-		esRepo,
-		subscriber,
-		proj,
-	)
-
-	return w, nil
+	return NewSubscriber(logger, stream, t), nil
 }
 
 type SubOption func(*Subscriber)
@@ -122,7 +97,7 @@ func NewSubscriber(
 		messageCodec: sink.JSONCodec{},
 	}
 	s.logger = logger.WithTags(log.Tags{
-		"id": shortid.MustGenerate(),
+		"id": "subscriber-" + shortid.MustGenerate(),
 	})
 
 	for _, o := range options {
@@ -177,11 +152,11 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		return faults.Errorf("Could not retrieve resume token for '%s': %w", s.topic, err)
 	}
 	if token.IsEmpty() {
-		logger.Infof("Starting consuming all available [token key: '%s']", s.topic)
+		logger.WithTags(log.Tags{"topic": s.topic}).Info("Starting consuming all available events", s.topic)
 		// startOption = nats.DeliverAll()
 		startOption = nats.StartSequence(1)
 	} else {
-		logger.Infof("Starting consuming from '%s' [token key: '%s']", token, s.topic)
+		logger.WithTags(log.Tags{"from": token.Value(), "topic": s.topic}).Info("Starting consumer")
 		startOption = nats.StartSequence(token.Value() + 1) // after seq
 	}
 
@@ -195,7 +170,14 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		seq := sequence(m)
 		if opts.Filter == nil || opts.Filter(evt) {
 			logger.Debugf("Handling received event '%+v'", evt)
-			er = proj.Handler(ctx, projection.Meta{Token: projection.NewToken(projection.ConsumerToken, seq)}, evt)
+			er = proj.Handler(
+				ctx,
+				projection.Meta{
+					Topic: s.topic,
+					Token: projection.NewToken(projection.ConsumerToken, seq),
+				},
+				evt,
+			)
 			if er != nil {
 				logger.WithError(er).Errorf("Error when handling event with ID '%s'", evt.ID)
 				m.Nak()
@@ -228,13 +210,13 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 	go func() {
 		select {
 		case <-ctx.Done():
-			s.stopConsumer(context.Background())
+			s.stopConsumer()
 		}
 	}()
 	return nil
 }
 
-func (s *Subscriber) stopConsumer(ctx context.Context) {
+func (s *Subscriber) stopConsumer() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.subscription == nil {

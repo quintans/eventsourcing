@@ -46,7 +46,7 @@ func connect(dbConfig DBConfig) (*sqlx.DB, error) {
 func TestSaveAndGet(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
+	dbConfig, tearDown, err := Setup()
 	require.NoError(t, err)
 	defer tearDown()
 
@@ -125,7 +125,7 @@ func TestSaveAndGet(t *testing.T) {
 func TestPollListener(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
+	dbConfig, tearDown, err := Setup()
 	require.NoError(t, err)
 	defer tearDown()
 
@@ -193,7 +193,7 @@ func TestPollListener(t *testing.T) {
 func TestListenerWithAggregateKind(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
+	dbConfig, tearDown, err := Setup()
 	require.NoError(t, err)
 	defer tearDown()
 
@@ -256,7 +256,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 func TestListenerWithLabels(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
+	dbConfig, tearDown, err := Setup()
 	require.NoError(t, err)
 	defer tearDown()
 
@@ -327,7 +327,7 @@ func TestListenerWithLabels(t *testing.T) {
 func TestForget(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
+	dbConfig, tearDown, err := Setup()
 	require.NoError(t, err)
 	defer tearDown()
 
@@ -427,7 +427,7 @@ func TestForget(t *testing.T) {
 func TestMigration(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
+	dbConfig, tearDown, err := Setup()
 	require.NoError(t, err)
 	defer tearDown()
 
