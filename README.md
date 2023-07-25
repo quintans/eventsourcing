@@ -143,17 +143,16 @@ To avoid duplication and **keep the order of events** we can have only one activ
 
 ##### Rebuilding a projection
 
-If a a projection needs to be rebuild the best strategy is to recreate a new projection and switch to it. This way will never have a down time for a projection.
+If a a projection needs to be rebuild, due to a breaking change, the best strategy is to create a new projection, replay all events, and switch to it when the catchup is done. This way will never have a down time for a projection.
 
 The process for creating a new projection at boot time, is described as follow:
 
 Boot Partitioned Projection
 - Wait for lock release (if any)
-- Every worker boots from the last recorded position for its partition.
+- Replay all events from the last recorded position for its partition.
 - Start consuming the stream from the last event position
-- Listen to Cancel projection notification
 
-All this balancing and events replay assumes that a projection is idempotent.
+> NB: a projection should be idempotent.
 
 ### Event Migration
 TODO
@@ -161,6 +160,7 @@ TODO
 https://leanpub.com/esversioning/read#leanpub-auto-copy-and-replace
 
 ## Rationale
+Next I try to explain the reason for some design decisions.
 
 ### Event Bus
 
@@ -173,30 +173,13 @@ Below I present to options: Polling and Pushing (recommended)
 
 *I implemented examples of both :)*
 
-### IDs
+### Events ordering
 
-The event IDs are incremental (monotonic). Having monotonic IDs is very important so that we can replay the events in case of a failure or when replaying events to rebuild a projection.
-
-* **So we cannot insert events in the event store with IDs out of order?**
-
-  We can, as long as this out of order events happens in different aggregates.
-  For the same aggregate, the events ID must be monotonic. The order only matter for the same aggregate.
-
-* **If events are inserted out of order how will they impact projections?**
-
-  If events for an aggregate are monotonic, projections are not impacted, even if consider projection built with different aggregates.
-  Consider the aggregates A and B that are materialised in the projection C, so that `A + B = C`. This is exactly the same as `B + A = C` 
-
+Initially I intended to use monotonic event IDs to easily replay events when building a projection.
 
 Ideally we would like to have global monotonic events, but that is impossible to have unless we have a single node writer (to set an absolute order), creating a bottleneck.
 Even then there is no guarantee that the events will appear in order if we have concurrent writes, unless we have some kind of lock at the node level, 
 creating an even greater bottleneck.
-
-So the event IDs have the following requirements:
-1) The IDs only need to be monotonic for a given aggregate
-2) Have globally some degree of order related to time
-
-Since SQL databases usually use a number for incremental keys, and NoSQL databases use strings/uuids, I opted to use strings as the event ID.
 
 There are some interesting decentralised IDs generator around the web, that are ordered in time, with a millisecond precision, useful for databases where write operations don't happen in a single node.
 
@@ -204,11 +187,27 @@ Unfortunately, there is no guarantee that two nodes, generating IDs for an aggre
 
 Compensating for clock skews, is easy if the tool allows to set the time, but for the randomness, not so much.
 
-Luckily, there is an implementation that addresses both of this issues: [oklog/ulid](https://github.com/oklog/ulid)
+There is also the issue that records might not become available in the same order as the ID order.
 
-### Version
+Consider two concurrent transactions relying on database sequence. One acquires the ID 100 and the other the ID 101. If the one with ID 101 is faster to finish the transaction, it will show up first in a query than the one with ID 100. The same applies to time based IDs.
 
-Other than the obvious requirement to guarantee optimistic locking when saving an aggregate, basic projection idempotency for a specific aggregate can be achieved by just looking into the aggregate version delivered in the events. We can safely ignore events that have lower aggregate version than the last one received.
+If we have a polling process that relies on this number to determine from where to start polling, it could miss the last added record, and this could lead to events not being tracked.
+
+Considering all the above, we could end up with missing events when replay events on a restart. Therefore, I opted for a more simple and precise solution. I will just record the sequence and partition returned when publishing an event. Systems like Apache Kafka, Apache Pulsar and NATS JetStream return a sequence when publishing.
+
+Projection idempotency for a specific aggregate can be achieved by just looking into the sequence on the event for a particular topic and partition. We can safely ignore events that have lower sequence than the last one received.
+
+### IDs
+
+The event IDs are incremental (monotonic). Having monotonic IDs improves insert speed.
+
+So the event IDs have the following requirements:
+1) The IDs only need to be monotonic for a given aggregate
+2) Have globally some degree of order related to time
+
+There is an implementation that addresses both of this issues: [oklog/ulid](https://github.com/oklog/ulid)
+
+Since SQL databases usually use a number for incremental keys, and NoSQL databases use strings/uuids, I opted to use strings as the event ID.
 
 ### Change Data Capture Strategies (CDC)
 
@@ -231,6 +230,11 @@ As an example of this notification mechanism, we have [change streams](https://d
 
 This change streams must all be able to resume, from a specific position or timestamp.
 
+Pushing solutions are implemented for:
+- MongoDB
+- PotgreSQL
+- MySQL
+
 #### Polling
 
 Another the way to achieve insert CDC is by polling.
@@ -239,38 +243,13 @@ This can be used when the database does not have an easy way to provide change s
 
 Although polling is straight forward to implement and easy to understand, there are something that we need to be aware.
 
-Events should be stored with an incremental sortable key (discussed above). With this we can then poll for events after the last polled event.
+Events should be stored with an incremental sortable key (partition+sequence discussed above). With this we can then replay events after from a specific event.
 
-> What is important is that for a given aggregate the events IDs are ordered, so strict ordering between aggregates is not important.
+A poller process then polls the database for new events (the ones without a sequence value). The events are then published to a event bus and updated with the returned sequence. 
 
-A poller process can then poll the database for new events. The events can be published to a event bus or consumed directly.
+> It is assumed that the a monotonic sequence is returned.
 
 > Consuming events is discuss in more detail below, in CQRS section. 
-
-But there is a catch. How do we decide what key to use as a cursor to track what event was already pushed to the MQ? 
-
-We could us a monotonic ID to track the events, but even if we use a single node writer, records might not become available in the same order as the ID order.
-
-Consider two concurrent transactions relying on database sequence. One acquires the ID 100 and the other the ID 101. If the one with ID 101 is faster to finish the transaction, it will show up first in a query than the one with ID 100. The same applies to time based IDs.
-Unless we take some precautions, records will not always be polled in the expected order.
-
-If we have a polling process that relies on this number to determine from where to start polling, it could miss the last added record, and this could lead to events not being tracked.
-
-A possible solution is to only retrieve events older than X milliseconds, allowing any concurrent transactions to complete and mitigate any clock skews.
-
-An example of how this could be done in PostgreSQL:
-
-```sql
-SELECT * FROM events 
-WHERE id >= $1
-AND created_at <= NOW()::TIMESTAMP - INTERVAL'1 seconds'
-ORDER BY id ASC
-LIMIT 100
-```
-
-Unfortunately clock skews can be bigger than 1s, although this is unlikely. Also, events that depend on others will have an accumulated delay due to the time delay applied to the query.
-
-Because of the concerns above I ended up using a different solution. Whenever we publish an event to a MQ we mark the event record as published with the sequence value returned by the MQ. It is assumed that the a monotonic sequence is returned. Systems like NATS JetStream or Apache Pulsar, return a monotonic number on publish.
 
 This kind of polling strategy can be used both with SQL and NoSQL databases, like Postgresql or MongoDB, to name a few.
 
@@ -279,6 +258,8 @@ Advantages:
 
 Disadvantages
 * Network costs. If the data is updated infrequently we will be polling with no results. On the other hand, if the data change frequency is hight then there will be no difference.
+
+A polling solution is implemented.
 
 
 ### NoSQL
