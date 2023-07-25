@@ -122,7 +122,7 @@ func (r *EsRepository) saveMigration(
 		err = r.saveEvent(c, tx, &Event{
 			ID:               id,
 			AggregateID:      last.AggregateID,
-			AggregateIDHash:  int32ring(last.AggregateIDHash),
+			AggregateIDHash:  util.Int32ring(last.AggregateIDHash),
 			AggregateVersion: version,
 			AggregateKind:    last.AggregateKind,
 			Kind:             eventsourcing.InvalidatedKind,
@@ -165,7 +165,7 @@ func (r *EsRepository) saveMigration(
 			event := &Event{
 				ID:               lastID,
 				AggregateID:      last.AggregateID,
-				AggregateIDHash:  int32ring(last.AggregateIDHash),
+				AggregateIDHash:  util.Int32ring(last.AggregateIDHash),
 				AggregateVersion: version,
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,

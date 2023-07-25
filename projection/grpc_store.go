@@ -81,7 +81,6 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterSeq uint64, limit in
 		events[k] = &eventsourcing.Event{
 			ID:               eID,
 			AggregateID:      v.AggregateId,
-			AggregateIDHash:  v.AggregateIdHash,
 			AggregateVersion: v.AggregateVersion,
 			AggregateKind:    eventsourcing.Kind(v.AggregateKind),
 			Kind:             eventsourcing.Kind(v.Kind),
@@ -89,6 +88,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterSeq uint64, limit in
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         encoding.JSONOfString(v.Metadata),
 			CreatedAt:        *createdAt,
+			Partition:        v.Partition,
 			Sequence:         v.Sequence,
 		}
 	}

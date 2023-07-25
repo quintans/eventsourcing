@@ -48,7 +48,6 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 		pbEvents[k] = &pb.Event{
 			Id:               v.ID.String(),
 			AggregateId:      v.AggregateID,
-			AggregateIdHash:  v.AggregateIDHash,
 			AggregateVersion: v.AggregateVersion,
 			AggregateKind:    v.AggregateKind.String(),
 			Kind:             v.Kind.String(),
@@ -56,6 +55,8 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         string(metadata),
 			CreatedAt:        createdAt,
+			Partition:        v.Partition,
+			Sequence:         v.Sequence,
 		}
 	}
 	return &pb.GetEventsReply{Events: pbEvents}, nil

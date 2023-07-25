@@ -34,7 +34,7 @@ type Feed struct {
 }
 
 type SetSeqRepository interface {
-	SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error
+	SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error
 }
 
 type FeedOption func(*Feed)
@@ -159,12 +159,12 @@ func (f *Feed) Run(ctx context.Context) error {
 				CreatedAt:        eventDoc.CreatedAt,
 				Migrated:         eventDoc.Migrated,
 			}
-			seq, err := f.sinker.Sink(ctx, event, sink.Meta{ResumeToken: lastResumeToken})
+			data, err := f.sinker.Sink(ctx, event, sink.Meta{ResumeToken: lastResumeToken})
 			if err != nil {
 				return backoff.Permanent(err)
 			}
 
-			err = f.setSeqRepo.SetSinkSeq(ctx, id, seq)
+			err = f.setSeqRepo.SetSinkData(ctx, id, data)
 			if err != nil {
 				return faults.Wrap(backoff.Permanent(err))
 			}

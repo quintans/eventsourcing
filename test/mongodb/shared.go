@@ -119,6 +119,7 @@ func dbSchema(cli *mongo.Client) error {
 				},
 				{
 					{"key", bson.D{
+						{"sink_part", 1},
 						{"sink_seq", 1},
 						{"migration", 1},
 					}},

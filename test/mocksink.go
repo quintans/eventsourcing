@@ -35,7 +35,7 @@ func (s *MockSink) OnSink(handler func(ctx context.Context, e *eventsourcing.Eve
 	s.onSink = handler
 }
 
-func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (uint64, error) {
+func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (sink.Data, error) {
 	var partition uint32
 	if s.partitions <= 1 {
 		partition = 1
@@ -54,11 +54,11 @@ func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta
 	if s.onSink != nil {
 		err := s.onSink(ctx, e)
 		if err != nil {
-			return 0, faults.Wrap(err)
+			return sink.Data{}, faults.Wrap(err)
 		}
 	}
 
-	return s.sequence, nil
+	return sink.NewSinkData(partition, s.sequence), nil
 }
 
 func (s *MockSink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink.Message, error) {

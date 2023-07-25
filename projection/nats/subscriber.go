@@ -156,8 +156,8 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		// startOption = nats.DeliverAll()
 		startOption = nats.StartSequence(1)
 	} else {
-		logger.WithTags(log.Tags{"from": token.Value(), "topic": s.topic}).Info("Starting consumer")
-		startOption = nats.StartSequence(token.Value() + 1) // after seq
+		logger.WithTags(log.Tags{"from": token.Sequence(), "topic": s.topic}).Info("Starting consumer")
+		startOption = nats.StartSequence(token.Sequence() + 1) // after seq
 	}
 
 	callback := func(m *nats.Msg) {
@@ -173,8 +173,9 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 			er = proj.Handler(
 				ctx,
 				projection.Meta{
-					Topic: s.topic,
-					Token: projection.NewToken(projection.ConsumerToken, seq),
+					Topic:     s.topic.Root(),
+					Partition: s.topic.Partition(),
+					Token:     projection.NewToken(projection.ConsumerToken, seq),
 				},
 				evt,
 			)

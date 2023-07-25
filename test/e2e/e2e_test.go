@@ -32,7 +32,72 @@ const (
 	topic    = "accounts"
 )
 
-func TestProjection(t *testing.T) {
+func TestProjectionBeforeData(t *testing.T) {
+	ctx := context.Background()
+
+	dbConfig, tearDown, err := shared.Setup()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		tearDown()
+	})
+
+	natsCont, err := runNatsContainer(ctx)
+	require.NoError(t, err)
+	// Clean up the container after the test is complete
+	t.Cleanup(func() {
+		if err := natsCont.Terminate(context.Background()); err != nil {
+			t.Fatalf("failed to terminate container: %s", err)
+		}
+	})
+
+	esRepo, err := mysql.NewStore(dbConfig.URL())
+	require.NoError(t, err)
+	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
+
+	ltx := latch.NewCountDownLatch()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, natsCont.URI, esRepo)
+
+	// create projection
+	proj := NewProjectionMock("balances")
+
+	sub, err := pnats.NewSubscriberWithURL(ctx, logger, natsCont.URI, topic)
+	require.NoError(t, err)
+
+	// repository here could be remote, like GrpcRepository
+	projector := projection.Project(ctx, logger, nil, esRepo, sub, proj)
+	ok := projector.Start(ctx)
+	require.True(t, ok)
+
+	// giving time to catchup and project events from the database
+	time.Sleep(time.Second)
+
+	id := util.MustNewULID()
+	acc, err := test.CreateAccount("Paulo", id, 100)
+	require.NoError(t, err)
+	acc.Deposit(10)
+	acc.Deposit(20)
+
+	err = es.Create(ctx, acc)
+	require.NoError(t, err)
+
+	// giving time to forward events
+	time.Sleep(time.Second)
+
+	balance, ok := proj.BalanceByID(acc.GetID())
+	require.True(t, ok)
+	require.Equal(t, Balance{
+		Name:   "Paulo",
+		Amount: 130,
+	}, balance)
+
+	// shutdown
+	cancel()
+	time.Sleep(time.Second)
+}
+
+func TestProjectionAfterData(t *testing.T) {
 	ctx := context.Background()
 
 	dbConfig, tearDown, err := shared.Setup()

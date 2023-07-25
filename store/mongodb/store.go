@@ -13,6 +13,7 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
 )
@@ -37,6 +38,7 @@ type Event struct {
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
 	Migration        int                `bson:"migration"`
 	Migrated         bool               `bson:"migrated"`
+	Partition        uint32             `bson:"sink_part,omitempty"`
 	Sequence         uint64             `bson:"sink_seq"`
 }
 
@@ -466,11 +468,14 @@ func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filt
 	return rows, nil
 }
 
-func (r *EsRepository) SetSinkSeq(ctx context.Context, evtID eventid.EventID, seq uint64) error {
+func (r *EsRepository) SetSinkData(ctx context.Context, evtID eventid.EventID, data sink.Data) error {
 	_, err := r.eventsCollection().UpdateByID(ctx, evtID.String(), bson.M{
-		"$set": bson.M{"sink_seq": seq},
+		"$set": bson.M{
+			"sink_part": data.Partition(),
+			"sink_seq":  data.Sequence(),
+		},
 	})
-	return faults.Wrapf(err, "setting publish sequence %d for event id '%s'", seq, evtID)
+	return faults.Wrapf(err, "setting publish partition %d and sequence %d for event id '%s'", data.Partition(), data.Sequence(), evtID)
 }
 
 func buildFilter(filter store.Filter, flt bson.D) bson.D {

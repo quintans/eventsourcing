@@ -76,7 +76,7 @@ type FeedLogrepl struct {
 }
 
 type SetSeqRepository interface {
-	SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error
+	SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error
 }
 
 // NewFeed creates a new Postgresql 10+ logic replication feed.
@@ -210,11 +210,11 @@ func (f *FeedLogrepl) Run(ctx context.Context) error {
 					if event == nil {
 						continue
 					}
-					seq, err := f.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: []byte(clientXLogPos.String())})
+					data, err := f.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: []byte(clientXLogPos.String())})
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
-					err = f.setSeqRepo.SetSinkSeq(ctx, event.ID, seq)
+					err = f.setSeqRepo.SetSinkData(ctx, event.ID, data)
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}

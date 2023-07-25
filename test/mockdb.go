@@ -156,13 +156,14 @@ func (db *InMemDB) GetEvents(ctx context.Context, afterSeq uint64, limit int, fi
 	return events, nil
 }
 
-func (db *InMemDB) SetSinkSeq(ctx context.Context, id eventid.EventID, seq uint64) error {
+func (db *InMemDB) SetSinkData(ctx context.Context, id eventid.EventID, data sink.Data) error {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	for _, v := range db.events {
 		if v.ID.Compare(id) == 0 {
-			v.Sequence = seq
+			v.Partition = data.Partition()
+			v.Sequence = data.Sequence()
 			return nil
 		}
 	}
@@ -233,12 +234,12 @@ func (f InMemDBFeed) Run(ctx context.Context) error {
 				return nil
 			default:
 			}
-			seq, err := f.sinker.Sink(ctx, e, sink.Meta{ResumeToken: encoding.Base64(e.ID.String())})
+			data, err := f.sinker.Sink(ctx, e, sink.Meta{ResumeToken: encoding.Base64(e.ID.String())})
 			if err != nil {
 				return err
 			}
 
-			err = f.db.SetSinkSeq(ctx, e.ID, seq)
+			err = f.db.SetSinkData(ctx, e.ID, data)
 			if err != nil {
 				return err
 			}

@@ -8,7 +8,6 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util"
 )
 
 type (
@@ -16,8 +15,9 @@ type (
 )
 
 type Meta struct {
-	Topic util.Topic
-	Token Token
+	Topic     string
+	Partition uint32
+	Token     Token
 }
 
 type EventsRepository interface {
@@ -118,7 +118,7 @@ func (p Player) Replay(ctx context.Context, handler MessageHandlerFunc, afterSeq
 		}
 		for _, evt := range events {
 			if p.customFilter == nil || p.customFilter(evt) {
-				err := handler(ctx, Meta{Token: NewToken(CatchUpToken, evt.Sequence)}, sink.ToMessage(evt, sink.Meta{}))
+				err := handler(ctx, Meta{Partition: evt.Partition, Token: NewToken(CatchUpToken, evt.Sequence)}, sink.ToMessage(evt, sink.Meta{}))
 				if err != nil {
 					return 0, faults.Wrap(err)
 				}

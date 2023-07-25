@@ -88,13 +88,22 @@ func (p *ProjectionMock) Handler(ctx context.Context, meta projection.Meta, e *s
 		return faults.Errorf("no handler for: %s -> %T", e.Kind, t)
 	}
 
-	// saving resume tokens. it should be in the transaction
-	var topic util.Topic
-	if meta.Topic.IsZero() {
+	return p.recordResumeToken(meta)
+}
+
+func (p *ProjectionMock) recordResumeToken(meta projection.Meta) error {
+	// saving resume tokens. In a real application, it should be in the transaction
+	var topicRoot string
+	if meta.Topic == "" {
 		// when replaying, the topic is zero and we have to infer the topic
-		topic, err = util.NewTopic("accounts")
+		topicRoot = "accounts"
 	} else {
-		topic = meta.Topic
+		topicRoot = meta.Topic
+	}
+
+	topic, err := util.NewPartitionedTopic(topicRoot, meta.Partition)
+	if err != nil {
+		return faults.Errorf("creating partitioned topic: %s:%d", topicRoot, meta.Partition)
 	}
 
 	p.resumes[p.Name()+"-"+topic.String()] = meta.Token

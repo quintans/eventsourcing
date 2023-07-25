@@ -44,7 +44,7 @@ type Feed struct {
 }
 
 type SetSeqRepository interface {
-	SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error
+	SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error
 }
 
 type FeedOption func(*Feed)
@@ -363,11 +363,11 @@ func (h *binlogHandler) OnXID(header *replication.EventHeader, xid mysql.Positio
 			// we update the resume token on the last event of the transaction
 			h.lastResumeToken = format(xid)
 		}
-		seq, err := h.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: h.lastResumeToken})
+		data, err := h.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: h.lastResumeToken})
 		if err != nil {
 			return faults.Wrap(backoff.Permanent(err))
 		}
-		err = h.setSeqRepo.SetSinkSeq(context.Background(), event.ID, seq)
+		err = h.setSeqRepo.SetSinkData(context.Background(), event.ID, data)
 		if err != nil {
 			return faults.Wrap(backoff.Permanent(err))
 		}

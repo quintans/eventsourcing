@@ -85,7 +85,6 @@ type Subscriber interface {
 type Event struct {
 	ID               eventid.EventID
 	AggregateID      string
-	AggregateIDHash  uint32
 	AggregateVersion uint32
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
@@ -99,7 +98,6 @@ func FromEvent(e *eventsourcing.Event) *Event {
 	return &Event{
 		ID:               e.ID,
 		AggregateID:      e.AggregateID,
-		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
@@ -114,7 +112,6 @@ func FromMessage(m *sink.Message) *Event {
 	return &Event{
 		ID:               m.ID,
 		AggregateID:      m.AggregateID,
-		AggregateIDHash:  m.AggregateIDHash,
 		AggregateVersion: m.AggregateVersion,
 		AggregateKind:    m.AggregateKind,
 		Kind:             m.Kind,
@@ -133,53 +130,53 @@ const (
 )
 
 type Token struct {
-	kind  TokenKind
-	value uint64
+	kind     TokenKind
+	sequence uint64
 }
 
-func NewToken(kind TokenKind, token uint64) Token {
+func NewToken(kind TokenKind, sequence uint64) Token {
 	return Token{
-		kind:  kind,
-		value: token,
+		kind:     kind,
+		sequence: sequence,
 	}
 }
 
 func ParseToken(s string) (Token, error) {
-	idx := strings.Index(s, ":")
-	if idx == -1 {
-		return Token{}, faults.Errorf("separator not found when parsing token: %s", s)
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return Token{}, faults.Errorf("invalid token format: %s", s)
 	}
-	k := TokenKind(s[:idx])
+	k := TokenKind(parts[0])
 	if !util.In(k, CatchUpToken, ConsumerToken) {
 		return Token{}, faults.Errorf("invalid kind when parsing token: %s", s)
 	}
 
-	t := s[idx:]
-	seq, err := strconv.ParseUint(t, 10, 64)
+	seq := parts[1]
+	sequence, err := strconv.ParseUint(seq, 10, 64)
 	if err != nil {
-		return Token{}, faults.Errorf("parsing token '%s': %w", t, err)
+		return Token{}, faults.Errorf("parsing sequence token part '%s': %w", seq, err)
 	}
 
 	return Token{
-		kind:  k,
-		value: seq,
+		kind:     k,
+		sequence: sequence,
 	}, nil
 }
 
 func (t Token) String() string {
-	return fmt.Sprintf("%v:%v", string(t.kind), t.value)
+	return fmt.Sprintf("%v:%v", string(t.kind), t.sequence)
 }
 
 func (t Token) Kind() TokenKind {
 	return t.kind
 }
 
-func (t Token) Value() uint64 {
-	return t.value
+func (t Token) Sequence() uint64 {
+	return t.sequence
 }
 
 func (t Token) IsEmpty() bool {
-	return t.value == 0
+	return t.sequence == 0
 }
 
 func (t Token) IsZero() bool {
@@ -314,7 +311,7 @@ func catchUp(
 		}
 	}
 
-	return catching(ctx, logger, esRepo, subscriber, token.Value(), projection)
+	return catching(ctx, logger, esRepo, subscriber, token.Sequence(), projection)
 }
 
 func catching(

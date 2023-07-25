@@ -55,6 +55,7 @@ type Event struct {
 	Metadata         *encoding.JSON
 	CreatedAt        time.Time
 	Migrated         bool
+	Partition        uint32
 	Sequence         uint64
 }
 

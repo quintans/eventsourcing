@@ -17,6 +17,7 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
 )
@@ -40,6 +41,7 @@ type Event struct {
 	CreatedAt        time.Time          `db:"created_at"`
 	Migration        int                `db:"migration"`
 	Migrated         bool               `db:"migrated"`
+	Partition        int32              `db:"sink_part"`
 	Sequence         uint64             `db:"sink_seq"`
 }
 
@@ -125,7 +127,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventR
 			err = r.saveEvent(c, tx, &Event{
 				ID:               id,
 				AggregateID:      eRec.AggregateID,
-				AggregateIDHash:  int32ring(hash),
+				AggregateIDHash:  util.Int32ring(hash),
 				AggregateVersion: version,
 				AggregateKind:    eRec.AggregateKind,
 				Kind:             e.Kind,
@@ -172,17 +174,6 @@ func (r *EsRepository) publish(ctx context.Context, event *Event) error {
 
 	e := toEventsourcingEvent(event)
 	return r.publisher.Publish(ctx, e)
-}
-
-func int32ring(x uint32) int32 {
-	h := int32(x)
-	// we want a positive value so that partitioning (mod) results in a positive value.
-	// if h overflows, becoming negative, setting sign bit to zero will make the overflow start from zero
-	if h < 0 {
-		// setting sign bit to zero
-		h &= 0x7fffffff
-	}
-	return h
 }
 
 func isDup(err error) bool {
@@ -401,9 +392,9 @@ func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filt
 	return rows, nil
 }
 
-func (r *EsRepository) SetSinkSeq(ctx context.Context, eID eventid.EventID, seq uint64) error {
-	_, err := r.db.ExecContext(ctx, "UPDATE events SET sink_seq = ? WHERE ID = ?", seq, eID.String())
-	return faults.Wrapf(err, "setting publish sequence %d for event id '%s'", seq, eID)
+func (r *EsRepository) SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE events SET sink_part = ?, sink_seq = ? WHERE ID = ?", data.Partition(), data.Sequence(), eID.String())
+	return faults.Wrapf(err, "setting publish partition %d and sequence %d for event id '%s'", data.Partition(), data.Sequence(), eID)
 }
 
 func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
@@ -482,6 +473,7 @@ func toEventsourcingEvent(e *Event) *eventsourcing.Event {
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
+		Partition:        uint32(e.Partition),
 		Sequence:         e.Sequence,
 	}
 }

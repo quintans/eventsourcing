@@ -12,9 +12,29 @@ import (
 )
 
 type Sinker interface {
-	Sink(ctx context.Context, e *eventsourcing.Event, m Meta) (uint64, error)
+	Sink(ctx context.Context, e *eventsourcing.Event, m Meta) (Data, error)
 	LastMessage(ctx context.Context, partition uint32) (uint64, *Message, error)
 	Close()
+}
+
+type Data struct {
+	partition uint32
+	sequence  uint64
+}
+
+func NewSinkData(partition uint32, sequence uint64) Data {
+	return Data{
+		partition: partition,
+		sequence:  sequence,
+	}
+}
+
+func (s Data) Partition() uint32 {
+	return s.partition
+}
+
+func (s Data) Sequence() uint64 {
+	return s.sequence
 }
 
 type Codec interface {
@@ -38,7 +58,6 @@ type Message struct {
 	ID               eventid.EventID    `json:"id,omitempty"`
 	ResumeToken      encoding.Base64    `json:"resume_token,omitempty"`
 	AggregateID      string             `json:"aggregate_id,omitempty"`
-	AggregateIDHash  uint32             `json:"aggregate_id_hash,omitempty"`
 	AggregateVersion uint32             `json:"aggregate_version,omitempty"`
 	AggregateKind    eventsourcing.Kind `json:"aggregate_kind,omitempty"`
 	Kind             eventsourcing.Kind `json:"kind,omitempty"`
@@ -74,7 +93,6 @@ func ToMessage(e *eventsourcing.Event, meta Meta) *Message {
 		ID:               e.ID,
 		ResumeToken:      meta.ResumeToken,
 		AggregateID:      e.AggregateID,
-		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,

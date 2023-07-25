@@ -128,15 +128,15 @@ func sequence(m *nats.Msg) uint64 {
 }
 
 // Sink sends the event to the message queue
-func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (uint64, error) {
+func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (sink.Data, error) {
 	b, err := p.codec.Encode(e, m)
 	if err != nil {
-		return 0, err
+		return sink.Data{}, err
 	}
 
 	topic, err := util.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
 	if err != nil {
-		return 0, faults.Wrap(err)
+		return sink.Data{}, faults.Wrap(err)
 	}
 	p.logger.WithTags(log.Tags{
 		"topic": topic,
@@ -156,9 +156,9 @@ func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (u
 		return er
 	}, bo)
 	if err != nil {
-		return 0, faults.Errorf("failed to send message %+v on topic %s: %w", e, topic, err)
+		return sink.Data{}, faults.Errorf("failed to send message %+v on topic %s: %w", e, topic, err)
 	}
-	return sequence, nil
+	return sink.NewSinkData(topic.Partition(), sequence), nil
 }
 
 func createStream(logger log.Logger, js nats.JetStreamContext, streamName util.Topic) error {

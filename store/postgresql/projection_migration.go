@@ -231,7 +231,7 @@ func (r *EsRepository) addNoOp(ctx context.Context, metadata store.AggregateMeta
 	err = r.saveEvent(ctx, tx, &Event{
 		ID:               id,
 		AggregateID:      aggID,
-		AggregateIDHash:  int32ring(hash),
+		AggregateIDHash:  util.Int32ring(hash),
 		AggregateVersion: ver,
 		AggregateKind:    metadata.Type,
 		Kind:             eventsourcing.KindNoOpEvent,

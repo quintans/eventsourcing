@@ -46,12 +46,12 @@ message Event {
 	string id = 1;
 	string aggregate_id = 2;
 	uint32 aggregate_version = 3;
-	uint32 aggregate_id_hash = 4;
-	string aggregate_kind = 5;
-	string kind = 6;
-	bytes body = 7;
-	string idempotency_key = 8;
-	string metadata = 9;
-	google.protobuf.Timestamp created_at = 10;
+	string aggregate_kind = 4;
+	string kind = 5;
+	bytes body = 6;
+	string idempotency_key = 7;
+	string metadata = 8;
+	google.protobuf.Timestamp created_at = 9;
+  uint32 partition = 10;
   uint64 sequence = 11;
 }
