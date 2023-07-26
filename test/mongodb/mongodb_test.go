@@ -52,9 +52,7 @@ func connect(dbConfig DBConfig) (*mongo.Database, error) {
 }
 
 func TestSaveAndGet(t *testing.T) {
-	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
@@ -171,9 +169,7 @@ func getSnapshots(ctx context.Context, dbConfig DBConfig, id ulid.ULID) ([]mongo
 }
 
 func TestPollListener(t *testing.T) {
-	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
@@ -238,9 +234,7 @@ func TestPollListener(t *testing.T) {
 }
 
 func TestListenerWithAggregateKind(t *testing.T) {
-	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
@@ -301,9 +295,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 }
 
 func TestListenerWithLabels(t *testing.T) {
-	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
@@ -370,9 +362,7 @@ func TestListenerWithLabels(t *testing.T) {
 }
 
 func TestForget(t *testing.T) {
-	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
@@ -508,9 +498,7 @@ func TestForget(t *testing.T) {
 }
 
 func TestMigration(t *testing.T) {
-	dbConfig, tearDown, err := Setup("./docker-compose.yaml")
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
 	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)

@@ -76,9 +76,7 @@ func TestMongoListenere(t *testing.T) {
 
 	for _, tt := range testcases {
 		t.Run(tt.name, func(t *testing.T) {
-			dbConfig, tearDown, err := tmg.Setup("../docker-compose.yaml")
-			require.NoError(t, err)
-			defer tearDown()
+			dbConfig := tmg.Setup(t, "../docker-compose.yaml")
 
 			repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
 			require.NoError(t, err)

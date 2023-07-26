@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"testing"
 
 	"github.com/quintans/faults"
+	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -28,7 +30,7 @@ const (
 	CollEvents    = "events"
 )
 
-func Setup(dockerComposePath string) (DBConfig, func(), error) {
+func Setup(t *testing.T, dockerComposePath string) DBConfig {
 	dbConfig := DBConfig{
 		Database: DBName,
 		Host:     "localhost",
@@ -36,53 +38,37 @@ func Setup(dockerComposePath string) (DBConfig, func(), error) {
 	}
 
 	ctx := context.Background()
-	destroy, err := dockerCompose(ctx, dockerComposePath)
-	if err != nil {
-		return DBConfig{}, nil, err
-	}
+	dockerCompose(t, ctx, dockerComposePath)
 
 	DBURL := fmt.Sprintf("mongodb://localhost:27017/%s?replicaSet=rs0", DBName)
 
 	opts := options.Client().ApplyURI(DBURL)
 	client, err := mongo.Connect(ctx, opts)
-	if err != nil {
-		destroy()
-		return DBConfig{}, nil, err
-	}
+	require.NoError(t, err)
 	defer client.Disconnect(context.Background())
 
 	err = dbSchema(client)
-	if err != nil {
-		destroy()
-		return DBConfig{}, nil, err
-	}
+	require.NoError(t, err)
 
-	return dbConfig, destroy, nil
+	return dbConfig
 }
 
-func dockerCompose(ctx context.Context, path string) (func(), error) {
+func dockerCompose(t *testing.T, ctx context.Context, path string) {
 	compose := testcontainers.NewLocalDockerCompose([]string{path}, "mongo-set")
-	destroyFn := func() {
+	t.Cleanup(func() {
 		exErr := compose.Down()
 		if err := checkIfError(exErr); err != nil {
 			log.Printf("Error on compose shutdown: %v\n", err)
 		}
-	}
+	})
 
 	exErr := compose.Down()
-	if err := checkIfError(exErr); err != nil {
-		return nil, err
-	}
+	require.NoError(t, checkIfError(exErr), "Error on compose shutdown")
+
 	exErr = compose.
 		WithCommand([]string{"up", "-d"}).
 		Invoke()
-	err := checkIfError(exErr)
-	if err != nil {
-		destroyFn()
-		return nil, err
-	}
-
-	return destroyFn, err
+	require.NoError(t, checkIfError(exErr))
 }
 
 func checkIfError(err testcontainers.ExecError) error {

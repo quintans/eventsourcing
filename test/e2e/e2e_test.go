@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"context"
-	"log"
 	"testing"
 	"time"
 
@@ -18,11 +17,9 @@ import (
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/worker"
-	"github.com/quintans/faults"
 	"github.com/quintans/toolkit/latch"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 var logger = eslog.NewLogrus(logrus.StandardLogger())
@@ -215,43 +212,4 @@ func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger
 		balancer.Stop(context.Background())
 		ltx.Done()
 	}()
-}
-
-func dockerCompose(ctx context.Context) (func(), error) {
-	compose := testcontainers.NewLocalDockerCompose([]string{"./docker-compose.yml"}, "es-set")
-	destroyFn := func() {
-		exErr := compose.Down()
-		if err := checkIfError(exErr); err != nil {
-			log.Printf("Error on compose shutdown: %v\n", err)
-		}
-	}
-
-	exErr := compose.Down()
-	if err := checkIfError(exErr); err != nil {
-		return func() {}, err
-	}
-	exErr = compose.
-		WithCommand([]string{"up", "--build", "-d"}).
-		Invoke()
-	err := checkIfError(exErr)
-	if err != nil {
-		return destroyFn, err
-	}
-
-	return destroyFn, err
-}
-
-func checkIfError(err testcontainers.ExecError) error {
-	if err.Error != nil {
-		return faults.Errorf("Failed when running %v: %v", err.Command, err.Error)
-	}
-
-	if err.Stdout != nil {
-		return faults.Errorf("An error in Stdout happened when running %v: %v", err.Command, err.Stdout)
-	}
-
-	if err.Stderr != nil {
-		return faults.Errorf("An error in Stderr happened when running %v: %v", err.Command, err.Stderr)
-	}
-	return nil
 }
