@@ -475,6 +475,7 @@ func toEventsourcingEvent(e *Event) *eventsourcing.Event {
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
+		Partition:        uint32(e.Partition),
 		Sequence:         e.Sequence,
 	}
 }

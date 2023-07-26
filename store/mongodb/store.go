@@ -579,6 +579,7 @@ func toEventsourcingEvent(e *Event, id eventid.EventID) *eventsourcing.Event {
 		Metadata:         encoding.JSONOfMap(e.Metadata),
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
+		Partition:        e.Partition,
 		Sequence:         e.Sequence,
 	}
 }
