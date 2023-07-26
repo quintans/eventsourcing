@@ -28,7 +28,6 @@ type Poller struct {
 	limit          int
 	aggregateKinds []eventsourcing.Kind
 	metadata       store.Metadata
-	partitions     uint32
 	partitionsLow  uint32
 	partitionsHi   uint32
 }
@@ -49,9 +48,8 @@ func WithLimit(limit int) Option {
 	}
 }
 
-func WithPartitions(partitions, partitionsLow, partitionsHi uint32) Option {
+func WithPartitions(partitionsLow, partitionsHi uint32) Option {
 	return func(p *Poller) {
-		p.partitions = partitions
 		p.partitionsLow = partitionsLow
 		p.partitionsHi = partitionsHi
 	}
@@ -143,7 +141,7 @@ func (p *Poller) catchUp(ctx context.Context, sinker sink.Sinker) error {
 	filters := []store.FilterOption{
 		store.WithAggregateKinds(p.aggregateKinds...),
 		store.WithMetadata(p.metadata),
-		store.WithPartitions(p.partitions, p.partitionsLow, p.partitionsHi),
+		store.WithPartitions(p.partitionsLow, p.partitionsHi),
 	}
 	filter := store.Filter{}
 	for _, f := range filters {

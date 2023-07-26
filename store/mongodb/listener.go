@@ -106,7 +106,7 @@ func (f *Feed) Run(ctx context.Context) error {
 		{"operationType", "insert"},
 	}
 	if f.partitions > 1 {
-		match = append(match, partitionFilter("fullDocument.aggregate_id_hash", f.partitions, f.partitionsLow, f.partitionsHi))
+		match = append(match, f.feedPartitionFilter())
 	}
 
 	matchPipeline := bson.D{{Key: "$match", Value: match}}
@@ -178,4 +178,47 @@ func (f *Feed) Run(ctx context.Context) error {
 		}
 		return err
 	}, b)
+}
+
+func (f *Feed) feedPartitionFilter() bson.E {
+	field := "$fullDocument.aggregate_id_hash"
+	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, m.partitions]}],  m.partitionsLow - 1]} }
+	if f.partitionsLow == f.partitionsHi {
+		return bson.E{
+			"$expr",
+			bson.D{
+				{"$eq", bson.A{
+					bson.D{
+						{"$mod", bson.A{field, f.partitions}},
+					},
+					f.partitionsLow - 1,
+				}},
+			},
+		}
+	}
+
+	// {$expr: {$and: [{"$gte": [ { "$mod" : [$field, m.partitions] }, m.partitionsLow - 1 ]}, {$lte: [ { $mod : [$field, m.partitions] }, partitionsHi - 1 ]}  ] }});
+	return bson.E{
+		"$expr",
+		bson.D{
+			{"$and", bson.A{
+				bson.D{
+					{"$gte", bson.A{
+						bson.D{
+							{"$mod", bson.A{field, f.partitions}},
+						},
+						f.partitionsLow - 1,
+					}},
+				},
+				bson.D{
+					{"$lte", bson.A{
+						bson.D{
+							{"$mod", bson.A{field, f.partitions}},
+						},
+						f.partitionsHi - 1,
+					}},
+				},
+			}},
+		},
+	}
 }

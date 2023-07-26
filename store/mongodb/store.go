@@ -483,8 +483,8 @@ func buildFilter(filter store.Filter, flt bson.D) bson.D {
 		flt = append(flt, bson.E{"aggregate_kind", bson.D{{"$in", filter.AggregateKinds}}})
 	}
 
-	if filter.Partitions > 1 {
-		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Partitions, filter.PartitionLow, filter.PartitionHi))
+	if filter.PartitionLow > 1 && filter.PartitionHi > 1 {
+		flt = append(flt, partitionFilter("sink_part", filter.PartitionLow, filter.PartitionHi))
 	}
 
 	if len(filter.Metadata) > 0 {
@@ -495,43 +495,25 @@ func buildFilter(filter store.Filter, flt bson.D) bson.D {
 	return flt
 }
 
-func partitionFilter(field string, partitions, partitionsLow, partitionsHi uint32) bson.E {
-	field = "$" + field
-	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, m.partitions]}],  m.partitionsLow - 1]} }
+func partitionFilter(field string, partitionsLow, partitionsHi uint32) bson.E {
 	if partitionsLow == partitionsHi {
 		return bson.E{
-			"$expr",
+			field,
 			bson.D{
-				{"$eq", bson.A{
-					bson.D{
-						{"$mod", bson.A{field, partitions}},
-					},
-					partitionsLow - 1,
-				}},
+				{"$eq", partitionsLow - 1},
 			},
 		}
 	}
 
-	// {$expr: {$and: [{"$gte": [ { "$mod" : [$field, m.partitions] }, m.partitionsLow - 1 ]}, {$lte: [ { $mod : [$field, m.partitions] }, partitionsHi - 1 ]}  ] }});
 	return bson.E{
-		"$expr",
+		field,
 		bson.D{
 			{"$and", bson.A{
 				bson.D{
-					{"$gte", bson.A{
-						bson.D{
-							{"$mod", bson.A{field, partitions}},
-						},
-						partitionsLow - 1,
-					}},
+					{"$gte", partitionsLow - 1},
 				},
 				bson.D{
-					{"$lte", bson.A{
-						bson.D{
-							{"$mod", bson.A{field, partitions}},
-						},
-						partitionsHi - 1,
-					}},
+					{"$lte", partitionsHi - 1},
 				},
 			}},
 		},

@@ -410,14 +410,14 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 		query.WriteString(")")
 	}
 
-	if filter.Partitions > 1 {
+	if filter.PartitionLow > 1 && filter.PartitionHi > 1 {
 		size := len(args)
 		if filter.PartitionLow == filter.PartitionHi {
-			args = append(args, filter.Partitions, filter.PartitionLow-1)
-			query.WriteString(fmt.Sprintf(" AND MOD(aggregate_id_hash, $%d) = $%d", size+1, size+2))
+			args = append(args, filter.PartitionLow-1)
+			query.WriteString(fmt.Sprintf(" AND sink_part = $%d", size+1))
 		} else {
-			args = append(args, filter.Partitions, filter.PartitionLow-1, filter.PartitionHi-1)
-			query.WriteString(fmt.Sprintf(" AND MOD(aggregate_id_hash, $%d) BETWEEN $%d AND $%d", size+1, size+2, size+4))
+			args = append(args, filter.PartitionLow-1, filter.PartitionHi-1)
+			query.WriteString(fmt.Sprintf(" AND sink_part BETWEEN $%d AND $%d", size+1, size+2))
 		}
 	}
 

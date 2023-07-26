@@ -11,7 +11,6 @@ type Filter struct {
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
 	Metadata     Metadata
-	Partitions   uint32
 	PartitionLow uint32
 	PartitionHi  uint32
 }
@@ -22,7 +21,6 @@ func WithFilter(filter Filter) FilterOption {
 	return func(f *Filter) {
 		f.AggregateKinds = filter.AggregateKinds
 		f.Metadata = filter.Metadata
-		f.Partitions = filter.Partitions
 		f.PartitionLow = filter.PartitionLow
 		f.PartitionHi = filter.PartitionHi
 	}
@@ -57,12 +55,8 @@ func WithMetadata(metadata Metadata) FilterOption {
 	}
 }
 
-func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FilterOption {
+func WithPartitions(partitionsLow, partitionsHi uint32) FilterOption {
 	return func(f *Filter) {
-		if partitions <= 1 {
-			return
-		}
-		f.Partitions = partitions
 		f.PartitionLow = partitionsLow
 		f.PartitionHi = partitionsHi
 	}

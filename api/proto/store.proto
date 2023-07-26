@@ -28,9 +28,8 @@ message GetEventsRequest {
 message Filter {
   repeated string aggregate_kinds = 1;
   repeated Metadata metadata = 2;
-  uint32 partitions = 3;
-  uint32 partitionLow = 4;
-  uint32 partitionHi = 5;
+  uint32 partitionLow = 3;
+  uint32 partitionHi = 4;
 }
 
 message Metadata {

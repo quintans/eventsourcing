@@ -109,7 +109,6 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 	return &pb.Filter{
 		AggregateKinds: types,
 		Metadata:       metadata,
-		Partitions:     filter.Partitions,
 		PartitionLow:   filter.PartitionLow,
 		PartitionHi:    filter.PartitionHi,
 	}

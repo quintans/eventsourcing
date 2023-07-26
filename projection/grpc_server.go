@@ -80,7 +80,6 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	return store.Filter{
 		AggregateKinds: types,
 		Metadata:       metadata,
-		Partitions:     pbFilter.Partitions,
 		PartitionLow:   pbFilter.PartitionLow,
 		PartitionHi:    pbFilter.PartitionHi,
 	}
