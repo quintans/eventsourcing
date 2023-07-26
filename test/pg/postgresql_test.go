@@ -35,9 +35,7 @@ var esOptions = &eventsourcing.EsOptions{
 func TestSaveAndGet(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := setup(t)
 
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.URL())
@@ -114,9 +112,7 @@ func TestSaveAndGet(t *testing.T) {
 func TestPollListener(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := setup(t)
 
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.URL())
@@ -173,9 +169,7 @@ func TestPollListener(t *testing.T) {
 func TestListenerWithAggregateKind(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := setup(t)
 
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.URL())
@@ -232,9 +226,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 func TestListenerWithMetadata(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := setup(t)
 
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.URL())
@@ -299,9 +291,7 @@ func TestListenerWithMetadata(t *testing.T) {
 func TestForget(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := setup(t)
 
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.URL())
@@ -395,31 +385,10 @@ func TestForget(t *testing.T) {
 	}
 }
 
-func BenchmarkDepositAndSave2(b *testing.B) {
-	dbConfig, tearDown, err := setup()
-	require.NoError(b, err)
-	defer tearDown()
-
-	r, _ := postgresql.NewStore(dbConfig.URL())
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 50})
-	b.RunParallel(func(pb *testing.PB) {
-		ctx := context.Background()
-		id := util.MustNewULID()
-		acc, _ := test.CreateAccount("Paulo", id, 0)
-
-		for pb.Next() {
-			_ = acc.Deposit(10)
-			_ = es.Create(ctx, acc)
-		}
-	})
-}
-
 func TestMigration(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := setup(t)
 
 	ctx := context.Background()
 	r, err := postgresql.NewStore(dbConfig.URL())

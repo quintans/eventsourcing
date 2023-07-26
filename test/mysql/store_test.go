@@ -46,9 +46,7 @@ func connect(dbConfig DBConfig) (*sqlx.DB, error) {
 func TestSaveAndGet(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := Setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t)
 
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
@@ -125,9 +123,7 @@ func TestSaveAndGet(t *testing.T) {
 func TestPollListener(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := Setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t)
 
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
@@ -193,9 +189,7 @@ func TestPollListener(t *testing.T) {
 func TestListenerWithAggregateKind(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := Setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t)
 
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
@@ -256,9 +250,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 func TestListenerWithLabels(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := Setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t)
 
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
@@ -327,9 +319,7 @@ func TestListenerWithLabels(t *testing.T) {
 func TestForget(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := Setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t)
 
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())
@@ -427,9 +417,7 @@ func TestForget(t *testing.T) {
 func TestMigration(t *testing.T) {
 	t.Parallel()
 
-	dbConfig, tearDown, err := Setup()
-	require.NoError(t, err)
-	defer tearDown()
+	dbConfig := Setup(t)
 
 	ctx := context.Background()
 	r, err := mysql.NewStore(dbConfig.URL())

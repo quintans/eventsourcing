@@ -32,20 +32,9 @@ const (
 func TestProjectionBeforeData(t *testing.T) {
 	ctx := context.Background()
 
-	dbConfig, tearDown, err := shared.Setup()
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		tearDown()
-	})
+	dbConfig := shared.Setup(t)
 
-	natsCont, err := runNatsContainer(ctx)
-	require.NoError(t, err)
-	// Clean up the container after the test is complete
-	t.Cleanup(func() {
-		if err := natsCont.Terminate(context.Background()); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
-	})
+	uri := runNatsContainer(t)
 
 	esRepo, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
@@ -54,12 +43,12 @@ func TestProjectionBeforeData(t *testing.T) {
 	ltx := latch.NewCountDownLatch()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, natsCont.URI, esRepo)
+	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, uri, esRepo)
 
 	// create projection
 	proj := NewProjectionMock("balances")
 
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, natsCont.URI, topic)
+	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
@@ -97,20 +86,9 @@ func TestProjectionBeforeData(t *testing.T) {
 func TestProjectionAfterData(t *testing.T) {
 	ctx := context.Background()
 
-	dbConfig, tearDown, err := shared.Setup()
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		tearDown()
-	})
+	dbConfig := shared.Setup(t)
 
-	natsCont, err := runNatsContainer(ctx)
-	require.NoError(t, err)
-	// Clean up the container after the test is complete
-	t.Cleanup(func() {
-		if err := natsCont.Terminate(context.Background()); err != nil {
-			t.Fatalf("failed to terminate container: %s", err)
-		}
-	})
+	uri := runNatsContainer(t)
 
 	esRepo, err := mysql.NewStore(dbConfig.URL())
 	require.NoError(t, err)
@@ -119,7 +97,7 @@ func TestProjectionAfterData(t *testing.T) {
 	ltx := latch.NewCountDownLatch()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, natsCont.URI, esRepo)
+	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, uri, esRepo)
 
 	id := util.MustNewULID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -136,7 +114,7 @@ func TestProjectionAfterData(t *testing.T) {
 	// create projection
 	proj := NewProjectionMock("balances")
 
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, natsCont.URI, topic)
+	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository

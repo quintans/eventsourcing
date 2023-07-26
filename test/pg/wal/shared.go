@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"testing"
 	"time"
 
 	"github.com/docker/go-connections/nat"
@@ -11,13 +12,15 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/lib/pq"
 	"github.com/quintans/faults"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	tpg "github.com/quintans/eventsourcing/test/pg"
 )
 
-func setup() (tpg.DBConfig, func(), error) {
+func setup(t *testing.T) tpg.DBConfig {
 	dbConfig := tpg.DBConfig{
 		Database: "pglogrepl",
 		Host:     "localhost",
@@ -50,35 +53,25 @@ func setup() (tpg.DBConfig, func(), error) {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	if err != nil {
-		return tpg.DBConfig{}, nil, faults.Wrap(err)
-	}
+	require.NoError(t, err)
 
-	tearDown := func() {
-		container.Terminate(ctx)
-	}
+	t.Cleanup(func() {
+		assert.NoError(t, container.Terminate(ctx))
+	})
 
 	ip, err := container.Host(ctx)
-	if err != nil {
-		tearDown()
-		return tpg.DBConfig{}, nil, faults.Wrap(err)
-	}
+	require.NoError(t, err)
+
 	port, err := container.MappedPort(ctx, natPort)
-	if err != nil {
-		tearDown()
-		return tpg.DBConfig{}, nil, faults.Wrap(err)
-	}
+	require.NoError(t, err)
 
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()
 
 	err = dbSchema(dbConfig)
-	if err != nil {
-		tearDown()
-		return tpg.DBConfig{}, nil, faults.Wrap(err)
-	}
+	require.NoError(t, err)
 
-	return dbConfig, tearDown, nil
+	return dbConfig
 }
 
 func dbSchema(config tpg.DBConfig) error {

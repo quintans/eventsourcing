@@ -3,7 +3,10 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -15,7 +18,8 @@ type natsContainer struct {
 }
 
 // runContainer creates an instance of the nats container type
-func runNatsContainer(ctx context.Context) (*natsContainer, error) {
+func runNatsContainer(t *testing.T) string {
+	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
 		Image:        "nats:2.9",
 		ExposedPorts: []string{"4222/tcp", "6222/tcp", "8222/tcp"},
@@ -27,23 +31,18 @@ func runNatsContainer(ctx context.Context) (*natsContainer, error) {
 		ContainerRequest: req,
 		Started:          true,
 	}
-
 	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
-	if err != nil {
-		return nil, err
-	}
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		assert.NoError(t, container.Terminate(context.Background()), "failed to terminate container")
+	})
 
 	mappedPort, err := container.MappedPort(ctx, "4222/tcp")
-	if err != nil {
-		return nil, err
-	}
+	require.NoError(t, err)
 
 	hostIP, err := container.Host(ctx)
-	if err != nil {
-		return nil, err
-	}
+	require.NoError(t, err)
 
-	uri := fmt.Sprintf("nats://%s:%s", hostIP, mappedPort.Port())
-
-	return &natsContainer{Container: container, URI: uri}, nil
+	return fmt.Sprintf("nats://%s:%s", hostIP, mappedPort.Port())
 }

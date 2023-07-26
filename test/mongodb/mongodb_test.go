@@ -516,7 +516,7 @@ func TestMigration(t *testing.T) {
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	// switching the aggregator factory
 	codec := test.NewJSONCodecWithUpcaster()

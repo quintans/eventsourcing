@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"testing"
 	"time"
 
 	"github.com/docker/go-connections/nat"
@@ -11,6 +12,8 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/quintans/faults"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -31,7 +34,7 @@ func (c DBConfig) URL() string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 
-func setup() (DBConfig, func(), error) {
+func setup(t *testing.T) DBConfig {
 	dbConfig := DBConfig{
 		Database: "eventsourcing",
 		Host:     "localhost",
@@ -58,35 +61,25 @@ func setup() (DBConfig, func(), error) {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	if err != nil {
-		return DBConfig{}, nil, faults.Wrap(err)
-	}
+	require.NoError(t, err)
 
-	tearDown := func() {
-		container.Terminate(ctx)
-	}
+	t.Cleanup(func() {
+		assert.NoError(t, container.Terminate(ctx))
+	})
 
 	ip, err := container.Host(ctx)
-	if err != nil {
-		tearDown()
-		return DBConfig{}, nil, faults.Wrap(err)
-	}
+	require.NoError(t, err)
+
 	port, err := container.MappedPort(ctx, natPort)
-	if err != nil {
-		tearDown()
-		return DBConfig{}, nil, faults.Wrap(err)
-	}
+	require.NoError(t, err)
 
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()
 
 	err = dbSchema(dbConfig)
-	if err != nil {
-		tearDown()
-		return DBConfig{}, nil, faults.Wrap(err)
-	}
+	require.NoError(t, err)
 
-	return dbConfig, tearDown, nil
+	return dbConfig
 }
 
 func dbSchema(dbConfig DBConfig) error {

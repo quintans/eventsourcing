@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/docker/go-connections/nat"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -17,7 +18,8 @@ import (
 	"github.com/quintans/eventsourcing/lock/consullock"
 )
 
-func SetupConsul(ctx context.Context) (testcontainers.Container, string, error) {
+func SetupConsul(t *testing.T) string {
+	ctx := context.Background()
 	tcpPort := "8500"
 	natPort := nat.Port(tcpPort)
 
@@ -30,32 +32,26 @@ func SetupConsul(ctx context.Context) (testcontainers.Container, string, error) 
 		ContainerRequest: req,
 		Started:          true,
 	})
-	if err != nil {
-		return nil, "", err
-	}
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		assert.NoError(t, container.Terminate(context.Background()))
+	})
 
 	ip, err := container.Host(ctx)
-	if err != nil {
-		_ = container.Terminate(ctx)
-		return nil, "", err
-	}
-	port, err := container.MappedPort(ctx, natPort)
-	if err != nil {
-		container.Terminate(ctx)
-		return nil, "", err
-	}
-	consulAddr := fmt.Sprintf("%s:%s", ip, port.Port())
-	time.Sleep(2 * time.Second)
 
-	return container, consulAddr, nil
+	port, err := container.MappedPort(ctx, natPort)
+
+	consulAddr := fmt.Sprintf("%s:%s", ip, port.Port())
+	time.Sleep(2 * time.Second) // hackish wait strategy
+
+	return consulAddr
 }
 
 func TestConsul(t *testing.T) {
 	lockKey := "123"
 	ctx := context.Background()
-	container, addr, err := SetupConsul(ctx)
-	require.NoError(t, err)
-	defer container.Terminate(ctx)
+	addr := SetupConsul(t)
 
 	pool1, err := consullock.NewPool(addr)
 	require.NoError(t, err)

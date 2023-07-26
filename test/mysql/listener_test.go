@@ -73,9 +73,7 @@ func TestListener(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			dbConfig, tearDown, err := Setup()
-			require.NoError(t, err)
-			defer tearDown()
+			dbConfig := Setup(t)
 
 			repository, err := mysql.NewStore(dbConfig.URL())
 			require.NoError(t, err)

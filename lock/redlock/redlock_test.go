@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/docker/go-connections/nat"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -17,7 +18,8 @@ import (
 	"github.com/quintans/eventsourcing/lock/redlock"
 )
 
-func SetupRedis(ctx context.Context) (testcontainers.Container, string, error) {
+func SetupRedis(t *testing.T) string {
+	ctx := context.Background()
 	tcpPort := "6379"
 	natPort := nat.Port(tcpPort)
 
@@ -30,35 +32,30 @@ func SetupRedis(ctx context.Context) (testcontainers.Container, string, error) {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	if err != nil {
-		return nil, "", err
-	}
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		assert.NoError(t, container.Terminate(context.Background()))
+	})
 
 	ip, err := container.Host(ctx)
-	if err != nil {
-		container.Terminate(ctx)
-		return nil, "", err
-	}
-	port, err := container.MappedPort(ctx, natPort)
-	if err != nil {
-		container.Terminate(ctx)
-		return nil, "", err
-	}
-	addr := fmt.Sprintf("%s:%s", ip, port.Port())
-	time.Sleep(2 * time.Second)
+	require.NoError(t, err)
 
-	return container, addr, nil
+	port, err := container.MappedPort(ctx, natPort)
+	require.NoError(t, err)
+
+	addr := fmt.Sprintf("%s:%s", ip, port.Port())
+	time.Sleep(2 * time.Second) // hackish wait strategy
+
+	return addr
 }
 
 func TestRedis(t *testing.T) {
 	lockKey := "123"
 	ctx := context.Background()
-	container, addr, err := SetupRedis(ctx)
-	require.NoError(t, err)
-	defer container.Terminate(ctx)
+	addr := SetupRedis(t)
 
 	pool1 := redlock.NewPool(addr)
-	require.NoError(t, err)
 
 	lock1 := pool1.NewLock(lockKey, redlock.WithExpiry(10*time.Second))
 	done1, err := lock1.Lock(ctx)
