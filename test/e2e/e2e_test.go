@@ -181,7 +181,7 @@ func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger
 	// setting nil for the locker factory means no lock will be used.
 	// when we have multiple replicas/processes forwarding events to the message queue,
 	// we need to use a distributed lock.
-	forwarder := projection.PartitionedEventForwarderWorker(logger, "forwarder", nil, feed.Run)
+	forwarder := projection.EventForwarderWorker(logger, "forwarder", nil, feed.Run)
 	balancer := worker.NewSingleBalancer(logger, "account", forwarder, lockExpiry/2)
 	ltx.Add(1)
 	go func() {

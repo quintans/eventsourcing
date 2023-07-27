@@ -38,8 +38,8 @@ func PartitionedEventForwarderWorkers(logger log.Logger, name string, lockerFact
 	return workers
 }
 
-// PartitionedEventForwarderWorker creates a single worker responsible of forwarding
-func PartitionedEventForwarderWorker(logger log.Logger, name string, lockerFactory LockerFactory, task worker.Task) worker.Worker {
+// EventForwarderWorker creates a single worker responsible of forwarding
+func EventForwarderWorker(logger log.Logger, name string, lockerFactory LockerFactory, task worker.Task) worker.Worker {
 	var locker lock.Locker
 	if lockerFactory != nil {
 		locker = lockerFactory(name + "-lock")
