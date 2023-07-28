@@ -80,7 +80,7 @@ func TestListener(t *testing.T) {
 
 			dbConfig := setup(t)
 
-			repository, err := postgresql.NewStore(dbConfig.URL())
+			repository, err := postgresql.NewStoreWithURL(dbConfig.URL())
 			require.NoError(t, err)
 
 			quit := make(chan os.Signal, 1)

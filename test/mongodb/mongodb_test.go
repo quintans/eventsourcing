@@ -55,7 +55,7 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
@@ -172,7 +172,7 @@ func TestPollListener(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -193,7 +193,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r, err = mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	r, err = mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(logger, r)
@@ -237,7 +237,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -258,7 +258,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	repository, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(logger, repository, poller.WithAggregateKinds(AggregateAccount))
@@ -298,7 +298,7 @@ func TestListenerWithLabels(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -325,7 +325,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	repository, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
@@ -365,7 +365,7 @@ func TestForget(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -501,7 +501,7 @@ func TestMigration(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -516,7 +516,7 @@ func TestMigration(t *testing.T) {
 	require.NoError(t, err)
 
 	// giving time for the snapshots to write
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	// switching the aggregator factory
 	codec := test.NewJSONCodecWithUpcaster()
@@ -550,6 +550,7 @@ func TestMigration(t *testing.T) {
 		[]eventsourcing.Kind{test.KindAccountCreated, test.KindOwnerUpdated},
 	)
 	require.NoError(t, err)
+
 	snaps, err := getSnapshots(ctx, dbConfig, id)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(snaps))

@@ -43,11 +43,11 @@ func (*ProjectionMock) Options() projection.Options {
 	return projection.Options{}
 }
 
-func (p *ProjectionMock) StreamResumeToken(ctx context.Context, topic util.Topic) (projection.Token, error) {
+func (p *ProjectionMock) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (projection.Token, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	token, ok := p.resumes[p.Name()+"-"+topic.String()]
+	token, ok := p.resumes[key.String()]
 	if !ok {
 		return projection.Token{}, projection.ErrResumeTokenNotFound
 	}
@@ -55,7 +55,7 @@ func (p *ProjectionMock) StreamResumeToken(ctx context.Context, topic util.Topic
 	return token, nil
 }
 
-func (p *ProjectionMock) Handler(ctx context.Context, meta projection.Meta, e *sink.Message) error {
+func (p *ProjectionMock) Handle(ctx context.Context, meta projection.MetaData, e *sink.Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -91,22 +91,20 @@ func (p *ProjectionMock) Handler(ctx context.Context, meta projection.Meta, e *s
 	return p.recordResumeToken(meta)
 }
 
-func (p *ProjectionMock) recordResumeToken(meta projection.Meta) error {
+func (p *ProjectionMock) recordResumeToken(meta projection.MetaData) error {
 	// saving resume tokens. In a real application, it should be in the transaction
-	var topicRoot string
-	if meta.Topic == "" {
-		// when replaying, the topic is zero and we have to infer the topic
-		topicRoot = "accounts"
-	} else {
-		topicRoot = meta.Topic
-	}
 
-	topic, err := util.NewPartitionedTopic(topicRoot, meta.Partition)
+	topic, err := util.NewPartitionedTopic(meta.Topic, meta.Partition)
 	if err != nil {
-		return faults.Errorf("creating partitioned topic: %s:%d", topicRoot, meta.Partition)
+		return faults.Errorf("creating partitioned topic: %s:%d", meta.Topic, meta.Partition)
 	}
 
-	p.resumes[p.Name()+"-"+topic.String()] = meta.Token
+	key, err := projection.NewResume(topic, p.Name())
+	if err != nil {
+		return faults.Wrap(err)
+	}
+
+	p.resumes[key.String()] = meta.Token
 
 	return nil
 }

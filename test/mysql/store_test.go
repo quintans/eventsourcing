@@ -49,7 +49,7 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -126,7 +126,7 @@ func TestPollListener(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -146,7 +146,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mysql.NewStore(dbConfig.URL())
+	repository, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository)
 
@@ -192,7 +192,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -212,7 +212,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mysql.NewStore(dbConfig.URL())
+	repository, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository, poller.WithAggregateKinds(test.KindAccount))
 
@@ -253,7 +253,7 @@ func TestListenerWithLabels(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -279,7 +279,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mysql.NewStore(dbConfig.URL())
+	repository, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
 
@@ -322,7 +322,7 @@ func TestForget(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -420,7 +420,7 @@ func TestMigration(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStore(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 

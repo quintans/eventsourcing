@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,9 +67,9 @@ func (w *RunWorker) isRunning() bool {
 
 // Start attempts to execute the worker in a separate goroutine.
 // It returns true if it able to acquire the lock to execute, false otherwise.
-func (w *RunWorker) Start(ctx context.Context) bool {
+func (w *RunWorker) Start(ctx context.Context) (bool, error) {
 	if w.IsRunning() {
-		return true
+		return true, nil
 	}
 
 	if w.locker != nil {
@@ -76,7 +77,13 @@ func (w *RunWorker) Start(ctx context.Context) bool {
 		release, err := w.locker.Lock(ctx)
 		if err != nil {
 			cancel()
-			return false
+			if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+				return false, nil
+			} else if errors.Is(err, lock.ErrLockAlreadyHeld) {
+				return true, nil
+			} else {
+				return false, faults.Wrap(err)
+			}
 		}
 		w.mu.Lock()
 		w.cancelLock = cancel
@@ -90,7 +97,7 @@ func (w *RunWorker) Start(ctx context.Context) bool {
 	w.mu.Lock()
 	w.start(ctx)
 	w.mu.Unlock()
-	return true
+	return true, nil
 }
 
 func (w *RunWorker) Stop(ctx context.Context) {

@@ -30,14 +30,14 @@ type ResumeKey struct {
 	projection string
 }
 
-func NewStreamResume(topic util.Topic, stream string) (ResumeKey, error) {
-	if stream == "" {
-		return ResumeKey{}, faults.New("stream cannot be empty")
+func NewResume(topic util.Topic, projectionName string) (ResumeKey, error) {
+	if projectionName == "" {
+		return ResumeKey{}, faults.New("projection name cannot be empty")
 	}
 
 	return ResumeKey{
 		topic:      topic,
-		projection: stream,
+		projection: projectionName,
 	}, nil
 }
 
@@ -185,18 +185,27 @@ func (t Token) IsZero() bool {
 
 var ErrResumeTokenNotFound = errors.New("resume token not found")
 
-type ResumeStore interface {
+type ReadResumeStore interface {
 	// GetStreamResumeToken retrieves the resume token for the resume key.
 	// If the a resume key is not found it return ErrResumeTokenNotFound as an error
 	GetStreamResumeToken(ctx context.Context, key ResumeKey) (Token, error)
+}
+
+type WriteResumeStore interface {
 	SetStreamResumeToken(ctx context.Context, key ResumeKey, token Token) error
 }
 
+type ResumeStore interface {
+	ReadResumeStore
+	WriteResumeStore
+}
+
 type Projection interface {
+	ReadResumeStore
+
 	Name() string
-	StreamResumeToken(ctx context.Context, topic util.Topic) (Token, error)
 	Options() Options
-	Handler(ctx context.Context, meta Meta, e *sink.Message) error
+	Handle(ctx context.Context, meta MetaData, e *sink.Message) error
 }
 
 type (
@@ -230,7 +239,7 @@ func Project(
 	subscriber Subscriber,
 	projection Projection,
 ) *worker.RunWorker {
-	name := fmt.Sprintf("%s-%s-lock", projection.Name(), subscriber.Topic())
+	name := fmt.Sprintf("%s-%s", projection.Name(), subscriber.Topic())
 	logger = logger.WithTags(log.Tags{
 		"projection": projection.Name(),
 	})
@@ -331,6 +340,13 @@ func catching(
 
 	player := NewPlayer(esRepo)
 
+	topic := subscriber.Topic().Root()
+	handler := func(ctx context.Context, meta MetaData, e *sink.Message) error {
+		// meta.Topic will be empty when replaying, so we set it to the subscriber topic
+		meta.Topic = topic
+		return projection.Handle(ctx, meta, e)
+	}
+
 	// loop until it is safe to switch to the subscriber
 	seq := startAt
 	for {
@@ -343,8 +359,8 @@ func catching(
 
 		logger.WithTags(log.Tags{"from": seq, "until": until}).Info("Replaying all events from the event store")
 		// first catch up (this can take days)
-		// catchUpCallback should take care of saving the resume value
-		seq, err = player.Replay(ctx, projection.Handler, seq, until, options.CatchUpFilters...)
+		// projection.Handler should take care of saving the resume value
+		seq, err = player.Replay(ctx, handler, seq, until, options.CatchUpFilters...)
 		if err != nil {
 			return faults.Errorf("replaying events from '%d' until '%d': %w", seq, until, err)
 		}
@@ -369,7 +385,7 @@ func catching(
 	if resume > seq {
 		logger.WithTags(log.Tags{"from": seq, "until": resume}).Info("Catching up projection up to the subscription")
 		// this should be very quick since the bulk of the work was already done
-		seq, err = player.Replay(ctx, projection.Handler, seq, resume, options.CatchUpFilters...)
+		seq, err = player.Replay(ctx, handler, seq, resume, options.CatchUpFilters...)
 		if err != nil {
 			return faults.Errorf("replaying events from '%d' until '%d': %w", seq, resume, err)
 		}
@@ -380,14 +396,16 @@ func catching(
 	return nil
 }
 
-func getSavedToken(ctx context.Context, sub Consumer, projection Projection) (Token, error) {
-	token, err := projection.StreamResumeToken(ctx, sub.Topic())
-	if errors.Is(err, ErrResumeTokenNotFound) {
-		return NewToken(CatchUpToken, 0), nil
-	}
+func getSavedToken(ctx context.Context, sub Consumer, prj Projection) (Token, error) {
+	resume, err := NewResume(sub.Topic(), prj.Name())
 	if err != nil {
 		return Token{}, faults.Wrap(err)
 	}
 
-	return token, nil
+	token, err := prj.GetStreamResumeToken(ctx, resume)
+	if errors.Is(err, ErrResumeTokenNotFound) {
+		return NewToken(CatchUpToken, 0), nil
+	}
+
+	return token, faults.Wrap(err)
 }

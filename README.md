@@ -300,7 +300,7 @@ Since only one of the operations must be successful, using the same idempotent k
 because internally we check the presence of the key.
 If the events are delivered concurrently, we just have a concurrent error. 
 
-The goal of an idempotency key is not to fail an operation but to allow us to skip an operation. 
+The goal of an idempotency key is not to fail an operation but to allow us to skip an operation (if the data is still the same). 
 
 Some pseudo code:
 

@@ -110,7 +110,7 @@ func (r *EsRepository) saveMigration(
 	clock := util.NewClockAfter(last.CreatedAt)
 	entropy := eventid.NewEntropy()
 
-	return r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
+	return r.WithTx(ctx, func(c context.Context, tx *sql.Tx) error {
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
 		t := clock.Now()

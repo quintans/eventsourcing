@@ -90,23 +90,73 @@ func WithPublisher(publisher store.Publisher) Option {
 	}
 }
 
+type Repository struct {
+	db *sqlx.DB
+}
+
+func (r Repository) TxRunner() func(ctx context.Context, fn func(context.Context) error) error {
+	return func(ctx context.Context, fn func(context.Context) error) error {
+		return r.WithTx(ctx, func(c context.Context, _ *sql.Tx) error {
+			return fn(c)
+		})
+	}
+}
+
+func (r *Repository) WithTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
+	tx := TxFromContext(ctx)
+	if tx != nil {
+		return fn(ctx, tx)
+	}
+
+	return r.wrapWithTx(ctx, fn)
+}
+
+func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return faults.Wrap(err)
+	}
+	defer tx.Rollback()
+
+	ctx = context.WithValue(ctx, txKey{}, tx)
+	err = fn(ctx, tx)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 type EsRepository struct {
-	db        *sqlx.DB
+	Repository
 	publisher store.Publisher
 }
 
-func NewStore(connString string) (*EsRepository, error) {
+func NewStoreWithURL(connString string, options ...Option) (*EsRepository, error) {
 	db, err := sql.Open(driverName, connString)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
 
+	return NewStore(db, options...), nil
+}
+
+func NewStore(db *sql.DB, options ...Option) *EsRepository {
 	dbx := sqlx.NewDb(db, driverName)
 	r := &EsRepository{
-		db: dbx,
+		Repository: Repository{
+			db: dbx,
+		},
 	}
 
-	return r, nil
+	for _, opt := range options {
+		opt(r)
+	}
+
+	return r
+}
+
+func (r *EsRepository) Connection() *sql.DB {
+	return r.db.DB
 }
 
 func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
@@ -114,7 +164,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventR
 
 	version := eRec.Version
 	var id eventid.EventID
-	err := r.withTx(ctx, func(c context.Context, tx *sql.Tx) error {
+	err := r.WithTx(ctx, func(c context.Context, tx *sql.Tx) error {
 		entropy := eventid.NewEntropy()
 		for _, e := range eRec.Details {
 			version++
@@ -247,38 +297,6 @@ type txKey struct{}
 func TxFromContext(ctx context.Context) *sql.Tx {
 	tx, _ := ctx.Value(txKey{}).(*sql.Tx) // with _ it will not panic if nil
 	return tx
-}
-
-func (r *EsRepository) withTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
-	tx := TxFromContext(ctx)
-	if tx != nil {
-		return fn(ctx, tx)
-	}
-
-	return r.wrapWithTx(ctx, fn)
-}
-
-func (r *EsRepository) wrapWithTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			panic(r)
-		}
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
-
-	ctx = context.WithValue(ctx, txKey{}, tx)
-	err = fn(ctx, tx)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {

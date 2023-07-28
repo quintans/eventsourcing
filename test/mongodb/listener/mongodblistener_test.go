@@ -78,7 +78,7 @@ func TestMongoListenere(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dbConfig := tmg.Setup(t, "../docker-compose.yaml")
 
-			repository, err := mongodb.NewStore(dbConfig.URL(), dbConfig.Database)
+			repository, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
 			require.NoError(t, err)
 			defer repository.Close(context.Background())
 

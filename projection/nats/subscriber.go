@@ -146,11 +146,16 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		v(&opts)
 	}
 
-	var startOption nats.SubOpt
-	token, err := proj.StreamResumeToken(ctx, s.topic)
+	resume, err := projection.NewResume(s.Topic(), proj.Name())
+	if err != nil {
+		return faults.Wrap(err)
+	}
+
+	token, err := proj.GetStreamResumeToken(ctx, resume)
 	if err != nil && !errors.Is(err, projection.ErrResumeTokenNotFound) {
 		return faults.Errorf("Could not retrieve resume token for '%s': %w", s.topic, err)
 	}
+	var startOption nats.SubOpt
 	if token.IsEmpty() {
 		logger.WithTags(log.Tags{"topic": s.topic}).Info("Starting consuming all available events", s.topic)
 		// startOption = nats.DeliverAll()
@@ -170,9 +175,9 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		seq := sequence(m)
 		if opts.Filter == nil || opts.Filter(evt) {
 			logger.Debugf("Handling received event '%+v'", evt)
-			er = proj.Handler(
+			er = proj.Handle(
 				ctx,
-				projection.Meta{
+				projection.MetaData{
 					Topic:     s.topic.Root(),
 					Partition: s.topic.Partition(),
 					Token:     projection.NewToken(projection.ConsumerToken, seq),

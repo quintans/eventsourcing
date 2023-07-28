@@ -32,13 +32,13 @@ type Worker interface {
 	Group() string
 	IsRunning() bool
 	IsBalanceable() bool
-	Start(context.Context) bool
+	Start(context.Context) (bool, error)
 	Stop(ctx context.Context)
 }
 
 type Balancer interface {
 	Name() string
-	Start(ctx context.Context)
+	Start(ctx context.Context) <-chan struct{}
 	Stop(ctx context.Context)
 }
 
@@ -99,11 +99,16 @@ func (b *MembersBalancer) Name() string {
 	return b.name
 }
 
-func (b *MembersBalancer) Start(ctx context.Context) {
-	done := make(chan struct{})
+func (b *MembersBalancer) Start(ctx context.Context) <-chan struct{} {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.done != nil {
+		return b.done
+	}
+
+	done := make(chan struct{})
 	b.done = done
-	b.mu.Unlock()
 	go func() {
 		ticker := time.NewTicker(b.heartbeat)
 		defer ticker.Stop()
@@ -123,6 +128,8 @@ func (b *MembersBalancer) Start(ctx context.Context) {
 			}
 		}
 	}()
+
+	return done
 }
 
 func (b *MembersBalancer) Stop(ctx context.Context) {
@@ -291,7 +298,12 @@ func (b *MembersBalancer) balance(ctx context.Context, workers []Worker, workers
 				continue
 			}
 
-			if w.Start(ctx) {
+			ok, err := w.Start(ctx)
+			if err != nil {
+				b.logger.WithError(err).Error("Failed to start worker")
+			}
+
+			if ok {
 				myRunningWorkers[w.Name()] = true
 				running++
 			}
@@ -323,10 +335,10 @@ type SingleBalancer struct {
 	done chan struct{}
 }
 
-func NewSingleBalancer(logger log.Logger, name string, worker Worker, heartbeat time.Duration) *SingleBalancer {
+func NewSingleBalancer(logger log.Logger, worker Worker, heartbeat time.Duration) *SingleBalancer {
 	return &SingleBalancer{
 		logger:    logger,
-		name:      name,
+		name:      worker.Group(),
 		worker:    worker,
 		heartbeat: heartbeat,
 	}
@@ -336,11 +348,16 @@ func (b *SingleBalancer) Name() string {
 	return b.name
 }
 
-func (b *SingleBalancer) Start(ctx context.Context) {
-	done := make(chan struct{})
+func (b *SingleBalancer) Start(ctx context.Context) <-chan struct{} {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.done != nil {
+		return b.done
+	}
+
+	done := make(chan struct{})
 	b.done = done
-	b.mu.Unlock()
 	go func() {
 		ticker := time.NewTicker(b.heartbeat)
 		defer ticker.Stop()
@@ -357,6 +374,8 @@ func (b *SingleBalancer) Start(ctx context.Context) {
 			}
 		}
 	}()
+
+	return done
 }
 
 func (b *SingleBalancer) Stop(ctx context.Context) {

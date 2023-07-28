@@ -36,7 +36,7 @@ func TestProjectionBeforeData(t *testing.T) {
 
 	uri := runNatsContainer(t)
 
-	esRepo, err := mysql.NewStore(dbConfig.URL())
+	esRepo, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
@@ -53,7 +53,8 @@ func TestProjectionBeforeData(t *testing.T) {
 
 	// repository here could be remote, like GrpcRepository
 	projector := projection.Project(ctx, logger, nil, esRepo, sub, proj)
-	ok := projector.Start(ctx)
+	ok, err := projector.Start(ctx)
+	require.NoError(t, err)
 	require.True(t, ok)
 
 	// giving time to catchup and project events from the database
@@ -90,7 +91,7 @@ func TestProjectionAfterData(t *testing.T) {
 
 	uri := runNatsContainer(t)
 
-	esRepo, err := mysql.NewStore(dbConfig.URL())
+	esRepo, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
@@ -119,7 +120,8 @@ func TestProjectionAfterData(t *testing.T) {
 
 	// repository here could be remote, like GrpcRepository
 	projector := projection.Project(ctx, logger, nil, esRepo, sub, proj)
-	ok := projector.Start(ctx)
+	ok, err := projector.Start(ctx)
+	require.NoError(t, err)
 	require.True(t, ok)
 
 	// giving time to catchup and project events from the database
@@ -181,8 +183,8 @@ func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger
 	// setting nil for the locker factory means no lock will be used.
 	// when we have multiple replicas/processes forwarding events to the message queue,
 	// we need to use a distributed lock.
-	forwarder := projection.EventForwarderWorker(logger, "forwarder", nil, feed.Run)
-	balancer := worker.NewSingleBalancer(logger, "account", forwarder, lockExpiry/2)
+	forwarder := projection.EventForwarderWorker(logger, "account-forwarder", nil, feed.Run)
+	balancer := worker.NewSingleBalancer(logger, forwarder, lockExpiry/2)
 	ltx.Add(1)
 	go func() {
 		balancer.Start(ctx)

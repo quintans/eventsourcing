@@ -138,38 +138,38 @@ type EventRecordDetail struct {
 	Body []byte
 }
 
-type Options struct {
+type PersistOptions struct {
 	IdempotencyKey string
 	// Labels tags the event. eg: {"geo": "EU"}
 	Labels map[string]interface{}
 	clock  util.Clocker
 }
 
-type SaveOption func(*Options)
+type PersistOption func(*PersistOptions)
 
-func WithIdempotencyKey(key string) SaveOption {
-	return func(o *Options) {
+func WithIdempotencyKey(key string) PersistOption {
+	return func(o *PersistOptions) {
 		o.IdempotencyKey = key
 	}
 }
 
-func WithMetadata(metadata map[string]interface{}) SaveOption {
-	return func(o *Options) {
+func WithMetadata(metadata map[string]interface{}) PersistOption {
+	return func(o *PersistOptions) {
 		o.Labels = metadata
 	}
 }
 
 // WithClock allows to set a logical clock and time relate two aggregates
-func WithClock(clock util.Clocker) SaveOption {
-	return func(o *Options) {
+func WithClock(clock util.Clocker) PersistOption {
+	return func(o *PersistOptions) {
 		o.clock = clock
 	}
 }
 
 type EventStorer[T Aggregater] interface {
-	Create(ctx context.Context, aggregate T, options ...SaveOption) error
+	Create(ctx context.Context, aggregate T, options ...PersistOption) error
 	Retrieve(ctx context.Context, aggregateID string) (T, error)
-	Update(ctx context.Context, id string, do func(T) (T, error), options ...SaveOption) error
+	Update(ctx context.Context, id string, do func(T) (T, error), options ...PersistOption) error
 	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
 	// Forget erases the values of the specified fields
 	Forget(ctx context.Context, request ForgetRequest, forget func(Kinder) (Kinder, error)) error
@@ -210,7 +210,7 @@ func NewEventStore[T Aggregater](repo EsRepository, codec Codec, options *EsOpti
 // Update loads the aggregate from the event store and handles it to the handler function, saving the returning Aggregater in the event store.
 // If no aggregate is found for the provided ID the error ErrUnknownAggregateID is returned.
 // If the handler function returns nil for the Aggregater or an error, the save action is ignored.
-func (es EventStore[T]) Update(ctx context.Context, id string, do func(T) (T, error), options ...SaveOption) error {
+func (es EventStore[T]) Update(ctx context.Context, id string, do func(T) (T, error), options ...PersistOption) error {
 	a, version, updatedAt, eventsCounter, err := es.retrieve(ctx, id)
 	if err != nil {
 		return err
@@ -298,7 +298,7 @@ func (es EventStore[T]) RehydrateEvent(kind Kind, body []byte) (Kinder, error) {
 }
 
 // Create saves the events of the aggregater into the event store
-func (es EventStore[T]) Create(ctx context.Context, aggregate Aggregater, options ...SaveOption) (err error) {
+func (es EventStore[T]) Create(ctx context.Context, aggregate T, options ...PersistOption) (err error) {
 	return es.save(ctx, aggregate, 0, time.Now(), 0, options...)
 }
 
@@ -308,7 +308,7 @@ func (es EventStore[T]) save(
 	version uint32,
 	updatedAt time.Time,
 	eventsCounter uint32,
-	options ...SaveOption,
+	options ...PersistOption,
 ) (err error) {
 	events := aggregate.PopEvents()
 	eventsLen := len(events)
@@ -316,7 +316,7 @@ func (es EventStore[T]) save(
 		return nil
 	}
 
-	opts := Options{
+	opts := PersistOptions{
 		clock: util.NewClock(),
 	}
 	for _, fn := range options {

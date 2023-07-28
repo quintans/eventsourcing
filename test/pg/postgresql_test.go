@@ -38,7 +38,7 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -115,7 +115,7 @@ func TestPollListener(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -134,7 +134,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbConfig.URL())
+	repository, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	var mu sync.Mutex
 
@@ -172,7 +172,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -191,7 +191,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStore(dbConfig.URL())
+	repository, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository, poller.WithAggregateKinds(aggregateKind))
 
@@ -229,7 +229,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -254,7 +254,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := postgresql.NewStore(dbConfig.URL())
+	repository, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
 
@@ -294,7 +294,7 @@ func TestForget(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -391,7 +391,7 @@ func TestMigration(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStore(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
 
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)

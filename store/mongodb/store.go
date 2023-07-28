@@ -73,16 +73,49 @@ func WithPublisher(publisher store.Publisher) Option {
 	}
 }
 
+type Repository struct {
+	client *mongo.Client
+}
+
+func (r Repository) WithTx(ctx context.Context, callback func(context.Context) error) (err error) {
+	sess := mongo.SessionFromContext(ctx)
+	if sess != nil {
+		return callback(ctx)
+	}
+
+	return r.wrapWithTx(ctx, callback)
+}
+
+func (r Repository) wrapWithTx(ctx context.Context, callback func(context.Context) error) (err error) {
+	session, err := r.client.StartSession()
+	if err != nil {
+		return faults.Wrap(err)
+	}
+	defer session.EndSession(ctx)
+
+	fn := func(sessCtx mongo.SessionContext) (interface{}, error) {
+		er := callback(sessCtx)
+		return nil, er
+	}
+	_, err = session.WithTransaction(ctx, fn)
+	if err != nil {
+		return faults.Wrap(err)
+	}
+
+	return nil
+}
+
 type EsRepository struct {
+	Repository
+
 	dbName                  string
-	client                  *mongo.Client
 	publisher               store.Publisher
 	eventsCollectionName    string
 	snapshotsCollectionName string
 }
 
-// NewStore creates a new instance of MongoEsRepository
-func NewStore(connString, database string, opts ...Option) (*EsRepository, error) {
+// NewStoreWithURI creates a new instance of MongoEsRepository
+func NewStoreWithURI(connString, database string, opts ...Option) (*EsRepository, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -91,9 +124,16 @@ func NewStore(connString, database string, opts ...Option) (*EsRepository, error
 		return nil, faults.Wrap(err)
 	}
 
+	return NewStore(client, database, opts...), nil
+}
+
+// NewStoreWithURI creates a new instance of MongoEsRepository
+func NewStore(client *mongo.Client, database string, opts ...Option) *EsRepository {
 	r := &EsRepository{
+		Repository: Repository{
+			client: client,
+		},
 		dbName:                  database,
-		client:                  client,
 		eventsCollectionName:    defaultEventsCollection,
 		snapshotsCollectionName: defaultSnapshotsCollection,
 	}
@@ -102,7 +142,11 @@ func NewStore(connString, database string, opts ...Option) (*EsRepository, error
 		o(r)
 	}
 
-	return r, nil
+	return r
+}
+
+func (r *EsRepository) Client() *mongo.Client {
+	return r.client
 }
 
 func (r *EsRepository) Close(ctx context.Context) {
@@ -129,7 +173,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventR
 	var id eventid.EventID
 	version := eRec.Version
 	idempotencyKey := eRec.IdempotencyKey
-	err := r.withTx(ctx, func(ctx context.Context) error {
+	err := r.WithTx(ctx, func(ctx context.Context) error {
 		entropy := eventid.NewEntropy()
 		for _, e := range eRec.Details {
 			version++
@@ -202,34 +246,6 @@ func isMongoDup(err error) bool {
 		}
 	}
 	return false
-}
-
-func (r *EsRepository) withTx(ctx context.Context, callback func(context.Context) error) (err error) {
-	sess := mongo.SessionFromContext(ctx)
-	if sess != nil {
-		return callback(ctx)
-	}
-
-	return r.wrapWithTx(ctx, callback)
-}
-
-func (r *EsRepository) wrapWithTx(ctx context.Context, callback func(context.Context) error) (err error) {
-	session, err := r.client.StartSession()
-	if err != nil {
-		return faults.Wrap(err)
-	}
-	defer session.EndSession(ctx)
-
-	fn := func(sessCtx mongo.SessionContext) (interface{}, error) {
-		er := callback(sessCtx)
-		return nil, er
-	}
-	_, err = session.WithTransaction(ctx, fn)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-
-	return nil
 }
 
 func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventsourcing.Snapshot, error) {

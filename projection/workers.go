@@ -28,7 +28,7 @@ func PartitionedEventForwarderWorkers(logger log.Logger, name string, lockerFact
 
 		workers[i] = worker.NewRunWorker(
 			logger,
-			name+"-worker-"+slotsName,
+			name+"-"+slotsName,
 			name,
 			locker,
 			taskerFactory(v.From, v.To),
@@ -47,7 +47,7 @@ func EventForwarderWorker(logger log.Logger, name string, lockerFactory LockerFa
 
 	return worker.NewRunWorker(
 		logger,
-		name+"-worker",
+		name,
 		name,
 		locker,
 		task,
@@ -140,7 +140,7 @@ func createProjector(
 	if err != nil {
 		return faults.Wrap(err)
 	}
-	sr, err := NewStreamResume(t, projection.Name())
+	sr, err := NewResume(t, projection.Name())
 	if err != nil {
 		return faults.Wrap(err)
 	}

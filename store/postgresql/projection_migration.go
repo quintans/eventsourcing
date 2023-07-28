@@ -131,7 +131,7 @@ func (r *EsRepository) processAggregate(
 		return faults.Wrap(err)
 	}
 
-	return r.withTx(c, func(c context.Context, tx *sql.Tx) error {
+	return r.WithTx(c, func(c context.Context, tx *sql.Tx) error {
 		// flush the event to the handler
 		err := migrater.Flush(c, metadata, agg)
 		if err != nil {
