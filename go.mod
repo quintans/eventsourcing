@@ -6,7 +6,6 @@ require (
 	github.com/avast/retry-go/v3 v3.1.1
 	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/docker/go-connections v0.4.0
-	github.com/elastic/go-elasticsearch/v7 v7.10.0
 	github.com/go-mysql-org/go-mysql v1.7.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/go-sql-driver/mysql v1.6.0
