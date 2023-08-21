@@ -54,7 +54,7 @@ func EventForwarderWorker(logger log.Logger, name string, lockerFactory LockerFa
 	)
 }
 
-type SubscriberFactory func(context.Context, ResumeKey) Subscriber
+type SubscriberFactory func(context.Context, ResumeKey) Consumer
 
 // PartitionedWorkers creates workers that will always run because a balancer locker is not provided.
 // This assumes that the balancing will be done by the message broker.
@@ -146,7 +146,6 @@ func createProjector(
 	}
 
 	Project(
-		ctx,
 		logger,
 		lockerFactory,
 		esRepo,

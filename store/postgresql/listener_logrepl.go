@@ -292,6 +292,8 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
+		// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
+		// They will be populate with the values returned by the sink.
 		e := eventsourcing.Event{
 			ID:               eid,
 			AggregateID:      aggregateID,

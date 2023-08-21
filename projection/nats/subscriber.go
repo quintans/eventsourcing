@@ -27,7 +27,7 @@ func NewSubscriberWithURL(
 ) (*Subscriber, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
-		return nil, faults.Errorf("Could not instantiate NATS connection: %w", err)
+		return nil, faults.Errorf("instantiating NATS connection: %w", err)
 	}
 	subscriber, err := NewSubscriberWithConn(
 		logger,
@@ -107,34 +107,8 @@ func NewSubscriber(
 	return s
 }
 
-func (s *Subscriber) Topic() util.Topic {
-	return s.topic
-}
-
-func (s *Subscriber) RetrieveLastSequence(ctx context.Context) (uint64, error) {
-	ch := make(chan uint64)
-	// this will position the stream at the last position+1
-	sub, err := s.jetStream.Subscribe(
-		s.topic.String(),
-		func(m *nats.Msg) {
-			ch <- sequence(m)
-			m.Ack()
-		},
-		nats.DeliverLast(),
-		nats.MaxDeliver(2),
-	)
-	if err != nil {
-		return 0, faults.Wrap(err)
-	}
-	defer sub.Unsubscribe()
-	var resume uint64
-	// will wait until a message is available
-	select {
-	case resume = <-ch:
-	case <-ctx.Done():
-		return 0, faults.New("failed to get subscription to last event ID")
-	}
-	return resume, nil
+func (s *Subscriber) TopicPartitions() (string, []uint32) {
+	return s.topic.Root(), []uint32{s.topic.Partition()}
 }
 
 func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projection, options ...projection.ConsumerOption) error {
@@ -146,7 +120,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		v(&opts)
 	}
 
-	resume, err := projection.NewResume(s.Topic(), proj.Name())
+	resume, err := projection.NewResume(s.topic, proj.Name())
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -155,10 +129,10 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 	if err != nil && !errors.Is(err, projection.ErrResumeTokenNotFound) {
 		return faults.Errorf("Could not retrieve resume token for '%s': %w", s.topic, err)
 	}
+
 	var startOption nats.SubOpt
 	if token.IsEmpty() {
 		logger.WithTags(log.Tags{"topic": s.topic}).Info("Starting consuming all available events", s.topic)
-		// startOption = nats.DeliverAll()
 		startOption = nats.StartSequence(1)
 	} else {
 		logger.WithTags(log.Tags{"from": token.Sequence(), "topic": s.topic}).Info("Starting consumer")
@@ -169,7 +143,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		evt, er := s.messageCodec.Decode(m.Data)
 		if er != nil {
 			logger.WithError(er).Errorf("unable to unmarshal event '%s'", string(m.Data))
-			m.Nak()
+			_ = m.Nak()
 			return
 		}
 		seq := sequence(m)
@@ -210,14 +184,12 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 	defer s.mu.Unlock()
 	s.subscription, err = s.jetStream.QueueSubscribe(s.topic.String(), groupName, callback, natsOpts...)
 	if err != nil {
-		return faults.Errorf("failed to subscribe to %s: %w", s.topic, err)
+		return faults.Errorf("subscribing to %s: %w", s.topic, err)
 	}
 
 	go func() {
-		select {
-		case <-ctx.Done():
-			s.stopConsumer()
-		}
+		<-ctx.Done()
+		s.stopConsumer()
 	}()
 	return nil
 }

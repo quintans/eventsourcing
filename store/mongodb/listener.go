@@ -146,6 +146,8 @@ func (f *Feed) Run(ctx context.Context) error {
 			if err != nil {
 				return faults.Wrap(backoff.Permanent(err))
 			}
+			// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
+			// They will be populate with the values returned by the sink.
 			event := &eventsourcing.Event{
 				ID:               id,
 				AggregateID:      eventDoc.AggregateID,

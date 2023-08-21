@@ -1,10 +1,11 @@
 package eventid
 
 import (
+	"crypto/rand"
 	"database/sql/driver"
 	"errors"
 	"io"
-	"math/rand"
+	mrand "math/rand"
 	"time"
 
 	"github.com/quintans/faults"
@@ -30,10 +31,9 @@ type Entropy struct {
 }
 
 func NewEntropy() *Entropy {
-	t := time.Now()
 	return &Entropy{
-		// beaware that entropy isn't safe for concurrent use.
-		entropy: ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0),
+		// beware that entropy isn't safe for concurrent use.
+		entropy: ulid.Monotonic(rand.Reader, 0),
 	}
 }
 
@@ -42,7 +42,7 @@ func (e *Entropy) NewID(t time.Time) (EventID, error) {
 }
 
 func EntropyFactory(t time.Time) *ulid.MonotonicEntropy {
-	return ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
+	return ulid.Monotonic(mrand.New(mrand.NewSource(t.UnixNano())), 0)
 }
 
 func New(t time.Time, entropy io.Reader) (EventID, error) {

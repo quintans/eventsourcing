@@ -273,6 +273,8 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		if err != nil {
 			return faults.Wrap(err)
 		}
+		// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
+		// They will be populate with the values returned by the sink.
 		h.events = append(h.events, &eventsourcing.Event{
 			ID:               id,
 			AggregateID:      r.getAsString("aggregate_id"),

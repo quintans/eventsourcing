@@ -1,8 +1,8 @@
 package util
 
 import (
+	"crypto/rand"
 	"hash/fnv"
-	"math/rand"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -45,7 +45,7 @@ func MustNewULID() ulid.ULID {
 
 func NewULID() (ulid.ULID, error) {
 	t := time.Now().UTC()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
+	entropy := ulid.Monotonic(rand.Reader, 0)
 
 	return ulid.New(ulid.Timestamp(t), entropy)
 }

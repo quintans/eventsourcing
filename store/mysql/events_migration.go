@@ -125,7 +125,7 @@ func (r *EsRepository) saveMigration(
 			AggregateIDHash:  util.Int32ring(last.AggregateIDHash),
 			AggregateVersion: version,
 			AggregateKind:    last.AggregateKind,
-			Kind:             eventsourcing.InvalidatedKind,
+			Kind:             eventsourcing.InvalidatedKind, // for this kind, the missing event fields do not need to be populated
 			CreatedAt:        time.Now().UTC(),
 		})
 		if err != nil {

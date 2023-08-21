@@ -42,9 +42,6 @@ func NewPartitionedTopic(root string, partition uint32) (Topic, error) {
 }
 
 func (t Topic) String() string {
-	if t.partition == 0 {
-		return t.root
-	}
 	return t.root + "#" + strconv.Itoa(int(t.partition))
 }
 

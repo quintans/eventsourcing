@@ -2,9 +2,9 @@ package redlock
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
-	"math/rand"
 	"sync"
 	"time"
 

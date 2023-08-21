@@ -27,7 +27,7 @@ const (
 	uniqueViolation = 1062
 )
 
-// Event is the event data stored in the database
+// Event is the event data is stored in the database
 type Event struct {
 	ID               eventid.EventID    `db:"id"`
 	AggregateID      string             `db:"aggregate_id"`

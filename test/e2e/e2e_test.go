@@ -52,7 +52,7 @@ func TestProjectionBeforeData(t *testing.T) {
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
-	projector := projection.Project(ctx, logger, nil, esRepo, sub, proj)
+	projector := projection.Project(logger, nil, esRepo, sub, proj)
 	ok, err := projector.Start(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -119,7 +119,7 @@ func TestProjectionAfterData(t *testing.T) {
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
-	projector := projection.Project(ctx, logger, nil, esRepo, sub, proj)
+	projector := projection.Project(logger, nil, esRepo, sub, proj)
 	ok, err := projector.Start(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)

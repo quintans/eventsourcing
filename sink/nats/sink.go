@@ -25,7 +25,7 @@ type Sink struct {
 	codec      sink.Codec
 }
 
-// NewSink instantiate nats sink
+// NewSink instantiate NATS sink
 func NewSink(logger log.Logger, topic string, partitions uint32, url string, options ...nats.Option) (_ *Sink, err error) {
 	defer faults.Catch(&err, "NewSink(topic=%s, partitions=%d)", topic, partitions)
 
@@ -70,28 +70,29 @@ func NewSink(logger log.Logger, topic string, partitions uint32, url string, opt
 	return p, nil
 }
 
-func (p *Sink) SetCodec(codec sink.Codec) {
-	p.codec = codec
+func (s *Sink) SetCodec(codec sink.Codec) {
+	s.codec = codec
 }
 
-func (p *Sink) Close() {
-	if p.nc != nil {
-		p.nc.Close()
+func (s *Sink) Close() {
+	if s.nc != nil {
+		s.nc.Close()
 	}
 }
 
 // LastMessage gets the last message sent to NATS
-func (p *Sink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink.Message, error) {
+// It will return 0 if there is no last message
+func (s *Sink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink.Message, error) {
 	type message struct {
 		sequence uint64
 		data     []byte
 	}
-	topic, err := util.NewPartitionedTopic(p.topic, partition)
+	topic, err := util.NewPartitionedTopic(s.topic, partition)
 	if err != nil {
 		return 0, nil, faults.Wrap(err)
 	}
 	ch := make(chan message)
-	_, err = p.js.Subscribe(
+	_, err = s.js.Subscribe(
 		topic.String(),
 		func(m *nats.Msg) {
 			ch <- message{
@@ -104,7 +105,7 @@ func (p *Sink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink
 	if err != nil {
 		return 0, nil, faults.Wrap(err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
 	var msg message
@@ -114,7 +115,7 @@ func (p *Sink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink
 		// no last message
 		return 0, nil, nil
 	}
-	event, err := p.codec.Decode(msg.data)
+	event, err := s.codec.Decode(msg.data)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -128,17 +129,17 @@ func sequence(m *nats.Msg) uint64 {
 }
 
 // Sink sends the event to the message queue
-func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (sink.Data, error) {
-	b, err := p.codec.Encode(e, m)
+func (s *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (sink.Data, error) {
+	b, err := s.codec.Encode(e, m)
 	if err != nil {
 		return sink.Data{}, err
 	}
 
-	topic, err := util.PartitionTopic(p.topic, e.AggregateIDHash, p.partitions)
+	topic, err := util.PartitionTopic(s.topic, e.AggregateIDHash, s.partitions)
 	if err != nil {
 		return sink.Data{}, faults.Wrap(err)
 	}
-	p.logger.WithTags(log.Tags{
+	s.logger.WithTags(log.Tags{
 		"topic": topic,
 	}).Debugf("publishing '%+v'", e)
 
@@ -148,8 +149,11 @@ func (p *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (s
 
 	var sequence uint64
 	err = backoff.Retry(func() error {
-		ack, er := p.js.Publish(topic.String(), b)
-		if er != nil && p.nc.IsClosed() {
+		if er := ctx.Err(); er != nil {
+			return backoff.Permanent(er)
+		}
+		ack, er := s.js.Publish(topic.String(), b)
+		if er != nil && s.nc.IsClosed() {
 			return backoff.Permanent(er)
 		}
 		sequence = ack.Sequence
@@ -165,11 +169,11 @@ func createStream(logger log.Logger, js nats.JetStreamContext, streamName util.T
 	// Check if the ORDERS stream already exists; if not, create it.
 	_, err := js.StreamInfo(streamName.String())
 	if err == nil {
-		logger.Infof("stream '%s' found", streamName)
+		logger.Infof("stream found '%s'", streamName)
 		return nil
 	}
 
-	logger.Infof("stream '%s' not found. creating.", streamName)
+	logger.Infof("stream not found '%s'. creating.", streamName)
 	_, err = js.AddStream(&nats.StreamConfig{
 		Name: streamName.String(),
 	})
