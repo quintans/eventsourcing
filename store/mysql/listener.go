@@ -86,8 +86,8 @@ type DBConfig struct {
 	Password string
 }
 
-func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, setSeqRepo SetSeqRepository, opts ...FeedOption) Feed {
-	feed := Feed{
+func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, setSeqRepo SetSeqRepository, opts ...FeedOption) (*Feed, error) {
+	feed := &Feed{
 		logger:                logger,
 		config:                config,
 		eventsTable:           "events",
@@ -97,10 +97,23 @@ func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, setSeqRepo 
 		setSeqRepo:            setSeqRepo,
 	}
 	for _, o := range opts {
-		o(&feed)
+		o(feed)
 	}
 
-	return feed
+	if feed.partitions < 1 {
+		return nil, faults.Errorf("the number of partitions (%d) must be greater than than 0", feed.partitions)
+	}
+	if feed.partitionsLow < 1 {
+		return nil, faults.Errorf("the the partitions low bound (%d) must be greater than than 0", feed.partitionsLow)
+	}
+	if feed.partitionsHi < 1 {
+		return nil, faults.Errorf("the the partitions high bound (%d) must be greater than than 0", feed.partitionsHi)
+	}
+	if feed.partitionsHi < feed.partitionsLow {
+		return nil, faults.Errorf("the the partitions high bound (%d) must be greater or equal than partitions low bound (%d) ", feed.partitionsHi, feed.partitionsLow)
+	}
+
+	return feed, nil
 }
 
 func (f *Feed) Run(ctx context.Context) error {
@@ -261,9 +274,12 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		hash := r.getAsUint32("aggregate_id_hash")
 		// we check the first because all the rows are for the same transaction,
 		// and for the same aggregate
-		if i == 0 && h.partitions > 0 {
+		if i == 0 {
 			// check if the event is to be forwarded to the sinker
-			part := util.WhichPartition(hash, h.partitions)
+			part, err := util.WhichPartition(hash, h.partitions)
+			if err != nil {
+				return faults.Wrap(err)
+			}
 			if part < h.partitionsLow || part > h.partitionsHi {
 				// we exit the loop because all rows are for the same aggregate
 				return nil

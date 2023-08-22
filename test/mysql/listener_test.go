@@ -175,8 +175,11 @@ func feeding(ctx context.Context, dbConfig mysql.DBConfig, partitions uint32, sl
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for _, v := range slots {
+		listener, err := mysql.NewFeed(logger, dbConfig, sinker, setSeqRepo, mysql.WithPartitions(partitions, v.low, v.high))
+		if err != nil {
+			panic(err)
+		}
 		wg.Add(1)
-		listener := mysql.NewFeed(logger, dbConfig, sinker, setSeqRepo, mysql.WithPartitions(partitions, v.low, v.high))
 		go func() {
 			wg.Done()
 			err := listener.Run(ctx)

@@ -253,13 +253,15 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		if f.partitions > 0 {
-			// check if the event is to be forwarded to the sinker
-			part := util.WhichPartition(uint32(aggregateIDHash), f.partitions)
-			if part < f.partitionsLow || part > f.partitionsHi {
-				// we exit the loop because all rows are for the same aggregate
-				return nil, nil
-			}
+
+		// check if the event is to be forwarded to the sinker
+		part, err := util.WhichPartition(uint32(aggregateIDHash), f.partitions)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		if part < f.partitionsLow || part > f.partitionsHi {
+			// we exit the loop because all rows are for the same aggregate
+			return nil, nil
 		}
 
 		var id string

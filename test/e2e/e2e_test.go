@@ -171,7 +171,8 @@ func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger
 		Username: dbConfig.Username,
 		Password: dbConfig.Password,
 	}
-	feed := mysql.NewFeed(logger, dbConf, sinker, setSeqRepo)
+	feed, err := mysql.NewFeed(logger, dbConf, sinker, setSeqRepo)
+	require.NoError(t, err)
 
 	ltx.Add(1)
 	go func() {

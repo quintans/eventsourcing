@@ -36,12 +36,11 @@ func (s *MockSink) OnSink(handler func(ctx context.Context, e *eventsourcing.Eve
 }
 
 func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (sink.Data, error) {
-	var partition uint32
-	if s.partitions <= 1 {
-		partition = 1
-	} else {
-		partition = util.WhichPartition(e.AggregateIDHash, s.partitions)
+	partition, err := util.WhichPartition(e.AggregateIDHash, s.partitions)
+	if err != nil {
+		return sink.Data{}, faults.Wrap(err)
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
