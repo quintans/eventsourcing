@@ -163,7 +163,13 @@ func NewCatchupToken(eventID eventid.EventID) Token {
 	}
 }
 
-func ParseToken(s string) (Token, error) {
+func ParseToken(s string) (_ Token, e error) {
+	defer faults.Catch(&e, "projection.ParseToken(token=%s)", s)
+
+	if s == "" {
+		return Token{}, nil
+	}
+
 	t := tokenDB{}
 	err := json.Unmarshal([]byte(s), &t)
 	if err != nil {

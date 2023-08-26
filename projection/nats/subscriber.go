@@ -130,7 +130,7 @@ func (s *Subscriber) Positions(ctx context.Context) (map[uint32]projection.Subsc
 	return bms, nil
 }
 
-// LastMessage gets the last message sent to NATS
+// lastBUSMessage gets the last message sent to NATS
 // It will return 0 if there is no last message
 func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint64, eventid.EventID, error) {
 	type message struct {
