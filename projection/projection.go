@@ -18,7 +18,10 @@ import (
 	"github.com/quintans/eventsourcing/worker"
 )
 
-const defaultUntilOffset = 15 * time.Minute
+const (
+	defaultUntilOffset   = 15 * time.Minute
+	defaultCatchupWindow = 3 * time.Hour // 3 days
+)
 
 // NewProjector creates a subscriber to an event stream and process all events.
 //
@@ -39,7 +42,7 @@ func Project(
 	subscriber Consumer,
 	projection Projection,
 	splits int,
-	resumeStore store.KVRStore,
+	resumeStore store.KVStore,
 ) *worker.RunWorker {
 	topic, parts := subscriber.TopicPartitions()
 	joinedParts := joinUints(parts)
@@ -54,7 +57,7 @@ func Project(
 		projection.Name(),
 		nil,
 		func(ctx context.Context) error {
-			return catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, subscriber, projection, resumeStore)
+			return catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore)
 		},
 	)
 }
@@ -66,7 +69,6 @@ func joinUints(p []uint32) string {
 			sb.WriteString("_")
 		}
 		sb.WriteString(strconv.Itoa(int(v)))
-
 	}
 	return sb.String()
 }
@@ -80,12 +82,18 @@ func catchUp(
 	esRepo EventsRepository,
 	topic string,
 	splits int,
+	joinedParts string,
 	subscriber Consumer,
 	projection Projection,
-	resumeStore store.KVRStore,
+	resumeStore store.KVStore,
 ) error {
+	subPos, er := subscriber.Positions(ctx)
+	if er != nil {
+		return faults.Wrap(er)
+	}
+
 	if lockerFactory != nil {
-		name := fmt.Sprintf("%s:%s#%d-lock", projection.Name(), topic)
+		name := fmt.Sprintf("%s:%s#%s-lock", projection.Name(), topic, joinedParts)
 		locker := lockerFactory(name)
 
 		var err error
@@ -105,10 +113,6 @@ func catchUp(
 		}
 	}
 
-	subPos, er := subscriber.RecordPositions(ctx)
-	if er != nil {
-		return faults.Wrap(er)
-	}
 	var after eventid.EventID
 	// only replay partitions are in the catchup phase
 	for part := range subPos {
@@ -151,7 +155,6 @@ func catchUp(
 			defer wg.Done()
 
 			err := catching(ctx, logger, esRepo, after, until, uint32(splits), uint32(split), projection)
-			// err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, split, subPos, projection, resumeStore)
 			if err != nil {
 				if errors.Is(err, ctx.Err()) {
 					return
@@ -176,6 +179,12 @@ func catchUp(
 	}
 
 	logger.Info("Finished successfully catching up projection")
+
+	// save all positions before switching
+	err = saveConsumerPositions(ctx, resumeStore, projection.Name(), topic, subPos)
+	if err != nil {
+		return faults.Wrap(err)
+	}
 
 	err = subscriber.StartConsumer(ctx, projection)
 	if err != nil {
@@ -208,17 +217,28 @@ func catching(
 
 	// loop until it is safe to switch to the subscriber
 	lastReplayed := startAt
-	logger.WithTags(log.Tags{"from": lastReplayed, "until": until}).Info("Replaying all events from the event store")
-	option := store.WithFilter(store.Filter{
-		AggregateKinds: options.AggregateKinds,
-		Metadata:       options.Metadata,
-		Splits:         partitions,
-		Split:          partition,
-	})
-	// first catch up (this can take days)
-	lastReplayed, err := player.Replay(ctx, projection.Handle, lastReplayed, until, option)
-	if err != nil {
-		return faults.Errorf("replaying events from '%d' until '%d': %w", lastReplayed, until, err)
+
+	catchUpWindow := util.IfNil(options.CatchUpWindow, defaultCatchupWindow)
+	for {
+		start := time.Now()
+
+		logger.WithTags(log.Tags{"from": lastReplayed, "until": until}).Info("Replaying all events from the event store")
+		option := store.WithFilter(store.Filter{
+			AggregateKinds: options.AggregateKinds,
+			Metadata:       options.Metadata,
+			Splits:         partitions,
+			Split:          partition,
+		})
+		var err error
+		lastReplayed, err = player.Replay(ctx, projection.Handle, lastReplayed, until, option)
+		if err != nil {
+			return faults.Errorf("replaying events from '%d' until '%d': %w", lastReplayed, until, err)
+		}
+
+		// if the catch up took less than catchUpWindow we can safely exit and switch to the event bus
+		if time.Since(start) < catchUpWindow {
+			break
+		}
 	}
 
 	logger.WithTags(log.Tags{"from": startAt, "until": lastReplayed}).
@@ -244,4 +264,21 @@ func getSavedToken(ctx context.Context, topic string, partition uint32, prj Proj
 	}
 
 	return token, faults.Wrap(err)
+}
+
+func saveConsumerPositions(ctx context.Context, resumeStore store.KVStore, prjName, topic string, subPos map[uint32]SubscriberPosition) (e error) {
+	defer faults.Catch(&e, "saveConsumerPositions(prjName=%s, topic=%s)", prjName, topic)
+
+	for partition, pos := range subPos {
+		resume, err := NewResumeKey(prjName, topic, partition)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+
+		err = resumeStore.Put(ctx, resume.String(), strconv.FormatUint(pos.Sequence, 10))
+		if err != nil {
+			return faults.Wrap(err)
+		}
+	}
+	return nil
 }

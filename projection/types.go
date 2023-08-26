@@ -76,7 +76,7 @@ func WithAckWait(ackWait time.Duration) ConsumerOption {
 
 type Consumer interface {
 	TopicPartitions() (string, []uint32)
-	RecordPositions(ctx context.Context) (map[uint32]SubscriberPosition, error)
+	Positions(ctx context.Context) (map[uint32]SubscriberPosition, error)
 	StartConsumer(ctx context.Context, projection Projection, options ...ConsumerOption) error
 }
 
@@ -219,7 +219,9 @@ type (
 )
 
 type CatchUpOptions struct {
-	StartOffset    time.Duration
+	StartOffset   time.Duration
+	CatchUpWindow time.Duration
+
 	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"

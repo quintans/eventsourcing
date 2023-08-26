@@ -81,8 +81,6 @@ type Subscriber struct {
 	codec       sink.Codec
 	resumeStore store.KVStore
 
-	bookmarks map[uint32]projection.SubscriberPosition
-
 	mu            sync.RWMutex
 	subscriptions []*nats.Subscription
 }
@@ -116,10 +114,10 @@ func (s *Subscriber) TopicPartitions() (string, []uint32) {
 	return s.topic.Topic, s.topic.Partitions
 }
 
-func (s *Subscriber) RecordPositions(ctx context.Context) (map[uint32]projection.SubscriberPosition, error) {
-	var bms map[uint32]projection.SubscriberPosition
+func (s *Subscriber) Positions(ctx context.Context) (map[uint32]projection.SubscriberPosition, error) {
+	bms := map[uint32]projection.SubscriberPosition{}
 	for _, p := range s.topic.Partitions {
-		seq, eventID, err := s.lastMessage(ctx, p)
+		seq, eventID, err := s.lastBUSMessage(ctx, p)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
@@ -128,14 +126,13 @@ func (s *Subscriber) RecordPositions(ctx context.Context) (map[uint32]projection
 			Sequence: seq,
 		}
 	}
-	s.bookmarks = bms
 
 	return bms, nil
 }
 
 // LastMessage gets the last message sent to NATS
 // It will return 0 if there is no last message
-func (s *Subscriber) lastMessage(ctx context.Context, partition uint32) (uint64, eventid.EventID, error) {
+func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint64, eventid.EventID, error) {
 	type message struct {
 		sequence uint64
 		data     []byte

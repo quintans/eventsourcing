@@ -67,7 +67,7 @@ func PartitionedWorkers(
 	esRepo EventsRepository,
 	projection Projection,
 	splits int,
-	resumeStore store.KVRStore,
+	resumeStore store.KVStore,
 ) ([]*worker.RunWorker, error) {
 	return PartitionedCompetingWorkers(
 		ctx,
@@ -94,7 +94,7 @@ func PartitionedCompetingWorkers(
 	esRepo EventsRepository,
 	projection Projection,
 	splits int,
-	resumeStore store.KVRStore,
+	resumeStore store.KVStore,
 ) ([]*worker.RunWorker, error) {
 	if partitions <= 1 {
 		w, err := createProjector(
@@ -149,7 +149,7 @@ func createProjector(
 	esRepo EventsRepository,
 	projection Projection,
 	splits int,
-	resumeStore store.KVRStore,
+	resumeStore store.KVStore,
 ) (*worker.RunWorker, error) {
 	sr, err := NewResumeKey(projection.Name(), topic, partition)
 	if err != nil {
