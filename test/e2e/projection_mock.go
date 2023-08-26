@@ -8,9 +8,10 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/faults"
 )
+
+var _ projection.Projection = (*ProjectionMock)(nil)
 
 type Balance struct {
 	Name   string
@@ -21,16 +22,15 @@ type ProjectionMock struct {
 	name  string
 	codec *jsoncodec.Codec
 
-	mu       sync.Mutex
-	balances map[string]Balance
-	resumes  map[string]projection.Token
+	mu         sync.Mutex
+	balances   map[string]Balance
+	aggregates map[string]uint32
 }
 
 func NewProjectionMock(name string) *ProjectionMock {
 	return &ProjectionMock{
 		name:     name,
 		balances: map[string]Balance{},
-		resumes:  map[string]projection.Token{},
 		codec:    test.NewJSONCodec(),
 	}
 }
@@ -39,25 +39,18 @@ func (p *ProjectionMock) Name() string {
 	return p.name
 }
 
-func (*ProjectionMock) Options() projection.Options {
-	return projection.Options{}
+func (*ProjectionMock) CatchUpOptions() projection.CatchUpOptions {
+	return projection.CatchUpOptions{}
 }
 
-func (p *ProjectionMock) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (projection.Token, error) {
+func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	token, ok := p.resumes[key.String()]
-	if !ok {
-		return projection.Token{}, projection.ErrResumeTokenNotFound
+	// check if it was already handled
+	if p.aggregates[e.AggregateID] <= e.AggregateVersion {
+		return nil
 	}
-
-	return token, nil
-}
-
-func (p *ProjectionMock) Handle(ctx context.Context, meta projection.MetaData, e *sink.Message) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	k, err := p.codec.Decode(e.Body, e.Kind)
 	if err != nil {
@@ -88,23 +81,8 @@ func (p *ProjectionMock) Handle(ctx context.Context, meta projection.MetaData, e
 		return faults.Errorf("no handler for: %s -> %T", e.Kind, t)
 	}
 
-	return p.recordResumeToken(meta)
-}
-
-func (p *ProjectionMock) recordResumeToken(meta projection.MetaData) error {
-	// saving resume tokens. In a real application, it should be in the transaction
-
-	topic, err := util.NewPartitionedTopic(meta.Topic, meta.Partition)
-	if err != nil {
-		return faults.Errorf("creating partitioned topic: %s:%d", meta.Topic, meta.Partition)
-	}
-
-	key, err := projection.NewResume(topic, p.Name())
-	if err != nil {
-		return faults.Wrap(err)
-	}
-
-	p.resumes[key.String()] = meta.Token
+	// saving aggregates version
+	p.aggregates[e.AggregateID] = e.AggregateVersion
 
 	return nil
 }

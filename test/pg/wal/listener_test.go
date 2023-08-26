@@ -91,7 +91,7 @@ func TestListener(t *testing.T) {
 			partitions := partitionSize(tt.partitionSlots)
 			s := test.NewMockSink(partitions)
 			ctx, cancel := context.WithCancel(context.Background())
-			errs, err := feeding(ctx, dbConfig, partitions, tt.partitionSlots, s, repository)
+			errs, err := feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
 			require.NoError(t, err)
 
 			id := util.MustNewULID()
@@ -130,7 +130,7 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s, repository)
+			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
@@ -145,7 +145,7 @@ func TestListener(t *testing.T) {
 			// resume from the begginning
 			s = test.NewMockSink(partitions)
 			ctx, cancel = context.WithCancel(context.Background())
-			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s, repository)
+			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
@@ -170,11 +170,11 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker, seqRepo postgresql.SetSeqRepository) (chan error, error) {
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) (chan error, error) {
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for k, v := range slots {
-		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), sinker, seqRepo, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
+		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), sinker, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}

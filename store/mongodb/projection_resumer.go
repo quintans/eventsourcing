@@ -8,10 +8,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/quintans/eventsourcing/projection"
+	"github.com/quintans/eventsourcing/store"
 )
 
-var _ projection.ResumeStore = (*ProjectionResume)(nil)
+var _ store.KVStore = (*ProjectionResume)(nil)
 
 type projectionResumeRow struct {
 	ID    string `bson:"_id,omitempty"`
@@ -34,27 +34,27 @@ func NewProjectionResume(client *mongo.Client, dbName, collection string) Projec
 	}
 }
 
-func (m ProjectionResume) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (projection.Token, error) {
+func (m ProjectionResume) Get(ctx context.Context, key string) (string, error) {
 	opts := options.FindOne()
 	row := projectionResumeRow{}
-	if err := m.collection.FindOne(ctx, bson.D{{"_id", key.String()}}, opts).Decode(&row); err != nil {
+	if err := m.collection.FindOne(ctx, bson.D{{"_id", key}}, opts).Decode(&row); err != nil {
 		if err == mongo.ErrNoDocuments {
-			return projection.Token{}, faults.Wrap(projection.ErrResumeTokenNotFound)
+			return "", faults.Wrap(store.ErrResumeTokenNotFound)
 		}
-		return projection.Token{}, faults.Errorf("Failed to get resume token for key '%s': %w", key, err)
+		return "", faults.Errorf("getting resume token for key '%s': %w", key, err)
 	}
 
-	return projection.ParseToken(row.Token)
+	return row.Token, nil
 }
 
-func (m ProjectionResume) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token projection.Token) error {
+func (m ProjectionResume) Put(ctx context.Context, key string, token string) error {
 	return m.WithTx(ctx, func(ctx context.Context) error {
 		opts := options.Update().SetUpsert(true)
 		_, err := m.collection.UpdateOne(
 			ctx,
-			bson.M{"_id": key.String()},
+			bson.M{"_id": key},
 			bson.M{
-				"$set": bson.M{"token": token.String()},
+				"$set": bson.M{"token": token},
 			},
 			opts,
 		)

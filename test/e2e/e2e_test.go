@@ -43,16 +43,22 @@ func TestProjectionBeforeData(t *testing.T) {
 	ltx := latch.NewCountDownLatch()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, uri, esRepo)
+	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, uri)
 
 	// create projection
 	proj := NewProjectionMock("balances")
 
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic)
+	topic := projection.ConsumerTopic{
+		Topic:      "balances",
+		Partitions: []uint32{1},
+	}
+	kvStore := &MockKVStore{}
+
+	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic, kvStore)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
-	projector := projection.Project(logger, nil, esRepo, sub, proj)
+	projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
 	ok, err := projector.Start(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -98,7 +104,7 @@ func TestProjectionAfterData(t *testing.T) {
 	ltx := latch.NewCountDownLatch()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, uri, esRepo)
+	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, uri)
 
 	id := util.MustNewULID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -115,11 +121,17 @@ func TestProjectionAfterData(t *testing.T) {
 	// create projection
 	proj := NewProjectionMock("balances")
 
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic)
+	topic := projection.ConsumerTopic{
+		Topic:      "balances",
+		Partitions: []uint32{1},
+	}
+	kvStore := &MockKVStore{}
+
+	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic, kvStore)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
-	projector := projection.Project(logger, nil, esRepo, sub, proj)
+	projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
 	ok, err := projector.Start(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -157,11 +169,13 @@ func TestProjectionAfterData(t *testing.T) {
 
 // eventForwarderWorker creates workers that listen to database changes,
 // transform them to events and publish them into the message bus.
-func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger, ltx *latch.CountDownLatch, dbConfig shared.DBConfig, natsURI string, setSeqRepo mysql.SetSeqRepository) {
+func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger, ltx *latch.CountDownLatch, dbConfig shared.DBConfig, natsURI string) {
 	lockExpiry := 10 * time.Second
 
+	kvStore := &MockKVStore{}
+
 	// sinker provider
-	sinker, err := nats.NewSink(logger, topic, 1, natsURI)
+	sinker, err := nats.NewSink(kvStore, logger, topic, 1, natsURI)
 	require.NoError(t, err)
 
 	dbConf := mysql.DBConfig{
@@ -171,7 +185,7 @@ func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger
 		Username: dbConfig.Username,
 		Password: dbConfig.Password,
 	}
-	feed, err := mysql.NewFeed(logger, dbConf, sinker, setSeqRepo)
+	feed, err := mysql.NewFeed(logger, dbConf, sinker)
 	require.NoError(t, err)
 
 	ltx.Add(1)

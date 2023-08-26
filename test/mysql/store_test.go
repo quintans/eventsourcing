@@ -146,9 +146,9 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mysql.NewStoreWithURL(dbConfig.URL())
+	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox")
 	require.NoError(t, err)
-	p := poller.New(logger, repository)
+	p := poller.New(logger, outboxRepo)
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -212,9 +212,9 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mysql.NewStoreWithURL(dbConfig.URL())
+	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox")
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithAggregateKinds(test.KindAccount))
+	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds(test.KindAccount))
 
 	done := make(chan struct{})
 
@@ -279,9 +279,9 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mysql.NewStoreWithURL(dbConfig.URL())
+	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox")
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
+	p := poller.New(logger, outboxRepo, poller.WithMetadataKV("geo", "EU"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex

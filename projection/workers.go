@@ -8,7 +8,7 @@ import (
 
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/worker"
 )
 
@@ -66,7 +66,9 @@ func PartitionedWorkers(
 	topic string, partitions uint32,
 	esRepo EventsRepository,
 	projection Projection,
-) error {
+	splits int,
+	resumeStore store.KVRStore,
+) ([]*worker.RunWorker, error) {
 	return PartitionedCompetingWorkers(
 		ctx,
 		logger,
@@ -75,6 +77,8 @@ func PartitionedWorkers(
 		topic, partitions,
 		esRepo,
 		projection,
+		splits,
+		resumeStore,
 	)
 }
 
@@ -89,9 +93,11 @@ func PartitionedCompetingWorkers(
 	topic string, partitions uint32,
 	esRepo EventsRepository,
 	projection Projection,
-) error {
+	splits int,
+	resumeStore store.KVRStore,
+) ([]*worker.RunWorker, error) {
 	if partitions <= 1 {
-		err := createProjector(
+		w, err := createProjector(
 			ctx,
 			logger,
 			lockerFactory,
@@ -100,14 +106,18 @@ func PartitionedCompetingWorkers(
 			0,
 			esRepo,
 			projection,
+			splits,
+			resumeStore,
 		)
 		if err != nil {
-			return faults.Wrap(err)
+			return nil, faults.Wrap(err)
 		}
-		return nil
+		return []*worker.RunWorker{w}, nil
 	}
+
+	var wrks []*worker.RunWorker
 	for x := uint32(0); x < partitions; x++ {
-		err := createProjector(
+		w, err := createProjector(
 			ctx,
 			logger,
 			lockerFactory,
@@ -116,13 +126,16 @@ func PartitionedCompetingWorkers(
 			x+1,
 			esRepo,
 			projection,
+			splits,
+			resumeStore,
 		)
 		if err != nil {
-			return faults.Wrap(err)
+			return nil, faults.Wrap(err)
 		}
+		wrks = append(wrks, w)
 	}
 
-	return nil
+	return wrks, nil
 }
 
 // CreateWorker creates a worker that will run if acquires the lock
@@ -135,23 +148,21 @@ func createProjector(
 	partition uint32,
 	esRepo EventsRepository,
 	projection Projection,
-) error {
-	t, err := util.NewPartitionedTopic(topic, partition)
+	splits int,
+	resumeStore store.KVRStore,
+) (*worker.RunWorker, error) {
+	sr, err := NewResumeKey(projection.Name(), topic, partition)
 	if err != nil {
-		return faults.Wrap(err)
-	}
-	sr, err := NewResume(t, projection.Name())
-	if err != nil {
-		return faults.Wrap(err)
+		return nil, faults.Wrap(err)
 	}
 
-	Project(
+	return Project(
 		logger,
 		lockerFactory,
 		esRepo,
 		subscriberFactory(ctx, sr),
 		projection,
-	)
-
-	return nil
+		splits,
+		resumeStore,
+	), nil
 }

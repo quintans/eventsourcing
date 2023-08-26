@@ -100,14 +100,11 @@ func dbSchema(dbURL string) error {
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			migration INTEGER NOT NULL DEFAULT 0,
 			migrated BOOLEAN NOT NULL DEFAULT false,
-			sink_part INTEGER NOT NULL DEFAULT 0,
-			sink_seq BIGINT UNSIGNED NOT NULL DEFAULT 0
 		)ENGINE=innodb;`,
 		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);`,
 		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);`,
 		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
 		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migration);`,
-		`CREATE INDEX evt_sink_seq_idx ON events (sink_part, sink_seq, migration);`,
 
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,

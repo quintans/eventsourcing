@@ -8,10 +8,10 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/projection"
+	"github.com/quintans/eventsourcing/store"
 )
 
-var _ projection.ResumeStore = (*ProjectionResume)(nil)
+var _ store.KVStore = (*ProjectionResume)(nil)
 
 type projectionResumeRow struct {
 	ID    string `db:"id,omitempty"`
@@ -33,21 +33,21 @@ func NewProjectionResume(db *sql.DB, table string) ProjectionResume {
 	}
 }
 
-func (r ProjectionResume) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (projection.Token, error) {
+func (r ProjectionResume) Get(ctx context.Context, key string) (string, error) {
 	row := projectionResumeRow{}
-	if err := r.db.GetContext(ctx, &row, fmt.Sprintf("SELECT id, token FROM %s WHERE id = ?", r.table), key.String()); err != nil {
+	if err := r.db.GetContext(ctx, &row, fmt.Sprintf("SELECT id, token FROM %s WHERE id = ?", r.table), key); err != nil {
 		if err == sql.ErrNoRows {
-			return projection.Token{}, nil
+			return "", nil
 		}
-		return projection.Token{}, faults.Errorf("getting resume token for '%s': %w", key, err)
+		return "", faults.Errorf("getting resume token for '%s': %w", key, err)
 	}
 
-	return projection.ParseToken(row.Token)
+	return row.Token, nil
 }
 
-func (m ProjectionResume) SetStreamResumeToken(ctx context.Context, key projection.ResumeKey, token projection.Token) error {
+func (m ProjectionResume) Put(ctx context.Context, key string, token string) error {
 	return m.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s SET token = ? WHERE id = ?", m.table), token.String(), key.String())
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s SET token = ? WHERE id = ?", m.table), token, key)
 		return faults.Wrapf(err, "setting resume token '%s' for key '%s': %w", token, key, err)
 	})
 }

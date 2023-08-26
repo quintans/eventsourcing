@@ -9,11 +9,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
 )
@@ -38,8 +39,6 @@ type Event struct {
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
 	Migration        int                `bson:"migration"`
 	Migrated         bool               `bson:"migrated"`
-	Partition        uint32             `bson:"sink_part,omitempty"`
-	Sequence         uint64             `bson:"sink_seq"`
 }
 
 type Snapshot struct {
@@ -67,9 +66,9 @@ func WithSnapshotsCollection(snapshotsCollection string) Option {
 	}
 }
 
-func WithPublisher(publisher store.Publisher) Option {
+func WithTxHandler(txHandler store.InTxHandler) Option {
 	return func(r *EsRepository) {
-		r.publisher = publisher
+		r.txHandlers = append(r.txHandlers, txHandler)
 	}
 }
 
@@ -97,7 +96,9 @@ func (r Repository) wrapWithTx(ctx context.Context, callback func(context.Contex
 		er := callback(sessCtx)
 		return nil, er
 	}
-	_, err = session.WithTransaction(ctx, fn)
+	_, err = session.WithTransaction(ctx, fn, &options.TransactionOptions{
+		WriteConcern: writeconcern.Majority(),
+	})
 	if err != nil {
 		return faults.Wrap(err)
 	}
@@ -105,11 +106,16 @@ func (r Repository) wrapWithTx(ctx context.Context, callback func(context.Contex
 	return nil
 }
 
+var (
+	_ eventsourcing.EsRepository  = (*EsRepository)(nil)
+	_ projection.EventsRepository = (*EsRepository)(nil)
+)
+
 type EsRepository struct {
 	Repository
 
 	dbName                  string
-	publisher               store.Publisher
+	txHandlers              []store.InTxHandler
 	eventsCollectionName    string
 	snapshotsCollectionName string
 }
@@ -127,7 +133,7 @@ func NewStoreWithURI(connString, database string, opts ...Option) (*EsRepository
 	return NewStore(client, database, opts...), nil
 }
 
-// NewStoreWithURI creates a new instance of MongoEsRepository
+// NewStore creates a new instance of MongoEsRepository
 func NewStore(client *mongo.Client, database string, opts ...Option) *EsRepository {
 	r := &EsRepository{
 		Repository: Repository{
@@ -150,7 +156,7 @@ func (r *EsRepository) Client() *mongo.Client {
 }
 
 func (r *EsRepository) Close(ctx context.Context) {
-	r.client.Disconnect(ctx)
+	_ = r.client.Disconnect(ctx)
 }
 
 func (r *EsRepository) collection(coll string) *mongo.Collection {
@@ -224,16 +230,23 @@ func (r *EsRepository) saveEvent(ctx context.Context, doc *Event, id eventid.Eve
 		return faults.Wrap(err)
 	}
 
-	return r.publish(ctx, doc, id)
+	return r.applyTxHandlers(ctx, doc, id)
 }
 
-func (r *EsRepository) publish(ctx context.Context, doc *Event, id eventid.EventID) error {
-	if r.publisher == nil {
+func (r *EsRepository) applyTxHandlers(ctx context.Context, doc *Event, id eventid.EventID) error {
+	if len(r.txHandlers) == 0 {
 		return nil
 	}
 
 	e := toEventsourcingEvent(doc, id)
-	return r.publisher.Publish(ctx, e)
+	for _, handler := range r.txHandlers {
+		err := handler.Handle(ctx, e)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+	}
+
+	return nil
 }
 
 func isMongoDup(err error) bool {
@@ -302,7 +315,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	opts := options.Find()
 	opts.SetSort(bson.D{{"aggregate_version", 1}})
 
-	events, _, err := r.queryEvents(ctx, filter, opts)
+	events, err := r.queryEvents(ctx, filter, opts)
 	if err != nil {
 		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
@@ -396,74 +409,13 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	return nil
 }
 
-func (r *EsRepository) GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error) {
+func (r *EsRepository) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
 	flt := bson.D{
+		{"_id", bson.D{{"$gt", after}}},
+		{"_id", bson.D{{"$lte", until}}},
 		{"migration", bson.D{{"$eq", 0}}},
 	}
 
-	flt = buildFilter(filter, flt)
-
-	pipeline := []bson.M{
-		{
-			"$match": flt,
-		},
-		{
-			"$group": bson.M{
-				"_id":      nil,
-				"sink_seq": bson.M{"$max": "$sink_seq"},
-			},
-		},
-	}
-
-	cursor, err := r.eventsCollection().Aggregate(ctx, pipeline)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return 0, nil
-		}
-		return 0, faults.Errorf("getting the cursor for the max sequence: %w", err)
-	}
-
-	evt := Event{}
-	for cursor.Next(ctx) {
-		err = cursor.Decode(&evt)
-		if err != nil {
-			return 0, faults.Errorf("decoding to max sequence: %w", err)
-		}
-	}
-
-	return evt.Sequence, nil
-}
-
-func (r *EsRepository) GetEvents(ctx context.Context, afterSeq uint64, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
-	flt := bson.D{
-		{"sink_seq", bson.D{{"$gt", afterSeq}}},
-		{"migration", bson.D{{"$eq", 0}}},
-	}
-
-	flt = buildFilter(filter, flt)
-
-	opts := options.Find().SetSort(bson.D{{"sink_seq", 1}})
-	if batchSize > 0 {
-		opts.SetBatchSize(int32(batchSize))
-	} else {
-		opts.SetBatchSize(-1)
-	}
-
-	rows, _, err := r.queryEvents(ctx, flt, opts)
-	if err != nil {
-		return nil, faults.Errorf("Unable to get events after '%d' for filter %+v: %w", afterSeq, filter, err)
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-
-	return rows, nil
-}
-
-func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
-	flt := bson.D{
-		{"migration", bson.D{{"$eq", 0}}},
-	}
 	flt = buildFilter(filter, flt)
 
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
@@ -473,9 +425,9 @@ func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filt
 		opts.SetBatchSize(-1)
 	}
 
-	rows, _, err := r.queryEvents(ctx, flt, opts)
+	rows, err := r.queryEvents(ctx, flt, opts)
 	if err != nil {
-		return nil, faults.Errorf("Unable to get pending events for filter %+v: %w", filter, err)
+		return nil, faults.Errorf("getting events between ('%d', '%s'] for filter %+v: %w", after, until, filter, err)
 	}
 	if len(rows) == 0 {
 		return nil, nil
@@ -484,23 +436,13 @@ func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filt
 	return rows, nil
 }
 
-func (r *EsRepository) SetSinkData(ctx context.Context, evtID eventid.EventID, data sink.Data) error {
-	_, err := r.eventsCollection().UpdateByID(ctx, evtID.String(), bson.M{
-		"$set": bson.M{
-			"sink_part": data.Partition(),
-			"sink_seq":  data.Sequence(),
-		},
-	})
-	return faults.Wrapf(err, "setting publish partition %d and sequence %d for event id '%s'", data.Partition(), data.Sequence(), evtID)
-}
-
 func buildFilter(filter store.Filter, flt bson.D) bson.D {
 	if len(filter.AggregateKinds) > 0 {
 		flt = append(flt, bson.E{"aggregate_kind", bson.D{{"$in", filter.AggregateKinds}}})
 	}
 
-	if filter.PartitionLow > 1 && filter.PartitionHi > 1 {
-		flt = append(flt, partitionFilter("sink_part", filter.PartitionLow, filter.PartitionHi))
+	if filter.Splits > 1 && filter.Split > 1 {
+		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Splits, filter.Split))
 	}
 
 	if len(filter.Metadata) > 0 {
@@ -511,57 +453,50 @@ func buildFilter(filter store.Filter, flt bson.D) bson.D {
 	return flt
 }
 
-func partitionFilter(field string, partitionsLow, partitionsHi uint32) bson.E {
-	if partitionsLow == partitionsHi {
-		return bson.E{
-			field,
-			bson.D{
-				{"$eq", partitionsLow - 1},
-			},
-		}
-	}
-
+func partitionFilter(field string, splits, split uint32) bson.E {
+	field = "$" + field
+	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, splits]}],  split]} }
 	return bson.E{
-		field,
+		"$expr",
 		bson.D{
-			{"$and", bson.A{
+			{"$eq", bson.A{
 				bson.D{
-					{"$gte", partitionsLow - 1},
+					{"$mod", bson.A{field, splits}},
 				},
-				bson.D{
-					{"$lte", partitionsHi - 1},
-				},
+				split,
 			}},
 		},
 	}
 }
 
-func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event, uint64, error) {
-	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
+func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event, error) {
+	return queryEvents(ctx, r.eventsCollection(), filter, opts)
+}
+
+func queryEvents(ctx context.Context, coll *mongo.Collection, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event, error) {
+	cursor, err := coll.Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			return nil, 0, nil
+			return nil, nil
 		}
-		return nil, 0, faults.Wrap(err)
+		return nil, faults.Wrap(err)
 	}
 
 	evts := []*Event{}
 	if err = cursor.All(ctx, &evts); err != nil {
-		return nil, 0, faults.Wrap(err)
+		return nil, faults.Wrap(err)
 	}
 
 	events := []*eventsourcing.Event{}
-	var lastSeq uint64
 	for _, evt := range evts {
 		lastEventID, err := eventid.Parse(evt.ID)
 		if err != nil {
-			return nil, 0, faults.Errorf("unable to parse message ID '%s': %w", evt.ID, err)
+			return nil, faults.Errorf("unable to parse message ID '%s': %w", evt.ID, err)
 		}
 		events = append(events, toEventsourcingEvent(evt, lastEventID))
-		lastSeq = evt.Sequence
 	}
 
-	return events, lastSeq, nil
+	return events, nil
 }
 
 func toEventsourcingEvent(e *Event, id eventid.EventID) *eventsourcing.Event {
@@ -577,7 +512,5 @@ func toEventsourcingEvent(e *Event, id eventid.EventID) *eventsourcing.Event {
 		Metadata:         encoding.JSONOfMap(e.Metadata),
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
-		Partition:        e.Partition,
-		Sequence:         e.Sequence,
 	}
 }

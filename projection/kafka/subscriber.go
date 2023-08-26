@@ -162,7 +162,7 @@ func (h groupHandler) Setup(sess sarama.ConsumerGroupSession) error {
 				return err
 			}
 
-			resume, err := projection.NewResume(topic, h.proj.Name())
+			resume, err := projection.NewResumeKey(h.proj.Name(), topic)
 			if err != nil {
 				return faults.Wrap(err)
 			}

@@ -72,17 +72,12 @@ type FeedLogrepl struct {
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker
 	eventsTable           string
-	setSeqRepo            SetSeqRepository
-}
-
-type SetSeqRepository interface {
-	SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error
 }
 
 // NewFeed creates a new Postgresql 10+ logic replication feed.
 // slotIndex is the index of this feed in a group of feeds. Its value should be between 1 and totalSlots.
 // slotIndex=1 has a special maintenance behaviour of dropping any slot above totalSlots.
-func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, setSeqRepo SetSeqRepository, options ...FeedLogreplOption) (FeedLogrepl, error) {
+func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, options ...FeedLogreplOption) (FeedLogrepl, error) {
 	if slotIndex < 1 || slotIndex > totalSlots {
 		return FeedLogrepl{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
 	}
@@ -94,7 +89,6 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, s
 		backoffMaxElapsedTime: 10 * time.Second,
 		sinker:                sinker,
 		eventsTable:           defaultEventsTable,
-		setSeqRepo:            setSeqRepo,
 	}
 
 	for _, o := range options {
@@ -108,8 +102,8 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, s
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
 func (f *FeedLogrepl) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(_ uint64, message *sink.Message) error {
-		xLogPos, err := pglogrepl.ParseLSN(string(message.ResumeToken))
+	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(resumeToken encoding.Base64) error {
+		xLogPos, err := pglogrepl.ParseLSN(resumeToken.String())
 		if err != nil {
 			return faults.Errorf("ParseLSN failed: %w", err)
 		}
@@ -210,11 +204,7 @@ func (f *FeedLogrepl) Run(ctx context.Context) error {
 					if event == nil {
 						continue
 					}
-					data, err := f.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: []byte(clientXLogPos.String())})
-					if err != nil {
-						return faults.Wrap(backoff.Permanent(err))
-					}
-					err = f.setSeqRepo.SetSinkData(ctx, event.ID, data)
+					err = f.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: []byte(clientXLogPos.String())})
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
@@ -255,7 +245,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		}
 
 		// check if the event is to be forwarded to the sinker
-		part, err := util.WhichPartition(uint32(aggregateIDHash), f.partitions)
+		part, err := util.CalcPartition(uint32(aggregateIDHash), f.partitions)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}

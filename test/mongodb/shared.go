@@ -105,11 +105,10 @@ func dbSchema(cli *mongo.Client) error {
 				},
 				{
 					{"key", bson.D{
-						{"sink_part", 1},
-						{"sink_seq", 1},
+						{"_id", 1},
 						{"migration", 1},
 					}},
-					{"name", "evt_sink_seq_idx"},
+					{"name", "evt_migration_idx"},
 					{"unique", false},
 					{"background", true},
 				},

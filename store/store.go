@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/quintans/eventsourcing"
@@ -10,9 +12,9 @@ type Filter struct {
 	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Metadata     Metadata
-	PartitionLow uint32
-	PartitionHi  uint32
+	Metadata Metadata
+	Splits   uint32
+	Split    uint32
 }
 
 type FilterOption func(*Filter)
@@ -21,8 +23,8 @@ func WithFilter(filter Filter) FilterOption {
 	return func(f *Filter) {
 		f.AggregateKinds = filter.AggregateKinds
 		f.Metadata = filter.Metadata
-		f.PartitionLow = filter.PartitionLow
-		f.PartitionHi = filter.PartitionHi
+		f.Splits = filter.Splits
+		f.Split = filter.Split
 	}
 }
 
@@ -55,10 +57,10 @@ func WithMetadata(metadata Metadata) FilterOption {
 	}
 }
 
-func WithPartitions(partitionsLow, partitionsHi uint32) FilterOption {
+func WithPartitions(partitions, partition uint32) FilterOption {
 	return func(f *Filter) {
-		f.PartitionLow = partitionsLow
-		f.PartitionHi = partitionsHi
+		f.Splits = partitions
+		f.Split = partition
 	}
 }
 
@@ -67,4 +69,21 @@ type AggregateMetadata struct {
 	ID        string
 	Version   uint32
 	UpdatedAt time.Time
+}
+
+var ErrResumeTokenNotFound = errors.New("resume token not found")
+
+type KVRStore interface {
+	// Get retrieves the stored value for a key.
+	// If the a resume key is not found it return ErrResumeTokenNotFound as an error
+	Get(ctx context.Context, key string) (string, error)
+}
+
+type KVWStore interface {
+	Put(ctx context.Context, key string, token string) error
+}
+
+type KVStore interface {
+	KVRStore
+	KVWStore
 }

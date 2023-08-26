@@ -12,29 +12,9 @@ import (
 )
 
 type Sinker interface {
-	Sink(ctx context.Context, e *eventsourcing.Event, m Meta) (Data, error)
-	LastMessage(ctx context.Context, partition uint32) (uint64, *Message, error)
+	Sink(ctx context.Context, e *eventsourcing.Event, meta Meta) error
+	ResumeToken(ctx context.Context, partition uint32) (encoding.Base64, error)
 	Close()
-}
-
-type Data struct {
-	partition uint32
-	sequence  uint64
-}
-
-func NewSinkData(partition uint32, sequence uint64) Data {
-	return Data{
-		partition: partition,
-		sequence:  sequence,
-	}
-}
-
-func (s Data) Partition() uint32 {
-	return s.partition
-}
-
-func (s Data) Sequence() uint64 {
-	return s.sequence
 }
 
 type Codec interface {
@@ -47,7 +27,7 @@ type Meta struct {
 }
 
 type Encoder interface {
-	Encode(evt *eventsourcing.Event, meta Meta) ([]byte, error)
+	Encode(evt *eventsourcing.Event) ([]byte, error)
 }
 
 type Decoder interface {
@@ -56,7 +36,6 @@ type Decoder interface {
 
 type Message struct {
 	ID               eventid.EventID    `json:"id,omitempty"`
-	ResumeToken      encoding.Base64    `json:"resume_token,omitempty"`
 	AggregateID      string             `json:"aggregate_id,omitempty"`
 	AggregateVersion uint32             `json:"aggregate_version,omitempty"`
 	AggregateKind    eventsourcing.Kind `json:"aggregate_kind,omitempty"`
@@ -69,8 +48,8 @@ type Message struct {
 
 type JSONCodec struct{}
 
-func (JSONCodec) Encode(e *eventsourcing.Event, m Meta) ([]byte, error) {
-	event := ToMessage(e, m)
+func (JSONCodec) Encode(e *eventsourcing.Event) ([]byte, error) {
+	event := ToMessage(e)
 	b, err := json.Marshal(event)
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -88,10 +67,9 @@ func (JSONCodec) Decode(data []byte) (*Message, error) {
 	return e, nil
 }
 
-func ToMessage(e *eventsourcing.Event, meta Meta) *Message {
+func ToMessage(e *eventsourcing.Event) *Message {
 	return &Message{
 		ID:               e.ID,
-		ResumeToken:      meta.ResumeToken,
 		AggregateID:      e.AggregateID,
 		AggregateVersion: e.AggregateVersion,
 		AggregateKind:    e.AggregateKind,

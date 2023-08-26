@@ -6,23 +6,17 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 )
 
 type (
-	MessageHandlerFunc func(ctx context.Context, meta MetaData, e *sink.Message) error
+	MessageHandlerFunc func(ctx context.Context, e *sink.Message) error
 )
 
-type MetaData struct {
-	Topic     string
-	Partition uint32
-	Token     Token
-}
-
 type EventsRepository interface {
-	GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error)
-	GetEvents(ctx context.Context, afterSeq uint64, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error)
+	GetEvents(ctx context.Context, afterEventID eventid.EventID, untilEventID eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error)
 }
 
 type Start int
@@ -105,31 +99,31 @@ func StartAt(sequence uint64) StartOption {
 	}
 }
 
-func (p Player) Replay(ctx context.Context, handler MessageHandlerFunc, afterSequence, untilSequence uint64, filters ...store.FilterOption) (uint64, error) {
+func (p Player) Replay(ctx context.Context, handler MessageHandlerFunc, afterEventID, untilEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
 	filter := store.Filter{}
 	for _, f := range filters {
 		f(&filter)
 	}
 	loop := true
 	for loop {
-		events, err := p.store.GetEvents(ctx, afterSequence, p.batchSize, filter)
+		events, err := p.store.GetEvents(ctx, afterEventID, untilEventID, p.batchSize, filter)
 		if err != nil {
-			return 0, err
+			return eventid.Zero, err
 		}
 		for _, evt := range events {
 			if p.customFilter == nil || p.customFilter(evt) {
-				err := handler(ctx, MetaData{Partition: evt.Partition, Token: NewToken(CatchUpToken, evt.Sequence)}, sink.ToMessage(evt, sink.Meta{}))
+				err := handler(ctx, sink.ToMessage(evt))
 				if err != nil {
-					return 0, faults.Wrap(err)
+					return eventid.Zero, faults.Wrap(err)
 				}
 			}
-			afterSequence = evt.Sequence
+			afterEventID = evt.ID
 
-			if untilSequence != 0 && evt.Sequence >= untilSequence {
-				return evt.Sequence, nil
+			if untilEventID != eventid.Zero && afterEventID.Compare(untilEventID) >= 0 {
+				return afterEventID, nil
 			}
 		}
 		loop = len(events) == p.batchSize
 	}
-	return afterSequence, nil
+	return afterEventID, nil
 }

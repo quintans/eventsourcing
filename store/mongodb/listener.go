@@ -30,11 +30,6 @@ type Feed struct {
 	partitionsLow    uint32
 	partitionsHi     uint32
 	sinker           sink.Sinker
-	setSeqRepo       SetSeqRepository
-}
-
-type SetSeqRepository interface {
-	SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error
 }
 
 type FeedOption func(*Feed)
@@ -59,14 +54,13 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, setSeqRepo SetSeqRepository, opts ...FeedOption) Feed {
+func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) Feed {
 	m := Feed{
 		logger:           logger,
 		dbName:           database,
 		connString:       connString,
 		eventsCollection: "events",
 		sinker:           sinker,
-		setSeqRepo:       setSeqRepo,
 	}
 
 	for _, o := range opts {
@@ -82,9 +76,9 @@ type ChangeEvent struct {
 func (f *Feed) Run(ctx context.Context) error {
 	f.logger.Infof("Starting Feed for '%s.%s'", f.dbName, f.eventsCollection)
 	var lastResumeToken []byte
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(_ uint64, message *sink.Message) error {
-		if bytes.Compare(message.ResumeToken, lastResumeToken) > 0 {
-			lastResumeToken = message.ResumeToken
+	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(resumeToken encoding.Base64) error {
+		if bytes.Compare(resumeToken, lastResumeToken) > 0 {
+			lastResumeToken = resumeToken
 		}
 		return nil
 	})
@@ -161,14 +155,9 @@ func (f *Feed) Run(ctx context.Context) error {
 				CreatedAt:        eventDoc.CreatedAt,
 				Migrated:         eventDoc.Migrated,
 			}
-			data, err := f.sinker.Sink(ctx, event, sink.Meta{ResumeToken: lastResumeToken})
+			err = f.sinker.Sink(ctx, event, sink.Meta{ResumeToken: lastResumeToken})
 			if err != nil {
 				return backoff.Permanent(err)
-			}
-
-			err = f.setSeqRepo.SetSinkData(ctx, id, data)
-			if err != nil {
-				return faults.Wrap(backoff.Permanent(err))
 			}
 
 			b.Reset()

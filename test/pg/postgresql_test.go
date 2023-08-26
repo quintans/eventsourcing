@@ -134,11 +134,11 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStoreWithURL(dbConfig.URL())
+	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox")
 	require.NoError(t, err)
 	var mu sync.Mutex
 
-	p := poller.New(logger, repository)
+	p := poller.New(logger, outboxRepo)
 	ctx, cancel := context.WithCancel(ctx)
 
 	mockSink := test.NewMockSink(1)
@@ -191,9 +191,9 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := postgresql.NewStoreWithURL(dbConfig.URL())
+	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox")
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithAggregateKinds(aggregateKind))
+	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds(aggregateKind))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
@@ -254,9 +254,9 @@ func TestListenerWithMetadata(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := postgresql.NewStoreWithURL(dbConfig.URL())
+	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox")
 	require.NoError(t, err)
-	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
+	p := poller.New(logger, outboxRepo, poller.WithMetadataKV("geo", "EU"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex

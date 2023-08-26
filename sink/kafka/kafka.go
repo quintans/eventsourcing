@@ -108,7 +108,7 @@ func (s *Sink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink
 }
 
 // Sink sends the event to the message queue
-func (s *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (sink.Data, error) {
+func (s *Sink) Sink(_ context.Context, e *eventsourcing.Event, m sink.Meta) (sink.Data, error) {
 	body, err := s.codec.Encode(e, m)
 	if err != nil {
 		return sink.Data{}, faults.Errorf("encoding event: %w", err)

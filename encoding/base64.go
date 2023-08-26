@@ -49,4 +49,12 @@ func (m Base64) String() string {
 	return base64.StdEncoding.EncodeToString(m)
 }
 
+func ParseBase64(data string) (Base64, error) {
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil, faults.Errorf("util.Base64: decode error: %w", err)
+	}
+	return Base64(decoded), nil
+}
+
 var _ fmt.Stringer = (*Base64)(nil)

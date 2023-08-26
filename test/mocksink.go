@@ -6,28 +6,30 @@ import (
 	"sync"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/faults"
 )
 
+var _ sink.Sinker = (*MockSink)(nil)
+
 type MockSink struct {
-	mu         sync.Mutex
-	partitions uint32
-	events     map[uint32][]*sink.Message
-	lastEvents map[uint32]*sink.Message
-	sequence   uint64
-	onSink     func(ctx context.Context, e *eventsourcing.Event) error
+	mu          sync.Mutex
+	partitions  uint32
+	events      map[uint32][]*sink.Message
+	lastResumes map[uint32]encoding.Base64
+	onSink      func(ctx context.Context, e *eventsourcing.Event) error
 }
 
 func NewMockSink(partitions uint32) *MockSink {
 	events := map[uint32][]*sink.Message{}
-	lastEvents := map[uint32]*sink.Message{}
+	lastEvents := map[uint32]encoding.Base64{}
 
 	return &MockSink{
-		events:     events,
-		lastEvents: lastEvents,
-		partitions: partitions,
+		events:      events,
+		lastResumes: lastEvents,
+		partitions:  partitions,
 	}
 }
 
@@ -35,43 +37,42 @@ func (s *MockSink) OnSink(handler func(ctx context.Context, e *eventsourcing.Eve
 	s.onSink = handler
 }
 
-func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) (sink.Data, error) {
-	partition, err := util.WhichPartition(e.AggregateIDHash, s.partitions)
+func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) error {
+	partition, err := util.CalcPartition(e.AggregateIDHash, s.partitions)
 	if err != nil {
-		return sink.Data{}, faults.Wrap(err)
+		return faults.Wrap(err)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	events := s.events[partition]
-	msg := sink.ToMessage(e, m)
+	msg := sink.ToMessage(e)
 	s.events[partition] = append(events, msg)
-	s.lastEvents[partition] = msg
-	s.sequence++
+	s.lastResumes[partition] = m.ResumeToken
 
 	if s.onSink != nil {
 		err := s.onSink(ctx, e)
 		if err != nil {
-			return sink.Data{}, faults.Wrap(err)
+			return faults.Wrap(err)
 		}
 	}
 
-	return sink.NewSinkData(partition, s.sequence), nil
+	return nil
 }
 
-func (s *MockSink) LastMessage(ctx context.Context, partition uint32) (uint64, *sink.Message, error) {
+func (s *MockSink) ResumeToken(ctx context.Context, partition uint32) (encoding.Base64, error) {
 	if partition == 0 {
 		partition = 1
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e, ok := s.lastEvents[partition]
+	resume, ok := s.lastResumes[partition]
 	if !ok {
-		return 0, nil, nil
+		return nil, nil
 	}
-	return s.sequence, e, nil
+	return resume, nil
 }
 
 func (s *MockSink) Close() {}
@@ -86,27 +87,28 @@ func (s *MockSink) GetEvents() []*sink.Message {
 	return events
 }
 
-func (s *MockSink) LastMessages() map[uint32]*sink.Message {
+func (s *MockSink) LastResumes() map[uint32]encoding.Base64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msgs := map[uint32]*sink.Message{}
-	for k, v := range s.lastEvents {
+	msgs := map[uint32]encoding.Base64{}
+	for k, v := range s.lastResumes {
 		msgs[k] = v
 	}
 
 	return msgs
 }
 
-func (s *MockSink) SetLastMessages(lastEvents map[uint32]*sink.Message) {
+func (s *MockSink) SetLastResumes(lastEvents map[uint32]encoding.Base64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.lastEvents = lastEvents
+	s.lastResumes = lastEvents
 }
 
 func (s *MockSink) Dump() {
 	for _, v := range s.GetEvents() {
-		fmt.Printf("ID:%s; AggregateID: %s; Kind:%s; Body: %s; ResumeToken: %s\n", v.ID, v.AggregateID, v.Kind, string(v.Body), v.ResumeToken)
+		fmt.Printf("ID:%s; AggregateID: %s; Kind:%s; Body: %s\n", v.ID, v.AggregateID, v.Kind, string(v.Body))
 	}
+	fmt.Printf("LastResumes: %+v", s.lastResumes)
 }

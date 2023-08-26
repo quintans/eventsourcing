@@ -193,10 +193,8 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	r, err = mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
-	require.NoError(t, err)
-	defer r.Close(context.Background())
-	p := poller.New(logger, r)
+	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox")
+	p := poller.New(logger, obs)
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -258,10 +256,8 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	repository, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
-	require.NoError(t, err)
-	defer r.Close(context.Background())
-	p := poller.New(logger, repository, poller.WithAggregateKinds(AggregateAccount))
+	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox")
+	p := poller.New(logger, obs, poller.WithAggregateKinds(AggregateAccount))
 
 	done := make(chan struct{})
 
@@ -325,10 +321,8 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	repository, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
-	require.NoError(t, err)
-	defer r.Close(context.Background())
-	p := poller.New(logger, repository, poller.WithMetadataKV("geo", "EU"))
+	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox")
+	p := poller.New(logger, obs, poller.WithMetadataKV("geo", "EU"))
 
 	done := make(chan struct{})
 

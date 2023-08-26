@@ -15,7 +15,6 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/faults"
 )
 
 var _ projection.EventsRepository = (*InMemDB)(nil)
@@ -126,27 +125,13 @@ func (db *InMemDB) ReadAt(idx int) (*eventsourcing.Event, bool) {
 	return db.events[idx], true
 }
 
-func (db *InMemDB) GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	var maxSeq uint64
-	for _, v := range db.events {
-		if v.Sequence > maxSeq {
-			maxSeq = v.Sequence
-		}
-	}
-
-	return maxSeq, nil
-}
-
-func (db *InMemDB) GetEvents(ctx context.Context, afterSeq uint64, limit int, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (db *InMemDB) GetEvents(ctx context.Context, afterEventID eventid.EventID, untilEventID eventid.EventID, limit int, filter store.Filter) ([]*eventsourcing.Event, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	var events []*eventsourcing.Event
 	for _, v := range db.events {
-		if v.Sequence > afterSeq {
+		if v.ID.Compare(afterEventID) > 0 {
 			events = append(events, v)
 		}
 		if len(events) == limit {
@@ -154,21 +139,6 @@ func (db *InMemDB) GetEvents(ctx context.Context, afterSeq uint64, limit int, fi
 		}
 	}
 	return events, nil
-}
-
-func (db *InMemDB) SetSinkData(ctx context.Context, id eventid.EventID, data sink.Data) error {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	for _, v := range db.events {
-		if v.ID.Compare(id) == 0 {
-			v.Partition = data.Partition()
-			v.Sequence = data.Sequence()
-			return nil
-		}
-	}
-
-	return faults.Errorf("unknown sequence: %s", id)
 }
 
 type Cursor struct {
@@ -211,9 +181,9 @@ func InMemDBNewFeed(db *InMemDB, sinker sink.Sinker) InMemDBFeed {
 
 func (f InMemDBFeed) Run(ctx context.Context) error {
 	var lastResumeToken []byte
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, 0, 0, func(_ uint64, message *sink.Message) error {
-		if bytes.Compare(message.ResumeToken, lastResumeToken) > 0 {
-			lastResumeToken = message.ResumeToken
+	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, 0, 0, func(resumeToken encoding.Base64) error {
+		if bytes.Compare(resumeToken, lastResumeToken) > 0 {
+			lastResumeToken = resumeToken
 		}
 		return nil
 	})
@@ -234,16 +204,10 @@ func (f InMemDBFeed) Run(ctx context.Context) error {
 				return nil
 			default:
 			}
-			data, err := f.sinker.Sink(ctx, e, sink.Meta{ResumeToken: encoding.Base64(e.ID.String())})
+			err := f.sinker.Sink(ctx, e, sink.Meta{ResumeToken: encoding.Base64(e.ID.String())})
 			if err != nil {
 				return err
 			}
-
-			err = f.db.SetSinkData(ctx, e.ID, data)
-			if err != nil {
-				return err
-			}
-
 		} else {
 			select {
 			case <-ctx.Done():

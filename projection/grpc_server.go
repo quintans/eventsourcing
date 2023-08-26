@@ -12,6 +12,7 @@ import (
 	"github.com/quintans/eventsourcing"
 
 	pb "github.com/quintans/eventsourcing/api/proto"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
 )
 
@@ -19,19 +20,18 @@ type GrpcServer struct {
 	store EventsRepository
 }
 
-func (s *GrpcServer) GetMaxSeq(ctx context.Context, r *pb.GetMaxSeqRequest) (*pb.GetMaxSeqReply, error) {
-	filter := pbFilterToFilter(r.GetFilter())
-	seq, err := s.store.GetMaxSeq(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.GetMaxSeqReply{Sequence: seq}, nil
-}
-
 func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb.GetEventsReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
-	afterSeq := r.GetAfterSequence()
-	events, err := s.store.GetEvents(ctx, afterSeq, int(r.GetLimit()), filter)
+	after, err := eventid.Parse(r.GetAfterEventId())
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
+	until, err := eventid.Parse(r.GetUntilEventId())
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
+
+	events, err := s.store.GetEvents(ctx, after, until, int(r.GetLimit()), filter)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +55,6 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         string(metadata),
 			CreatedAt:        createdAt,
-			Partition:        v.Partition,
-			Sequence:         v.Sequence,
 		}
 	}
 	return &pb.GetEventsReply{Events: pbEvents}, nil
@@ -80,8 +78,8 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	return store.Filter{
 		AggregateKinds: types,
 		Metadata:       metadata,
-		PartitionLow:   pbFilter.PartitionLow,
-		PartitionHi:    pbFilter.PartitionHi,
+		Splits:         pbFilter.Splits,
+		Split:          pbFilter.Split,
 	}
 }
 

@@ -22,8 +22,8 @@ type Subscriber interface {
 	Subscribe(string, Subscription)
 }
 
-type Publisher interface {
-	Publish(context.Context, ...*eventsourcing.Event) error
+type InTxHandler interface {
+	Handle(context.Context, ...*eventsourcing.Event) error
 }
 
 type EventBus struct {

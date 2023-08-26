@@ -17,8 +17,8 @@ const (
 )
 
 type Repository interface {
-	GetPendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error)
-	SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error
+	GetPendingEvents(ctx context.Context, batchSize int) ([]*eventsourcing.Event, error)
+	SetSinkData(ctx context.Context, eID eventid.EventID) error
 }
 
 type Poller struct {
@@ -149,7 +149,7 @@ func (p *Poller) catchUp(ctx context.Context, sinker sink.Sinker) error {
 	}
 	loop := true
 	for loop {
-		events, err := p.store.GetPendingEvents(ctx, p.limit, filter)
+		events, err := p.store.GetPendingEvents(ctx, p.limit)
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -165,10 +165,10 @@ func (p *Poller) catchUp(ctx context.Context, sinker sink.Sinker) error {
 }
 
 func (p *Poller) handle(ctx context.Context, e *eventsourcing.Event, sinker sink.Sinker) error {
-	data, err := sinker.Sink(ctx, e, sink.Meta{})
+	err := sinker.Sink(ctx, e, sink.Meta{})
 	if err != nil {
 		return err
 	}
 
-	return p.store.SetSinkData(ctx, e.ID, data)
+	return p.store.SetSinkData(ctx, e.ID)
 }
