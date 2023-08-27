@@ -22,16 +22,17 @@ type ProjectionMock struct {
 	name  string
 	codec *jsoncodec.Codec
 
-	mu         sync.Mutex
-	balances   map[string]Balance
-	aggregates map[string]uint32
+	mu               sync.Mutex
+	balances         map[string]Balance
+	aggregateVersion map[string]uint32
 }
 
 func NewProjectionMock(name string) *ProjectionMock {
 	return &ProjectionMock{
-		name:     name,
-		balances: map[string]Balance{},
-		codec:    test.NewJSONCodec(),
+		name:             name,
+		balances:         map[string]Balance{},
+		codec:            test.NewJSONCodec(),
+		aggregateVersion: map[string]uint32{},
 	}
 }
 
@@ -48,7 +49,7 @@ func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message) error {
 	defer p.mu.Unlock()
 
 	// check if it was already handled
-	if p.aggregates[e.AggregateID] <= e.AggregateVersion {
+	if p.aggregateVersion[e.AggregateID] >= e.AggregateVersion {
 		return nil
 	}
 
@@ -82,7 +83,7 @@ func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message) error {
 	}
 
 	// saving aggregates version
-	p.aggregates[e.AggregateID] = e.AggregateVersion
+	p.aggregateVersion[e.AggregateID] = e.AggregateVersion
 
 	return nil
 }

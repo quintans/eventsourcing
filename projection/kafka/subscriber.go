@@ -267,7 +267,7 @@ func (h groupHandler) Setup(sess sarama.ConsumerGroupSession) error {
 
 			var startOffset int64
 			if token.IsEmpty() {
-				h.logger.WithTags(log.Tags{"topic": h.sub.topic}).Info("Starting consuming all available events", topic)
+				h.logger.WithTags(log.Tags{"topic": h.sub.topic}).Info("Starting consuming all available events")
 				startOffset = sarama.OffsetOldest
 			} else {
 				h.logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": topic}).Info("Starting consumer")

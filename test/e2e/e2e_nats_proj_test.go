@@ -49,7 +49,7 @@ func TestProjectionBeforeData(t *testing.T) {
 	proj := NewProjectionMock("balances")
 
 	topic := projection.ConsumerTopic{
-		Topic:      "balances",
+		Topic:      "accounts",
 		Partitions: []uint32{1},
 	}
 	kvStore := &MockKVStore{}
@@ -122,7 +122,7 @@ func TestProjectionAfterData(t *testing.T) {
 	proj := NewProjectionMock("balances")
 
 	topic := projection.ConsumerTopic{
-		Topic:      "balances",
+		Topic:      "accounts",
 		Partitions: []uint32{1},
 	}
 	kvStore := &MockKVStore{}
@@ -185,7 +185,7 @@ func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger
 		Username: dbConfig.Username,
 		Password: dbConfig.Password,
 	}
-	feed, err := mysql.NewFeed(logger, dbConf, sinker)
+	feed, err := mysql.NewFeed(logger, dbConf, sinker, mysql.WithPartitions(1, 1, 1))
 	require.NoError(t, err)
 
 	ltx.Add(1)

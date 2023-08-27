@@ -129,7 +129,7 @@ func (w *RunWorker) start(ctx context.Context) {
 	go func() {
 		err := w.task(ctx)
 		if err != nil {
-			w.logger.Errorf("Error while running: %+v", err)
+			w.logger.WithError(err).Errorf("Error while running")
 			w.Stop(context.Background())
 			return
 		}

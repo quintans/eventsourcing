@@ -21,6 +21,8 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
+const checkPointBuffer = 1_000
+
 func NewSubscriberWithURL(
 	ctx context.Context,
 	logger log.Logger,
@@ -153,7 +155,7 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint
 		nats.DeliverLast(),
 	)
 	if err != nil {
-		return 0, eventid.Zero, faults.Wrap(err)
+		return 0, eventid.Zero, faults.Errorf("subscribing topic '%s': %w", topic, err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
@@ -173,11 +175,12 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint
 	return msg.sequence, event.ID, nil
 }
 
-func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projection, options ...projection.ConsumerOption) (er error) {
-	defer func() {
-		s.stopConsumer()
-	}()
+type resumeKV struct {
+	key      string
+	sequence uint64
+}
 
+func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projection, options ...projection.ConsumerOption) (er error) {
 	logger := s.logger.WithTags(log.Tags{"topic": s.topic.Topic})
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
@@ -185,6 +188,21 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 	for _, v := range options {
 		v(&opts)
 	}
+
+	// saves into the resume db. It is fine if it sporadically fails. It will just pickup from there
+	checkPointCh := make(chan resumeKV, checkPointBuffer)
+	go func() {
+		for kv := range checkPointCh {
+			token := projection.NewConsumerToken(kv.sequence)
+			err := s.resumeStore.Put(ctx, kv.key, token.String())
+			if err != nil {
+				logger.WithError(err).WithTags(log.Tags{
+					"resumeKey": kv.key,
+					"token":     token.String(),
+				}).Errorf("Failed to save resume token")
+			}
+		}
+	}()
 
 	for _, part := range s.topic.Partitions {
 		resumeKey, err := projection.NewResumeKey(proj.Name(), s.topic.Topic, part)
@@ -194,7 +212,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 
 		data, err := s.resumeStore.Get(ctx, resumeKey.String())
 		if err != nil && !errors.Is(err, store.ErrResumeTokenNotFound) {
-			return faults.Errorf("Could not retrieve resume token for '%s': %w", s.topic.Topic, err)
+			return faults.Errorf("Could not retrieve resume token for '%s': %w", resumeKey, err)
 		}
 
 		token, err := projection.ParseToken(data)
@@ -202,12 +220,17 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 			return faults.Wrap(err)
 		}
 
+		natsTopic, err := snats.ComposeTopic(s.topic.Topic, part)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+
 		var startOption nats.SubOpt
 		if token.IsEmpty() || token.Kind() == projection.CatchUpToken {
-			logger.WithTags(log.Tags{"topic": s.topic}).Info("Starting consuming all available events", s.topic)
+			logger.WithTags(log.Tags{"topic": natsTopic}).Info("Starting consuming all available events")
 			startOption = nats.StartSequence(1)
 		} else {
-			logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": s.topic}).Info("Starting consumer")
+			logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": natsTopic}).Info("Starting consumer")
 			startOption = nats.StartSequence(token.ConsumerSequence() + 1) // after seq
 		}
 
@@ -234,14 +257,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 				return
 			}
 
-			token = projection.NewConsumerToken(seq)
-			err = s.resumeStore.Put(ctx, resumeKey.String(), token.String())
-			if er != nil {
-				logger.WithError(er).WithTags(log.Tags{
-					"resumeKey": resumeKey,
-					"token":     token.String(),
-				}).Errorf("Failed to save resume token")
-			}
+			checkPointCh <- resumeKV{key: resumeKey.String(), sequence: seq}
 		}
 		// no dots (.) allowed
 		groupName := strings.ReplaceAll(fmt.Sprintf("%s:%s", s.topic.Topic, proj.Name()), ".", "_")
@@ -253,13 +269,9 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 			nats.AckWait(opts.AckWait),
 		}
 
-		topic, err := snats.ComposeTopic(s.topic.Topic, part)
+		sub, err := s.js.QueueSubscribe(natsTopic, groupName, callback, natsOpts...)
 		if err != nil {
-			return faults.Wrap(err)
-		}
-		sub, err := s.js.QueueSubscribe(topic, groupName, callback, natsOpts...)
-		if err != nil {
-			return faults.Errorf("subscribing to %s: %w", topic, err)
+			return faults.Errorf("subscribing to %s: %w", natsTopic, err)
 		}
 
 		s.mu.Lock()
@@ -270,6 +282,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 	go func() {
 		<-ctx.Done()
 		s.stopConsumer()
+		close(checkPointCh)
 	}()
 	return nil
 }
@@ -284,9 +297,9 @@ func (s *Subscriber) stopConsumer() {
 	for _, sub := range s.subscriptions {
 		err := sub.Unsubscribe()
 		if err != nil {
-			s.logger.WithError(err).Warnf("Failed to unsubscribe from '%s'", s.topic)
+			s.logger.WithError(err).Warnf("Failed to unsubscribe from '%s'", s.topic.Topic)
 		} else {
-			s.logger.Infof("Unsubscribed from '%s'", s.topic)
+			s.logger.Infof("Unsubscribed from '%s'", s.topic.Topic)
 		}
 	}
 

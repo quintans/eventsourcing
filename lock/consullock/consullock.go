@@ -3,7 +3,6 @@ package consullock
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -29,7 +28,7 @@ func (l *Lock) Lock(ctx context.Context) (context.Context, error) {
 	defer l.mu.Unlock()
 
 	if l.done != nil {
-		return nil, fmt.Errorf("failed to acquire lock: '%s': %w", l.lockName, lock.ErrLockAlreadyHeld)
+		return nil, faults.Errorf("failed to acquire lock: '%s': %w", l.lockName, lock.ErrLockAlreadyHeld)
 	}
 
 	sEntry := &api.SessionEntry{

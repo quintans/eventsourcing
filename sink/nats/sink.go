@@ -30,7 +30,9 @@ type Sink struct {
 	partitions uint32
 	codec      sink.Codec
 
-	checkPointCh chan encoding.Base64
+	mu                 util.Atomic
+	checkPointCh       chan encoding.Base64
+	checkPointChClosed bool
 }
 
 // NewSink instantiate NATS sink
@@ -58,7 +60,11 @@ func NewSink(kvStore store.KVStore, logger log.Logger, topic string, partitions 
 	p.js = js
 
 	if partitions <= 1 {
-		if err := createStream(logger, js, topic); err != nil {
+		t, err := ComposeTopic(topic, 1)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		if err := createStream(logger, js, t); err != nil {
 			return nil, faults.Wrap(err)
 		}
 	} else {
@@ -98,7 +104,10 @@ func (s *Sink) Close() {
 	if s.nc != nil {
 		s.nc.Close()
 	}
-	close(s.checkPointCh)
+	s.mu.Lock(func() {
+		close(s.checkPointCh)
+		s.checkPointChClosed = true
+	})
 }
 
 // ResumeToken gets the last saved resumed token
@@ -156,7 +165,12 @@ func (s *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) er
 	if err != nil {
 		return faults.Errorf("failed to send message %+v on topic %s: %w", e, topic, err)
 	}
-	s.checkPointCh <- m.ResumeToken
+	s.mu.Lock(func() {
+		if s.checkPointChClosed {
+			return
+		}
+		s.checkPointCh <- m.ResumeToken
+	})
 
 	return nil
 }

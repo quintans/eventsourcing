@@ -129,7 +129,7 @@ func dbSchema(dbURL string) error {
 	for _, cmd := range cmds {
 		_, err := db.Exec(cmd)
 		if err != nil {
-			return fmt.Errorf("failed to execute '%s': %w", cmd, err)
+			return faults.Errorf("failed to execute '%s': %w", cmd, err)
 		}
 	}
 
