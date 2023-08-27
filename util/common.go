@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
-	"github.com/quintans/faults"
 )
 
 // Hash returns the hash code for s
@@ -59,9 +58,9 @@ func IfNil[T comparable](test, def T) T {
 	return def
 }
 
-func CalcPartition(hash, partitions uint32) (uint32, error) {
-	if partitions < 1 {
-		return 0, faults.Errorf("the number of partitions (%d) must be greater than 0", partitions)
+func CalcPartition(hash, partitions uint32) uint32 {
+	if partitions <= 1 {
+		return 1
 	}
-	return (hash % partitions) + 1, nil
+	return (hash % partitions) + 1
 }

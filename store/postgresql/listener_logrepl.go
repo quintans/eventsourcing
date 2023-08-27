@@ -32,14 +32,11 @@ const (
 
 type FeedLogreplOption func(*FeedLogrepl)
 
-func WithLogRepPartitions(partitions, partitionsLow, partitionsHi uint32) FeedLogreplOption {
+func WithPartitions(partitions, partitionLow, partitionHi uint32) FeedLogreplOption {
 	return func(p *FeedLogrepl) {
-		if partitions <= 1 {
-			return
-		}
 		p.partitions = partitions
-		p.partitionsLow = partitionsLow
-		p.partitionsHi = partitionsHi
+		p.partitionLow = partitionLow
+		p.partitionHi = partitionHi
 	}
 }
 
@@ -64,8 +61,8 @@ func WithEventsTable(col string) FeedLogreplOption {
 type FeedLogrepl struct {
 	dburl                 string
 	partitions            uint32
-	partitionsLow         uint32
-	partitionsHi          uint32
+	partitionLow          uint32
+	partitionHi           uint32
 	publicationName       string
 	slotIndex             int
 	totalSlots            int
@@ -95,6 +92,16 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, o
 		o(&f)
 	}
 
+	if f.partitions < 1 {
+		return FeedLogrepl{}, faults.Errorf("splits (%d) must be greater than 0", f.partitions)
+	}
+	if f.partitionLow < 1 {
+		return FeedLogrepl{}, faults.Errorf("split lower bound (%d) must be greater than 0", f.partitionLow)
+	}
+	if f.partitionHi < f.partitionLow {
+		return FeedLogrepl{}, faults.Errorf("split higher bound (%d) must be greater or equal than split lower bound (%d)", f.partitionHi, f.partitionLow)
+	}
+
 	return f, nil
 }
 
@@ -102,18 +109,21 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, o
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
 func (f *FeedLogrepl) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(resumeToken encoding.Base64) error {
-		xLogPos, err := pglogrepl.ParseLSN(resumeToken.String())
+	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionLow, f.partitionHi, func(resumeToken encoding.Base64) error {
+		xLogPos, err := pglogrepl.ParseLSN(resumeToken.AsString())
 		if err != nil {
 			return faults.Errorf("ParseLSN failed: %w", err)
 		}
+
+		// looking for the highest sequence in all partitions.
+		// Sending a message to partitions is done synchronously and in order, so we should start from the last successful sent message.
 		if xLogPos > lastResumeToken {
 			lastResumeToken = xLogPos
 		}
 		return nil
 	})
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 
 	conn, err := pgconn.Connect(ctx, f.dburl)
@@ -245,12 +255,9 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		}
 
 		// check if the event is to be forwarded to the sinker
-		part, err := util.CalcPartition(uint32(aggregateIDHash), f.partitions)
-		if err != nil {
-			return nil, faults.Wrap(err)
-		}
-		if part < f.partitionsLow || part > f.partitionsHi {
-			// we exit the loop because all rows are for the same aggregate
+		part := util.CalcPartition(uint32(aggregateIDHash), f.partitions)
+		if part < f.partitionLow || part > f.partitionHi {
+			// filtering out events that are not inside the partition range
 			return nil, nil
 		}
 

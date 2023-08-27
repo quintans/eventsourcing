@@ -5,6 +5,7 @@ package mongodb
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,7 +173,11 @@ func TestPollListener(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(
+		dbConfig.URL(),
+		dbConfig.Database,
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler(dbConfig.Database, "outbox")),
+	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -193,39 +198,34 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox")
+	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs)
 
-	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 
+	var mu sync.Mutex
 	mockSink := test.NewMockSink(1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
+			mu.Lock()
 			counter++
-			if counter == 4 {
-				logger.Info("Reached the expected count. Done.")
-				close(done)
-			}
+			mu.Unlock()
 		}
 		return nil
 	})
 
 	go p.Feed(ctx, mockSink)
 
-	select {
-	case <-done:
-		logger.Info("Done...")
-	case <-time.After(2 * time.Second):
-		logger.Info("Timeout...")
-	}
-	logger.Info("Cancelling...")
+	time.Sleep(time.Second)
 	cancel()
+	time.Sleep(100 * time.Millisecond)
 
+	mu.Lock()
 	assert.Equal(t, 4, counter)
+	mu.Unlock()
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(110), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
@@ -235,7 +235,11 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(
+		dbConfig.URL(),
+		dbConfig.Database,
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler(dbConfig.Database, "outbox")),
+	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -256,10 +260,11 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox")
+	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs, poller.WithAggregateKinds(AggregateAccount))
 
-	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
@@ -267,24 +272,22 @@ func TestListenerWithAggregateKind(t *testing.T) {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
+			mu.Lock()
 			counter++
-			if counter == 4 {
-				logger.Info("Reached the expected count. Done.")
-				close(done)
-			}
+			mu.Unlock()
 		}
 		return nil
 	})
 
 	go p.Feed(ctx, mockSink)
 
-	select {
-	case <-done:
-		logger.Info("Done...")
-	case <-time.After(time.Second):
-		logger.Info("Timeout...")
-	}
+	time.Sleep(time.Second)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
 	assert.Equal(t, 4, counter)
+	mu.Unlock()
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
@@ -294,7 +297,11 @@ func TestListenerWithLabels(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI(
+		dbConfig.URL(),
+		dbConfig.Database,
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler(dbConfig.Database, "outbox")),
+	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -321,10 +328,11 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox")
+	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs, poller.WithMetadataKV("geo", "EU"))
 
-	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
@@ -332,24 +340,22 @@ func TestListenerWithLabels(t *testing.T) {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
+			mu.Lock()
 			counter++
-			if counter == 3 {
-				logger.Info("Reached the expected count. Done.")
-				close(done)
-			}
+			mu.Unlock()
 		}
 		return nil
 	})
 
 	go p.Feed(ctx, mockSink)
 
-	select {
-	case <-done:
-		logger.Info("Done...")
-	case <-time.After(time.Second):
-		logger.Info("Timeout...")
-	}
+	time.Sleep(time.Second)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
 	assert.Equal(t, 3, counter)
+	mu.Unlock()
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(130), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())

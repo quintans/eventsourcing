@@ -46,9 +46,6 @@ type FeedOption func(*Feed)
 
 func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 	return func(p *Feed) {
-		if partitions <= 1 {
-			return
-		}
 		p.partitions = partitions
 		p.partitionsLow = partitionsLow
 		p.partitionsHi = partitionsHi
@@ -100,9 +97,6 @@ func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...Fee
 	if feed.partitionsLow < 1 {
 		return nil, faults.Errorf("the the partitions low bound (%d) must be greater than than 0", feed.partitionsLow)
 	}
-	if feed.partitionsHi < 1 {
-		return nil, faults.Errorf("the the partitions high bound (%d) must be greater than than 0", feed.partitionsHi)
-	}
 	if feed.partitionsHi < feed.partitionsLow {
 		return nil, faults.Errorf("the the partitions high bound (%d) must be greater or equal than partitions low bound (%d) ", feed.partitionsHi, feed.partitionsLow)
 	}
@@ -115,7 +109,7 @@ func (f *Feed) Run(ctx context.Context) error {
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
 	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(resumeToken encoding.Base64) error {
-		p, err := parse(string(resumeToken))
+		p, err := parse(resumeToken.AsString())
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -268,11 +262,9 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		// and for the same aggregate
 		if i == 0 {
 			// check if the event is to be forwarded to the sinker
-			part, err := util.CalcPartition(hash, h.partitions)
-			if err != nil {
-				return faults.Wrap(err)
-			}
+			part := util.CalcPartition(hash, h.partitions)
 			if part < h.partitionsLow || part > h.partitionsHi {
+				// filtering out events that are not inside the partition range
 				// we exit the loop because all rows are for the same aggregate
 				return nil
 			}

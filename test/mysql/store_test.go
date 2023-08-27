@@ -126,7 +126,10 @@ func TestPollListener(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(
+		dbConfig.URL(),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler("outbox")),
+	)
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -146,41 +149,36 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox")
+	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox", r)
 	require.NoError(t, err)
+
 	p := poller.New(logger, outboxRepo)
 
-	done := make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
-			if er := es.ApplyChangeFromHistory(acc2, e); er != nil {
-				return er
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
+				return err
 			}
+			mu.Lock()
 			counter++
-			if counter == 4 {
-				logger.Info("Reached the expected count. Done.")
-				close(done)
-			}
+			mu.Unlock()
 		}
 		return nil
 	})
 
 	go p.Feed(ctx, mockSink)
 
-	select {
-	case <-done:
-		logger.Info("Done...")
-	case <-time.After(2 * time.Second):
-		logger.Info("Timeout...")
-	}
-	logger.Info("Cancelling...")
+	time.Sleep(time.Second)
 	cancel()
 	time.Sleep(100 * time.Millisecond)
 
+	mu.Lock()
 	assert.Equal(t, 4, counter)
+	mu.Unlock()
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
@@ -192,7 +190,10 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(
+		dbConfig.URL(),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler("outbox")),
+	)
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -212,11 +213,12 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox")
+	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds(test.KindAccount))
 
-	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
@@ -224,24 +226,22 @@ func TestListenerWithAggregateKind(t *testing.T) {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
+			mu.Lock()
 			counter++
-			if counter == 4 {
-				logger.Info("Reached the expected count. Done.")
-				close(done)
-			}
+			mu.Unlock()
 		}
 		return nil
 	})
 
 	go p.Feed(ctx, mockSink)
 
-	select {
-	case <-done:
-		logger.Info("Done...")
-	case <-time.After(time.Second):
-		logger.Info("Timeout...")
-	}
+	time.Sleep(time.Second)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
 	assert.Equal(t, 4, counter)
+	mu.Unlock()
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
@@ -253,7 +253,10 @@ func TestListenerWithLabels(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL(dbConfig.URL())
+	r, err := mysql.NewStoreWithURL(
+		dbConfig.URL(),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler("outbox")),
+	)
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -279,7 +282,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox")
+	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithMetadataKV("geo", "EU"))
 

@@ -36,12 +36,6 @@ type FeedOption func(*Feed)
 
 func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
 	return func(p *Feed) {
-		if partitions <= 1 {
-			p.partitions = 0
-			p.partitionsLow = 0
-			p.partitionsHi = 0
-			return
-		}
 		p.partitions = partitions
 		p.partitionsLow = partitionsLow
 		p.partitionsHi = partitionsHi
@@ -54,8 +48,8 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) Feed {
-	m := Feed{
+func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) (Feed, error) {
+	feed := Feed{
 		logger:           logger,
 		dbName:           database,
 		connString:       connString,
@@ -64,9 +58,20 @@ func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker,
 	}
 
 	for _, o := range opts {
-		o(&m)
+		o(&feed)
 	}
-	return m
+
+	if feed.partitions < 1 {
+		return Feed{}, faults.Errorf("the number of partitions (%d) must be greater than than 0", feed.partitions)
+	}
+	if feed.partitionsLow < 1 {
+		return Feed{}, faults.Errorf("the the partitions low bound (%d) must be greater than than 0", feed.partitionsLow)
+	}
+	if feed.partitionsHi < feed.partitionsLow {
+		return Feed{}, faults.Errorf("the the partitions high bound (%d) must be greater or equal than partitions low bound (%d) ", feed.partitionsHi, feed.partitionsLow)
+	}
+
+	return feed, nil
 }
 
 type ChangeEvent struct {

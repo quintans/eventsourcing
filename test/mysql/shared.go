@@ -94,12 +94,12 @@ func dbSchema(dbURL string) error {
 			aggregate_version INTEGER NOT NULL,
 			aggregate_kind VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
+			metadata JSON,
 			body VARBINARY(60000),
 			idempotency_key VARCHAR (50),
-			metadata JSON,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			migration INTEGER NOT NULL DEFAULT 0,
-			migrated BOOLEAN NOT NULL DEFAULT false,
+			migrated BOOLEAN NOT NULL DEFAULT false
 		)ENGINE=innodb;`,
 		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);`,
 		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);`,
@@ -116,6 +116,14 @@ func dbSchema(dbURL string) error {
 			FOREIGN KEY (id) REFERENCES events (id)
 		)ENGINE=innodb;`,
 		`CREATE INDEX agg_id_idx ON snapshots(aggregate_id);`,
+		`CREATE TABLE IF NOT EXISTS outbox(
+			id VARCHAR (50) PRIMARY KEY,
+			aggregate_id VARCHAR (50) NOT NULL,
+			aggregate_id_hash INTEGER NOT NULL,
+			aggregate_kind VARCHAR (50) NOT NULL,
+			kind VARCHAR (50) NOT NULL,
+			metadata JSON
+		);`,
 	}
 
 	for _, cmd := range cmds {

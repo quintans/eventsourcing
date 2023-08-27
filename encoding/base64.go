@@ -49,6 +49,13 @@ func (m Base64) String() string {
 	return base64.StdEncoding.EncodeToString(m)
 }
 
+func (m Base64) AsString() string {
+	if m == nil {
+		return ""
+	}
+	return string(m)
+}
+
 func ParseBase64(data string) (Base64, error) {
 	decoded, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {

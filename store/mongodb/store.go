@@ -240,7 +240,7 @@ func (r *EsRepository) applyTxHandlers(ctx context.Context, doc *Event, id event
 
 	e := toEventsourcingEvent(doc, id)
 	for _, handler := range r.txHandlers {
-		err := handler.Handle(ctx, e)
+		err := handler(ctx, e)
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -513,4 +513,9 @@ func toEventsourcingEvent(e *Event, id eventid.EventID) *eventsourcing.Event {
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
 	}
+}
+
+func (r *EsRepository) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event, error) {
+	opts := options.Find().SetSort(bson.D{{"_id", 1}})
+	return queryEvents(ctx, r.eventsCollection(), bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
 }

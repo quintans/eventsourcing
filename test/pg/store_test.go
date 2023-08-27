@@ -115,8 +115,12 @@ func TestPollListener(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(
+		dbConfig.URL(),
+		postgresql.WithTxHandler(postgresql.OutboxInsertHandler("outbox")),
+	)
 	require.NoError(t, err)
+
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := util.MustNewULID()
@@ -134,12 +138,13 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox")
+	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
 	require.NoError(t, err)
-	var mu sync.Mutex
 
 	p := poller.New(logger, outboxRepo)
+
 	ctx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
@@ -160,7 +165,9 @@ func TestPollListener(t *testing.T) {
 	cancel()
 	time.Sleep(100 * time.Millisecond)
 
+	mu.Lock()
 	assert.Equal(t, 4, counter)
+	mu.Unlock()
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
@@ -172,7 +179,10 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(
+		dbConfig.URL(),
+		postgresql.WithTxHandler(postgresql.OutboxInsertHandler("outbox")),
+	)
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -191,7 +201,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.NewAccount()
 	counter := 0
-	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox")
+	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds(aggregateKind))
 
@@ -217,7 +227,9 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	cancel()
 	time.Sleep(100 * time.Millisecond)
 
+	mu.Lock()
 	assert.Equal(t, 4, counter)
+	mu.Unlock()
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
@@ -229,7 +241,10 @@ func TestListenerWithMetadata(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(
+		dbConfig.URL(),
+		postgresql.WithTxHandler(postgresql.OutboxInsertHandler("outbox")),
+	)
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -254,7 +269,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	acc2 := test.NewAccount()
 	counter := 0
 
-	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox")
+	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithMetadataKV("geo", "EU"))
 

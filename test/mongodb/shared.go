@@ -163,6 +163,9 @@ func dbSchema(cli *mongo.Client) error {
 				},
 			}},
 		},
+		{
+			{"create", "outbox"},
+		},
 	}
 
 	db := cli.Database(DBName)

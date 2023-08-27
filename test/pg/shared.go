@@ -98,12 +98,12 @@ func dbSchema(dbConfig DBConfig) error {
 		aggregate_version INTEGER NOT NULL,
 		aggregate_kind VARCHAR (50) NOT NULL,
 		kind VARCHAR (50) NOT NULL,
+		metadata JSONB,
 		body bytea,
 		idempotency_key VARCHAR (50),
-		metadata JSONB,
-		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		migration INTEGER NOT NULL DEFAULT 0,
-		migrated BOOLEAN NOT NULL DEFAULT false,
+		migrated BOOLEAN NOT NULL DEFAULT false
 	);
 	CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);
 	CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);
@@ -117,7 +117,7 @@ func dbSchema(dbConfig DBConfig) error {
 		aggregate_version INTEGER NOT NULL,
 		aggregate_kind VARCHAR (50) NOT NULL,
 		body bytea NOT NULL,
-		created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		FOREIGN KEY (id) REFERENCES events (id)
 	);
 	CREATE INDEX snap_agg_id_idx ON snapshots (aggregate_id);
@@ -137,6 +137,15 @@ func dbSchema(dbConfig DBConfig) error {
 	CREATE TRIGGER events_notify_event
 	AFTER INSERT ON events
 		FOR EACH ROW EXECUTE PROCEDURE notify_event();
+
+	CREATE TABLE IF NOT EXISTS outbox(
+		id VARCHAR (50) PRIMARY KEY,
+		aggregate_id VARCHAR (50) NOT NULL,
+		aggregate_id_hash INTEGER NOT NULL,
+		aggregate_kind VARCHAR (50) NOT NULL,
+		kind VARCHAR (50) NOT NULL,
+		metadata JSONB
+	);
 	`)
 
 	return nil

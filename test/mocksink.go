@@ -38,10 +38,7 @@ func (s *MockSink) OnSink(handler func(ctx context.Context, e *eventsourcing.Eve
 }
 
 func (s *MockSink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) error {
-	partition, err := util.CalcPartition(e.AggregateIDHash, s.partitions)
-	if err != nil {
-		return faults.Wrap(err)
-	}
+	partition := util.CalcPartition(e.AggregateIDHash, s.partitions)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

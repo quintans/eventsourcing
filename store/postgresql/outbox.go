@@ -10,29 +10,40 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/sink/poller"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
 )
 
-type OutboxRepository struct {
-	Repository
-	tableName string
+var _ poller.Repository = (*OutboxRepository)(nil)
+
+type EventsRepository interface {
+	GetEventsByIDs(context.Context, []string) ([]*eventsourcing.Event, error)
 }
 
-func NewOutboxStore(db *sql.DB, tableName string) *OutboxRepository {
+type OutboxRepository struct {
+	Repository
+	tableName  string
+	eventsRepo EventsRepository
+}
+
+func NewOutboxStore(db *sql.DB, tableName string, eventsRepo EventsRepository) *OutboxRepository {
 	dbx := sqlx.NewDb(db, driverName)
 	r := &OutboxRepository{
 		Repository: Repository{
 			db: dbx,
 		},
-		tableName: tableName,
+		tableName:  tableName,
+		eventsRepo: eventsRepo,
 	}
 
 	return r
 }
 
-func (r *OutboxRepository) GetPendingEvents(ctx context.Context, batchSize int) ([]*eventsourcing.Event, error) {
+func (r *OutboxRepository) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
 	var query bytes.Buffer
-	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE done = false", r.tableName))
+	query.WriteString(fmt.Sprintf("SELECT id FROM %s", r.tableName))
+	args := buildFilter(&query, " WHERE ", filter, []interface{}{})
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -40,12 +51,16 @@ func (r *OutboxRepository) GetPendingEvents(ctx context.Context, batchSize int) 
 	}
 
 	var ids []string
-	err := r.db.Select(&ids, query.String())
+	err := r.db.Select(&ids, query.String(), args...)
 	if err != nil {
 		return nil, faults.Errorf("getting pending events: %w", err)
 	}
 
-	rows, err := r.queryEvents(ctx, ids)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := r.eventsRepo.GetEventsByIDs(ctx, ids)
 	if err != nil {
 		return nil, faults.Errorf("getting pending events: %w", err)
 	}
@@ -56,33 +71,21 @@ func (r *OutboxRepository) GetPendingEvents(ctx context.Context, batchSize int) 
 	return rows, nil
 }
 
-func (r *OutboxRepository) queryEvents(ctx context.Context, ids []string) ([]*eventsourcing.Event, error) {
-	qry, args, err := sqlx.In("SELECT * FROM events WHERE id IN (?) ORDER BY id ASC", ids) // the query must use the '?' bind var
-	if err != nil {
-		return nil, faults.Errorf("getting pending events (IDs=%+v): %w", ids, err)
-	}
-	qry = r.db.Rebind(qry) // sqlx.In returns queries with the `?` bindvar, we can rebind it for our backend
-
-	return queryEvents(ctx, r.db, qry, args...)
+func (r *OutboxRepository) AfterSink(ctx context.Context, eID eventid.EventID) error {
+	_, err := r.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = $1", r.tableName), eID.String())
+	return faults.Wrapf(err, "deleting from '%s' where id='%s'", r.tableName, eID)
 }
 
-func (r *OutboxRepository) SetSinkData(ctx context.Context, eID eventid.EventID) error {
-	_, err := r.db.ExecContext(ctx, fmt.Sprintf("UPDATE %s SET done = true WHERE ID = $1", r.tableName), eID.String())
-	return faults.Wrapf(err, "setting done=true for event id '%s'", eID)
-}
-
-func OutboxInsertHandler(tableName string) func(context.Context, ...*eventsourcing.Event) error {
-	return func(ctx context.Context, events ...*eventsourcing.Event) error {
+func OutboxInsertHandler(tableName string) store.InTxHandler {
+	return func(ctx context.Context, event *eventsourcing.Event) error {
 		tx := TxFromContext(ctx)
 		if tx == nil {
 			return faults.Errorf("no transaction in context")
 		}
-		for _, event := range events {
-			_, err := tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, done) VALUES ($1, false)", tableName), event.ID.String())
-			if err != nil {
-				return faults.Wrap(err)
-			}
-		}
-		return nil
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`INSERT INTO %s (id, aggregate_id, aggregate_kind, kind, metadata, aggregate_id_hash)
+		VALUES ($1, $2, $3, $4, $5, $6)`, tableName),
+			event.ID.String(), event.AggregateID, event.AggregateKind, event.Kind, event.Metadata, event.AggregateIDHash)
+		return faults.Wrap(err)
 	}
 }

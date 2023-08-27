@@ -23,7 +23,7 @@ require (
 	github.com/lib/pq v1.10.6
 	github.com/nats-io/nats.go v1.27.0
 	github.com/oklog/ulid/v2 v2.0.2
-	github.com/quintans/faults v1.5.0
+	github.com/quintans/faults v1.7.1
 	github.com/quintans/toolkit v0.3.5
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.8.4

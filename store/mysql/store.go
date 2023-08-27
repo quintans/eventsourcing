@@ -225,7 +225,7 @@ func (r *EsRepository) applyTxHandlers(ctx context.Context, event *Event) error 
 
 	e := toEventsourcingEvent(event)
 	for _, handler := range r.txHandlers {
-		err := handler.Handle(ctx, e)
+		err := handler(ctx, e)
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -363,7 +363,7 @@ func (r *EsRepository) GetEvents(ctx context.Context, after, until eventid.Event
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > ? AND id <= ? AND migration = 0")
 	args := []interface{}{after, until}
-	args = buildFilter(filter, &query, args)
+	args = buildFilter(&query, " AND ", filter, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -381,9 +381,11 @@ func (r *EsRepository) GetEvents(ctx context.Context, after, until eventid.Event
 	return rows, nil
 }
 
-func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
+func buildFilter(qry *bytes.Buffer, prefix string, filter store.Filter, args []interface{}) []interface{} {
+	var conditions []string
 	if len(filter.AggregateKinds) > 0 {
-		query.WriteString(" AND (")
+		var query strings.Builder
+		query.WriteString("(")
 		for k, v := range filter.AggregateKinds {
 			if k > 0 {
 				query.WriteString(" OR ")
@@ -392,17 +394,19 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 			query.WriteString("aggregate_kind = ?")
 		}
 		query.WriteString(")")
+		conditions = append(conditions, query.String())
 	}
 
 	if filter.Splits > 1 && filter.Split > 1 {
 		args = append(args, filter.Splits, filter.Split)
-		query.WriteString(" AND MOD(aggregate_id_hash, ?) = ?")
+		conditions = append(conditions, "MOD(aggregate_id_hash, ?) = ?")
 	}
 
 	if len(filter.Metadata) > 0 {
 		for k, values := range filter.Metadata {
 			k = escape(k)
-			query.WriteString(" AND (")
+			var query strings.Builder
+			query.WriteString("(")
 			for idx, v := range values {
 				if idx > 0 {
 					query.WriteString(" OR ")
@@ -411,8 +415,15 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 				query.WriteString(fmt.Sprintf(`JSON_EXTRACT(metadata, '$.%s') = '%s'`, k, v))
 				query.WriteString(")")
 			}
+			conditions = append(conditions, query.String())
 		}
 	}
+
+	if len(conditions) > 0 {
+		qry.WriteString(prefix)
+		qry.WriteString(strings.Join(conditions, " AND "))
+	}
+
 	return args
 }
 
@@ -457,4 +468,14 @@ func toEventsourcingEvent(e *Event) *eventsourcing.Event {
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
 	}
+}
+
+func (r *EsRepository) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event, error) {
+	qry, args, err := sqlx.In("SELECT * FROM events WHERE id IN (?) ORDER BY id ASC", ids) // the query must use the '?' bind var
+	if err != nil {
+		return nil, faults.Errorf("getting pending events (IDs=%+v): %w", ids, err)
+	}
+	qry = r.db.Rebind(qry) // sqlx.In returns queries with the `?` bindvar, we can rebind it for our backend
+
+	return queryEvents(ctx, r.db, qry, args...)
 }

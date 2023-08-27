@@ -33,12 +33,12 @@ func TestListener(t *testing.T) {
 	t.Parallel()
 
 	testcases := []struct {
-		name           string
-		partitionSlots []slot
+		name       string
+		splitSlots []slot
 	}{
 		{
 			name: "no_partition",
-			partitionSlots: []slot{
+			splitSlots: []slot{
 				{
 					low:  1,
 					high: 1,
@@ -47,7 +47,7 @@ func TestListener(t *testing.T) {
 		},
 		{
 			name: "two_single_partitions",
-			partitionSlots: []slot{
+			splitSlots: []slot{
 				{
 					low:  1,
 					high: 1,
@@ -60,7 +60,7 @@ func TestListener(t *testing.T) {
 		},
 		{
 			name: "two_double_partitions",
-			partitionSlots: []slot{
+			splitSlots: []slot{
 				{
 					low:  1,
 					high: 2,
@@ -88,10 +88,10 @@ func TestListener(t *testing.T) {
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
-			partitions := partitionSize(tt.partitionSlots)
+			partitions := partitionSize(tt.splitSlots)
 			s := test.NewMockSink(partitions)
 			ctx, cancel := context.WithCancel(context.Background())
-			errs, err := feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			err = feeding(ctx, dbConfig, partitions, tt.splitSlots, s)
 			require.NoError(t, err)
 
 			id := util.MustNewULID()
@@ -110,9 +110,6 @@ func TestListener(t *testing.T) {
 
 			// simulating shutdown
 			cancel()
-			for i := 0; i < len(tt.partitionSlots); i++ {
-				require.NoError(t, <-errs, "Error feeding #1: %d", i)
-			}
 
 			events := s.GetEvents()
 			require.Equal(t, 3, len(events), "event size")
@@ -130,7 +127,7 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			err = feeding(ctx, dbConfig, partitions, tt.splitSlots, s)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
@@ -138,14 +135,11 @@ func TestListener(t *testing.T) {
 			assert.Len(t, events, 5, "event size")
 
 			cancel()
-			for i := 0; i < len(tt.partitionSlots); i++ {
-				require.NoError(t, <-errs, "Error feeding #2: %d", i)
-			}
 
 			// resume from the begginning
 			s = test.NewMockSink(partitions)
 			ctx, cancel = context.WithCancel(context.Background())
-			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s)
+			err = feeding(ctx, dbConfig, partitions, tt.splitSlots, s)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
@@ -153,9 +147,6 @@ func TestListener(t *testing.T) {
 			assert.Equal(t, 5, len(events), "event size")
 
 			cancel()
-			for i := 0; i < len(tt.partitionSlots); i++ {
-				require.NoError(t, <-errs, "Error feeding #3: %d", i)
-			}
 		})
 	}
 }
@@ -170,27 +161,24 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) (chan error, error) {
-	errCh := make(chan error, len(slots))
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, splits uint32, slots []slot, sinker sink.Sinker) error {
 	var wg sync.WaitGroup
 	for k, v := range slots {
-		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), sinker, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
+		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), sinker, postgresql.WithPartitions(splits, v.low, v.high))
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return faults.Wrap(err)
 		}
 		wg.Add(1)
 		go func() {
 			wg.Done()
 			err := listener.Run(ctx)
 			if err != nil && !errors.Is(err, context.Canceled) {
-				errCh <- err
-			} else {
-				errCh <- nil
+				panic(err)
 			}
 		}()
 	}
 	// wait for all goroutines to start
 	wg.Wait()
 	time.Sleep(2 * time.Second)
-	return errCh, nil
+	return nil
 }

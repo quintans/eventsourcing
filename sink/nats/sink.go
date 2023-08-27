@@ -130,10 +130,7 @@ func (s *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) er
 		return err
 	}
 
-	partition, err := util.CalcPartition(e.AggregateIDHash, s.partitions)
-	if err != nil {
-		return faults.Wrap(err)
-	}
+	partition := util.CalcPartition(e.AggregateIDHash, s.partitions)
 	topic, err := ComposeTopic(s.topic, partition)
 	if err != nil {
 		return faults.Wrap(err)

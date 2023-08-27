@@ -11,12 +11,14 @@ import (
 
 // ForEachSequenceInSinkPartitions retrieves the last message for all the partitions
 func ForEachSequenceInSinkPartitions(ctx context.Context, sinker sink.Sinker, partitionLow, partitionHi uint32, forEach func(encoding.Base64) error) error {
-	if partitionLow == 0 {
-		partitionHi = 0
+	if partitionLow < 1 {
+		return faults.Errorf("partitionLow is less than 1: %d", partitionLow)
+	}
+	if partitionHi < partitionLow {
+		return faults.Errorf("partitionHi is less than partitionLow: %d < %d", partitionHi, partitionLow)
 	}
 
-	// looking for the highest sequence in all partitions.
-	// Sending a message to partitions is done synchronously and in order, so we should start from the last successful sent message.
+	// getting all resume tokens over
 	for i := partitionLow; i <= partitionHi; i++ {
 		resumeToken, err := sinker.ResumeToken(ctx, i)
 		if err != nil {
