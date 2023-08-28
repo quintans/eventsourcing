@@ -175,12 +175,7 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint
 	return msg.sequence, event.ID, nil
 }
 
-type resumeKV struct {
-	key      string
-	sequence uint64
-}
-
-func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projection, options ...projection.ConsumerOption) (er error) {
+func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler projection.ConsumerHandler, options ...projection.ConsumerOption) (er error) {
 	logger := s.logger.WithTags(log.Tags{"topic": s.topic.Topic})
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
@@ -189,23 +184,8 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		v(&opts)
 	}
 
-	// saves into the resume db. It is fine if it sporadically fails. It will just pickup from there
-	checkPointCh := make(chan resumeKV, checkPointBuffer)
-	go func() {
-		for kv := range checkPointCh {
-			token := projection.NewConsumerToken(kv.sequence)
-			err := s.resumeStore.Put(ctx, kv.key, token.String())
-			if err != nil {
-				logger.WithError(err).WithTags(log.Tags{
-					"resumeKey": kv.key,
-					"token":     token.String(),
-				}).Errorf("Failed to save resume token")
-			}
-		}
-	}()
-
 	for _, part := range s.topic.Partitions {
-		resumeKey, err := projection.NewResumeKey(proj.Name(), s.topic.Topic, part)
+		resumeKey, err := projection.NewResumeKey(projName, s.topic.Topic, part)
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -244,7 +224,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 			seq := sequence(m)
 			if opts.Filter == nil || opts.Filter(evt) {
 				logger.Debugf("Handling received event '%+v'", evt)
-				er = proj.Handle(ctx, evt)
+				er = handler(ctx, evt, part, seq)
 				if er != nil {
 					logger.WithError(er).Errorf("Error when handling event with ID '%s'", evt.ID)
 					_ = m.Nak()
@@ -256,11 +236,9 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 				logger.WithError(er).Errorf("Failed to ACK seq=%d, event=%+v", seq, evt)
 				return
 			}
-
-			checkPointCh <- resumeKV{key: resumeKey.String(), sequence: seq}
 		}
 		// no dots (.) allowed
-		groupName := strings.ReplaceAll(fmt.Sprintf("%s:%s", s.topic.Topic, proj.Name()), ".", "_")
+		groupName := strings.ReplaceAll(fmt.Sprintf("%s:%s", s.topic.Topic, projName), ".", "_")
 		natsOpts := []nats.SubOpt{
 			startOption,
 			nats.Durable(groupName),
@@ -282,7 +260,6 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 	go func() {
 		<-ctx.Done()
 		s.stopConsumer()
-		close(checkPointCh)
 	}()
 	return nil
 }

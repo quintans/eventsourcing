@@ -168,11 +168,11 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition int32) (uint6
 	}
 }
 
-func groupName(proj projection.Projection, topic string) string {
-	return fmt.Sprintf("%s:%s", proj.Name(), topic)
+func groupName(projName string, topic string) string {
+	return fmt.Sprintf("%s:%s", projName, topic)
 }
 
-func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projection, options ...projection.ConsumerOption) error {
+func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler projection.ConsumerHandler, options ...projection.ConsumerOption) error {
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
 	}
@@ -180,7 +180,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		v(&opts)
 	}
 
-	groupName := groupName(proj, s.topic)
+	groupName := groupName(projName, s.topic)
 	group, err := sarama.NewConsumerGroupFromClient(groupName, s.client)
 	if err != nil {
 		return faults.Errorf("creating consumer group '%s': %w", groupName, err)
@@ -196,7 +196,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, proj projection.Projecti
 		logger:      logger,
 		sub:         s,
 		opts:        opts,
-		proj:        proj,
+		projName:    projName,
 		ready:       make(chan bool),
 	}
 
@@ -241,7 +241,8 @@ type groupHandler struct {
 	logger      log.Logger
 	sub         *Subscriber
 	opts        projection.ConsumerOptions
-	proj        projection.Projection
+	projName    string
+	handler     projection.ConsumerHandler
 	ready       chan bool
 }
 
@@ -250,7 +251,7 @@ func (h groupHandler) Setup(sess sarama.ConsumerGroupSession) error {
 
 	for topic, parts := range claims {
 		for _, part := range parts {
-			resume, err := projection.NewResumeKey(h.proj.Name(), topic, uint32(part))
+			resume, err := projection.NewResumeKey(h.projName, topic, uint32(part))
 			if err != nil {
 				return faults.Wrap(err)
 			}
@@ -295,9 +296,11 @@ func (h groupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim saram
 		}
 		if h.opts.Filter == nil || h.opts.Filter(evt) {
 			h.logger.Debugf("Handling received event '%+v'", evt)
-			er = h.proj.Handle(
+			er = h.handler(
 				context.Background(),
 				evt,
+				uint32(msg.Partition),
+				uint64(msg.Offset),
 			)
 			if er != nil {
 				return faults.Errorf("handling event with ID '%s': %w", evt.ID, er)

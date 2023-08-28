@@ -45,26 +45,7 @@ func TestProjectionBeforeData(t *testing.T) {
 
 	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, uri)
 
-	// create projection
-	proj := NewProjectionMock("balances")
-
-	topic := projection.ConsumerTopic{
-		Topic:      "accounts",
-		Partitions: []uint32{1},
-	}
-	kvStore := &MockKVStore{}
-
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic, kvStore)
-	require.NoError(t, err)
-
-	// repository here could be remote, like GrpcRepository
-	projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
-	ok, err := projector.Start(ctx)
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	// giving time to catchup and project events from the database
-	time.Sleep(time.Second)
+	proj := createProjection(t, ctx, uri, esRepo)
 
 	id := util.MustNewULID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -118,26 +99,8 @@ func TestProjectionAfterData(t *testing.T) {
 	// giving time to forward events
 	time.Sleep(time.Second)
 
-	// create projection
-	proj := NewProjectionMock("balances")
-
-	topic := projection.ConsumerTopic{
-		Topic:      "accounts",
-		Partitions: []uint32{1},
-	}
-	kvStore := &MockKVStore{}
-
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic, kvStore)
-	require.NoError(t, err)
-
-	// repository here could be remote, like GrpcRepository
-	projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
-	ok, err := projector.Start(ctx)
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	// giving time to catchup and project events from the database
-	time.Sleep(time.Second)
+	// replay: start projection after we have some data on the event bus
+	proj := createProjection(t, ctx, uri, esRepo)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -165,6 +128,31 @@ func TestProjectionAfterData(t *testing.T) {
 	// shutdown
 	cancel()
 	time.Sleep(time.Second)
+}
+
+func createProjection(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository) *ProjectionMock {
+	// create projection
+	proj := NewProjectionMock("balances")
+
+	topic := projection.ConsumerTopic{
+		Topic:      "accounts",
+		Partitions: []uint32{1},
+	}
+	kvStore := &MockKVStore{}
+
+	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic, kvStore)
+	require.NoError(t, err)
+
+	// repository here could be remote, like GrpcRepository
+	projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
+	ok, err := projector.Start(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// giving time to catchup and project events from the database
+	time.Sleep(time.Second)
+
+	return proj
 }
 
 // eventForwarderWorker creates workers that listen to database changes,

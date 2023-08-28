@@ -50,10 +50,10 @@ func NewULID() (ulid.ULID, error) {
 	return ulid.New(ulid.Timestamp(t), entropy)
 }
 
-func IfNil[T comparable](test, def T) T {
+func IfZero[T comparable](test, def T) T {
 	var zero T
 	if test == zero {
-		return test
+		return def
 	}
 	return def
 }

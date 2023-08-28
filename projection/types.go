@@ -31,6 +31,9 @@ func NewResumeKey(projectionName, topic string, partition uint32) (_ ResumeKey, 
 	if projectionName == "" {
 		return ResumeKey{}, faults.New("projection name cannot be empty")
 	}
+	if partition == 0 {
+		return ResumeKey{}, faults.New("partition cannot be 0")
+	}
 
 	return ResumeKey{
 		topic:      topic,
@@ -77,8 +80,10 @@ func WithAckWait(ackWait time.Duration) ConsumerOption {
 type Consumer interface {
 	TopicPartitions() (string, []uint32)
 	Positions(ctx context.Context) (map[uint32]SubscriberPosition, error)
-	StartConsumer(ctx context.Context, projection Projection, options ...ConsumerOption) error
+	StartConsumer(ctx context.Context, projectionName string, handle ConsumerHandler, options ...ConsumerOption) error
 }
+
+type ConsumerHandler func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error
 
 type ConsumerTopic struct {
 	Topic      string

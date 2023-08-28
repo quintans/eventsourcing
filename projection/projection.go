@@ -21,9 +21,15 @@ import (
 
 const (
 	defaultUntilOffset   = 15 * time.Minute
-	defaultCatchupWindow = 3 * time.Hour // 3 days
+	defaultCatchupWindow = 3 * 24 * time.Hour // 3 days
 	checkPointBuffer     = 1_000
 )
+
+type resumeKV struct {
+	eventID   eventid.EventID
+	partition uint32
+	sequence  uint64
+}
 
 // NewProjector creates a subscriber to an event stream and process all events.
 //
@@ -59,12 +65,51 @@ func Project(
 		projection.Name(),
 		nil,
 		func(ctx context.Context) error {
-			err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore)
+			// saves into the resume db. It is fine if it sporadically fails. It will just pickup from there
+			checkPointCh := make(chan resumeKV, checkPointBuffer)
+			go func() {
+				for kv := range checkPointCh {
+					if (kv == resumeKV{}) {
+						// poison pill
+						return
+					}
+
+					var t Token
+					if !kv.eventID.IsZero() {
+						t = NewCatchupToken(kv.eventID)
+					} else {
+						t = NewConsumerToken(kv.sequence)
+					}
+					err := saveResume(ctx, resumeStore, projection.Name(), topic, kv.partition, t)
+					if err != nil {
+						logger.WithError(err).WithTags(log.Tags{
+							"resumeKey": t.String(),
+							"token":     t.String(),
+						}).Errorf("Failed to save resume token")
+					}
+				}
+			}()
+			go func() {
+				<-ctx.Done()
+				checkPointCh <- resumeKV{} // poison pill
+			}()
+
+			err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore, checkPointCh)
 			if err != nil {
 				return faults.Wrap(err)
 			}
 
-			err = subscriber.StartConsumer(ctx, projection)
+			handler := func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error {
+				er := projection.Handle(ctx, e)
+				if er != nil {
+					return faults.Wrap(er)
+				}
+
+				checkPointCh <- resumeKV{sequence: seq, partition: partition}
+				return nil
+			}
+
+			err = subscriber.StartConsumer(ctx, projection.Name(), handler)
 			if err != nil {
 				if errors.Is(err, ctx.Err()) {
 					return nil
@@ -101,6 +146,7 @@ func catchUp(
 	subscriber Consumer,
 	projection Projection,
 	resumeStore store.KVStore,
+	checkPointCh chan resumeKV,
 ) error {
 	if lockerFactory != nil {
 		name := fmt.Sprintf("%s:%s#%s-lock", projection.Name(), topic, joinedParts)
@@ -125,7 +171,7 @@ func catchUp(
 
 	var subPos map[uint32]SubscriberPosition
 	options := projection.CatchUpOptions()
-	catchUpWindow := util.IfNil(options.CatchUpWindow, defaultCatchupWindow)
+	catchUpWindow := util.IfZero(options.CatchUpWindow, defaultCatchupWindow)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -172,6 +218,7 @@ func catchUp(
 
 		cmp := after.Compare(until)
 		if cmp == 0 {
+			logger.Info("There is nothing to catchup")
 			// there is nothing to catchup
 			return nil
 		}
@@ -194,7 +241,7 @@ func catchUp(
 			go func() {
 				defer wg.Done()
 
-				err := catching(ctx, logger, esRepo, after, until, topic, uint32(splits), uint32(split), projection, resumeStore)
+				err := catching(ctx, logger, esRepo, after, until, uint32(splits), uint32(split), projection, checkPointCh)
 				if err != nil {
 					if errors.Is(err, ctx.Err()) {
 						return
@@ -241,16 +288,15 @@ func catching(
 	esRepo EventsRepository,
 	after eventid.EventID,
 	until eventid.EventID,
-	topic string,
 	partitions, partition uint32,
 	projection Projection,
-	resumeStore store.KVStore,
+	checkPointCh chan resumeKV,
 ) error {
 	logger.WithTags(log.Tags{"startAt": after}).Info("Catching up events")
 	options := projection.CatchUpOptions()
 
 	// safety margin
-	offset := util.IfNil(options.StartOffset, defaultUntilOffset)
+	offset := util.IfZero(options.StartOffset, defaultUntilOffset)
 	after = after.OffsetTime(-offset)
 
 	player := NewPlayer(esRepo)
@@ -266,30 +312,13 @@ func catching(
 		Split:          partition,
 	})
 
-	checkPointCh := make(chan eventid.EventID, checkPointBuffer)
-	go func() {
-		for eID := range checkPointCh {
-			t := NewCatchupToken(eID)
-			err := saveResume(ctx, resumeStore, projection.Name(), topic, partition, t)
-			if err != nil {
-				logger.WithError(err).WithTags(log.Tags{
-					"token": t.String(),
-				}).Errorf("Failed to save resume token")
-			}
-		}
-	}()
-	go func() {
-		<-ctx.Done()
-		close(checkPointCh)
-	}()
-
 	handle := func(ctx context.Context, msg *sink.Message) error {
 		err := projection.Handle(ctx, msg)
 		if err != nil {
 			return faults.Wrap(err)
 		}
 
-		checkPointCh <- msg.ID
+		checkPointCh <- resumeKV{eventID: msg.ID, partition: partition}
 
 		return nil
 	}

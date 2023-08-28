@@ -363,6 +363,7 @@ func (b *SingleBalancer) Start(ctx context.Context) <-chan struct{} {
 		defer ticker.Stop()
 		for {
 			b.worker.Start(ctx)
+
 			select {
 			case <-done:
 				return
