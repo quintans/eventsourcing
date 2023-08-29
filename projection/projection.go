@@ -91,7 +91,6 @@ func Project(
 			}()
 			go func() {
 				<-ctx.Done()
-				fmt.Println("===> quitting projection worker")
 				checkPointCh <- resumeKV{} // signal quit
 			}()
 
@@ -101,7 +100,6 @@ func Project(
 			}
 
 			handler := func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error {
-				fmt.Printf("===> consuming event: %+v (partition=%d, sequence=%d)\n", e, partition, seq)
 				er := projection.Handle(ctx, e)
 				if er != nil {
 					return faults.Wrap(er)

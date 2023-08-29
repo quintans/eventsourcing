@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/cenkalti/backoff"
 	"github.com/teris-io/shortid"
 
 	"github.com/quintans/faults"
@@ -249,14 +250,8 @@ type Consumer struct {
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
-func (c *Consumer) Setup(sess sarama.ConsumerGroupSession) (er error) {
-	defer func() {
-		if er != nil {
-			fmt.Println("===> ERROR:", er)
-		}
-	}()
-
-	claims := sess.Claims()
+func (c *Consumer) Setup(session sarama.ConsumerGroupSession) (er error) {
+	claims := session.Claims()
 
 	for topic, parts := range claims {
 		for _, part := range parts {
@@ -265,7 +260,7 @@ func (c *Consumer) Setup(sess sarama.ConsumerGroupSession) (er error) {
 				return faults.Wrap(err)
 			}
 
-			data, err := c.resumeStore.Get(context.Background(), resume.String())
+			data, err := c.resumeStore.Get(session.Context(), resume.String())
 			if err != nil && !errors.Is(err, store.ErrResumeTokenNotFound) {
 				return faults.Errorf("Could not retrieve resume token for '%s': %w", c.sub.topic, err)
 			}
@@ -284,8 +279,7 @@ func (c *Consumer) Setup(sess sarama.ConsumerGroupSession) (er error) {
 				startOffset = int64(token.ConsumerSequence())
 			}
 
-			fmt.Printf("===> resetting to topic=%s, partition=%d, offset=%d\n", topic, part, startOffset)
-			sess.ResetOffset(topic, part, startOffset, "start")
+			session.ResetOffset(topic, part, startOffset, "start")
 		}
 	}
 
@@ -314,21 +308,29 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 				c.logger.Debug("message channel was closed")
 				return nil
 			}
-			fmt.Printf(">>====> Message claimed: value = %s, timestamp = %v, topic = %s, offset=%d", string(msg.Value), msg.Timestamp, msg.Topic, msg.Offset)
 
 			evt, er := c.sub.codec.Decode(msg.Value)
 			if er != nil {
 				return faults.Errorf("unmarshal event '%s': %w", string(msg.Value), er)
 			}
 			if c.opts.Filter == nil || c.opts.Filter(evt) {
-				c.logger.Debugf("Handling received event '%+v'", evt)
-				er = c.handler(
-					context.Background(),
-					evt,
-					uint32(msg.Partition),
-					uint64(msg.Offset),
-				)
-				if er != nil {
+				// TODO should be configurable
+				bo := backoff.NewExponentialBackOff()
+				bo.MaxElapsedTime = 10 * time.Second
+
+				err := backoff.Retry(func() error {
+					er := c.handler(
+						session.Context(),
+						evt,
+						uint32(msg.Partition),
+						uint64(msg.Offset),
+					)
+					if session.Context().Err() != nil {
+						return backoff.Permanent(er)
+					}
+					return er
+				}, bo)
+				if err != nil {
 					return faults.Errorf("handling event with ID '%s': %w", evt.ID, er)
 				}
 			}
@@ -338,7 +340,6 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 		// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:
 		// https://github.com/IBM/sarama/issues/1192
 		case <-session.Context().Done():
-			fmt.Println("===> BYE BYE")
 			return nil
 		}
 	}

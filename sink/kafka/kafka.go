@@ -173,11 +173,10 @@ func (s *Sink) Sink(_ context.Context, e *eventsourcing.Event, m sink.Meta) (er 
 		Key:   sarama.StringEncoder(e.AggregateID),
 		Value: sarama.ByteEncoder(body),
 	}
-	partition, offset, err := s.producer.SendMessage(msg)
+	partition, _, err := s.producer.SendMessage(msg)
 	if err != nil {
 		return faults.Errorf("encoding event: %w", err)
 	}
-	fmt.Printf("===> message sent to topic='%s', partition=%d, offset=%d\n", s.topic, partition, offset)
 
 	topic, err := resumeTokenKey(s.topic, uint32(partition+1))
 	if err != nil {
