@@ -91,6 +91,7 @@ func Project(
 			}()
 			go func() {
 				<-ctx.Done()
+				fmt.Println("===> quitting projection worker")
 				checkPointCh <- resumeKV{} // signal quit
 			}()
 

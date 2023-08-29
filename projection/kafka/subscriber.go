@@ -177,21 +177,17 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 		v(&opts)
 	}
 
-	config := sarama.NewConfig()
-	config.Consumer.Return.Errors = true
-	config.Consumer.Offsets.Initial = sarama.OffsetOldest
-
-	groupName := groupName(projName, s.topic)
-	group, err := sarama.NewConsumerGroup(s.brokers, groupName, config)
+	gn := groupName(projName, s.topic)
+	client, err := sarama.NewConsumerGroupFromClient(gn, s.client)
 	if err != nil {
 		return faults.Errorf("creating consumer group '%s': %w", groupName, err)
 	}
-
 	logger := s.logger.WithTags(log.Tags{
 		"topic":          s.topic,
-		"consumer_group": groupName,
+		"consumer_group": gn,
 	})
-	gh := groupHandler{
+
+	consumer := Consumer{
 		resumeStore: s.resumeStore,
 		logger:      logger,
 		sub:         s,
@@ -206,23 +202,26 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 	go func() {
 		defer wg.Done()
 		for {
-			err = group.Consume(ctx, []string{s.topic}, &gh)
-			if err != nil {
+			// `Consume` should be called inside an infinite loop, when a
+			// server-side rebalance happens, the consumer session will need to be
+			// recreated to get the new claims
+			if err := client.Consume(ctx, []string{s.topic}, &consumer); err != nil {
 				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
 					return
 				}
-				logger.WithError(err).Fatal("Error from consumer")
+				logger.WithError(err).Error("Error from consumer")
+				return
 			}
+			// check if context was cancelled, signaling that the consumer should stop
 			if ctx.Err() != nil {
 				return
 			}
-			gh.ready = make(chan bool)
-			s.logger.Info("===> REBALANCING")
+
+			consumer.ready = make(chan bool)
 		}
 	}()
 
-	<-gh.ready // Await till the consumer has been set up
-
+	<-consumer.ready // Await till the consumer has been set up
 	logger.Infof("Consumer group up and running!...")
 
 	go func() {
@@ -230,15 +229,16 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 		logger.Infof("Terminating: context cancelled")
 
 		wg.Wait()
-		if err = group.Close(); err != nil {
-			logger.WithError(err).Fatal("Error closing consumer group")
+		if err = client.Close(); err != nil {
+			logger.WithError(err).Error("Error closing consumer group")
 		}
 	}()
 
 	return nil
 }
 
-type groupHandler struct {
+// Consumer represents a Sarama consumer group consumer
+type Consumer struct {
 	resumeStore store.KVRStore
 	logger      log.Logger
 	sub         *Subscriber
@@ -248,7 +248,8 @@ type groupHandler struct {
 	ready       chan bool
 }
 
-func (h *groupHandler) Setup(sess sarama.ConsumerGroupSession) (er error) {
+// Setup is run at the beginning of a new session, before ConsumeClaim
+func (c *Consumer) Setup(sess sarama.ConsumerGroupSession) (er error) {
 	defer func() {
 		if er != nil {
 			fmt.Println("===> ERROR:", er)
@@ -259,14 +260,14 @@ func (h *groupHandler) Setup(sess sarama.ConsumerGroupSession) (er error) {
 
 	for topic, parts := range claims {
 		for _, part := range parts {
-			resume, err := projection.NewResumeKey(h.projName, topic, uint32(part+1))
+			resume, err := projection.NewResumeKey(c.projName, topic, uint32(part+1))
 			if err != nil {
 				return faults.Wrap(err)
 			}
 
-			data, err := h.resumeStore.Get(context.Background(), resume.String())
+			data, err := c.resumeStore.Get(context.Background(), resume.String())
 			if err != nil && !errors.Is(err, store.ErrResumeTokenNotFound) {
-				return faults.Errorf("Could not retrieve resume token for '%s': %w", h.sub.topic, err)
+				return faults.Errorf("Could not retrieve resume token for '%s': %w", c.sub.topic, err)
 			}
 
 			token, err := projection.ParseToken(data)
@@ -276,45 +277,52 @@ func (h *groupHandler) Setup(sess sarama.ConsumerGroupSession) (er error) {
 
 			var startOffset int64
 			if token.IsEmpty() {
-				h.logger.WithTags(log.Tags{"topic": h.sub.topic}).Info("Starting consuming all available events")
-				startOffset = sarama.OffsetOldest
+				c.logger.WithTags(log.Tags{"topic": c.sub.topic}).Info("Starting consuming all available events")
+				startOffset = 0
 			} else {
-				h.logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": topic}).Info("Starting consumer from an offset")
+				c.logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": topic}).Info("Starting consumer from an offset")
 				startOffset = int64(token.ConsumerSequence())
 			}
 
-			fmt.Printf("===> resetting partition=%d to offset=%d", part, startOffset)
+			fmt.Printf("===> resetting to topic=%s, partition=%d, offset=%d\n", topic, part, startOffset)
 			sess.ResetOffset(topic, part, startOffset, "start")
 		}
 	}
 
-	close(h.ready)
-
+	// Mark the consumer as ready
+	close(c.ready)
 	return nil
 }
 
-func (*groupHandler) Cleanup(_ sarama.ConsumerGroupSession) error {
+// Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
+func (c *Consumer) Cleanup(sarama.ConsumerGroupSession) error {
 	return nil
 }
 
-func (h *groupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	h.logger.Info("===> listening to messages")
+// ConsumeClaim must start a consumer loop of ConsumerGroupClaim's Messages().
+// Once the Messages() channel is closed, the Handler must finish its processing
+// loop and exit.
+func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	// NOTE:
+	// Do not move the code below to a goroutine.
+	// The `ConsumeClaim` itself is called within a goroutine, see:
+	// https://github.com/IBM/sarama/blob/main/consumer_group.go#L27-L29
 	for {
 		select {
 		case msg, ok := <-claim.Messages():
 			if !ok {
-				h.logger.Debug("message channel was closed")
+				c.logger.Debug("message channel was closed")
 				return nil
 			}
+			fmt.Printf(">>====> Message claimed: value = %s, timestamp = %v, topic = %s, offset=%d", string(msg.Value), msg.Timestamp, msg.Topic, msg.Offset)
 
-			fmt.Println("===> got message: offset =", msg.Offset)
-			evt, er := h.sub.codec.Decode(msg.Value)
+			evt, er := c.sub.codec.Decode(msg.Value)
 			if er != nil {
 				return faults.Errorf("unmarshal event '%s': %w", string(msg.Value), er)
 			}
-			if h.opts.Filter == nil || h.opts.Filter(evt) {
-				h.logger.Debugf("Handling received event '%+v'", evt)
-				er = h.handler(
+			if c.opts.Filter == nil || c.opts.Filter(evt) {
+				c.logger.Debugf("Handling received event '%+v'", evt)
+				er = c.handler(
 					context.Background(),
 					evt,
 					uint32(msg.Partition),
@@ -325,9 +333,10 @@ func (h *groupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim s
 				}
 			}
 
-			fmt.Printf("===> Message claimed: value = %s, timestamp = %v, topic = %s\n", string(msg.Value), msg.Timestamp, msg.Topic)
 			session.MarkMessage(msg, "")
-
+		// Should return when `session.Context()` is done.
+		// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:
+		// https://github.com/IBM/sarama/issues/1192
 		case <-session.Context().Done():
 			fmt.Println("===> BYE BYE")
 			return nil

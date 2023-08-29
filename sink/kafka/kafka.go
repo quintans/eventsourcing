@@ -76,7 +76,6 @@ func NewSink(logger log.Logger, kvStore store.KVStore, topic string, brokers []s
 	go func() {
 		for cp := range s.checkPointCh {
 			if cp.key == "" {
-				fmt.Printf("===> IGNORING event to save: %+v\n", cp)
 				// quit received
 				return
 			}
@@ -89,7 +88,6 @@ func NewSink(logger log.Logger, kvStore store.KVStore, topic string, brokers []s
 					"resume": ts,
 				}).Error("Failed to save sink resume key")
 			}
-			fmt.Printf("===> saved sink checkpoint: (%s=%s)\n", cp.key, ts)
 		}
 	}()
 

@@ -16,15 +16,14 @@ import (
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/toolkit/latch"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 )
 
 func TestKafkaProjectionBeforeData(t *testing.T) {
-	ctx := context.Background()
-
-	// uris := runKafkaContainer(t)
-	uris := []string{"localhost:29092"}
+	uris := runKafkaContainer(t)
+	// uris := []string{"localhost:29092"}
 
 	dbConfig := shared.Setup(t)
 
@@ -53,11 +52,11 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	require.NoError(t, err)
 
 	// giving time to forward events
-	time.Sleep(10 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
-	require.True(t, ok)
-	require.Equal(t, Balance{
+	assert.True(t, ok)
+	assert.Equal(t, Balance{
 		Name:   "Paulo",
 		Amount: 130,
 	}, balance)
@@ -68,8 +67,6 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 }
 
 func TestKafkaProjectionAfterData(t *testing.T) {
-	ctx := context.Background()
-
 	uris := runKafkaContainer(t)
 
 	dbConfig := shared.Setup(t)
@@ -137,7 +134,7 @@ type kafkaContainer struct {
 
 // runKafkaContainer creates an instance of the Kafka container type
 func runKafkaContainer(t *testing.T) []string {
-	test.DockerCompose(t, "./docker-compose-kafka.yaml", "kafka", 5*time.Second)
+	test.DockerCompose(t, "./docker-compose.yaml", "kafka", 5*time.Second)
 	return []string{"localhost:29092"}
 }
 
