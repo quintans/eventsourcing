@@ -70,7 +70,7 @@ func Project(
 			go func() {
 				for kv := range checkPointCh {
 					if (kv == resumeKV{}) {
-						// poison pill
+						// quit received
 						return
 					}
 
@@ -91,7 +91,7 @@ func Project(
 			}()
 			go func() {
 				<-ctx.Done()
-				checkPointCh <- resumeKV{} // poison pill
+				checkPointCh <- resumeKV{} // signal quit
 			}()
 
 			err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore, checkPointCh)
@@ -100,6 +100,7 @@ func Project(
 			}
 
 			handler := func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error {
+				fmt.Printf("===> consuming event: %+v (partition=%d, sequence=%d)\n", e, partition, seq)
 				er := projection.Handle(ctx, e)
 				if er != nil {
 					return faults.Wrap(er)
@@ -109,6 +110,7 @@ func Project(
 				return nil
 			}
 
+			logger.Info("Starting consumer for projection")
 			err = subscriber.StartConsumer(ctx, projection.Name(), handler)
 			if err != nil {
 				if errors.Is(err, ctx.Err()) {
@@ -358,7 +360,7 @@ func saveConsumerPositions(ctx context.Context, resumeStore store.KVStore, prjNa
 	defer faults.Catch(&e, "saveConsumerPositions")
 
 	for partition, pos := range subPos {
-		err := saveResume(ctx, resumeStore, prjName, topic, partition, NewConsumerToken(pos.Sequence))
+		err := saveResume(ctx, resumeStore, prjName, topic, partition, NewConsumerToken(pos.Position))
 		if err != nil {
 			return faults.Wrap(err)
 		}

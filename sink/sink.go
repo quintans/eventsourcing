@@ -12,8 +12,10 @@ import (
 )
 
 type Sinker interface {
+	Partitions() (uint32, []uint32)
+	Accepts(hash uint32) bool
 	Sink(ctx context.Context, e *eventsourcing.Event, meta Meta) error
-	ResumeToken(ctx context.Context, partition uint32) (encoding.Base64, error)
+	ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) error
 	Close()
 }
 

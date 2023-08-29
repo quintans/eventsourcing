@@ -3,12 +3,11 @@ package mongodb
 import (
 	"context"
 	"fmt"
-	"log"
 	"testing"
+	"time"
 
-	"github.com/quintans/faults"
+	"github.com/quintans/eventsourcing/test"
 	"github.com/stretchr/testify/require"
-	testcontainers "github.com/testcontainers/testcontainers-go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -38,7 +37,7 @@ func Setup(t *testing.T, dockerComposePath string) DBConfig {
 	}
 
 	ctx := context.Background()
-	dockerCompose(t, ctx, dockerComposePath)
+	test.DockerCompose(t, dockerComposePath, "mongo", time.Second)
 
 	DBURL := fmt.Sprintf("mongodb://localhost:27017/%s?replicaSet=rs0", DBName)
 
@@ -51,39 +50,6 @@ func Setup(t *testing.T, dockerComposePath string) DBConfig {
 	require.NoError(t, err)
 
 	return dbConfig
-}
-
-func dockerCompose(t *testing.T, ctx context.Context, path string) {
-	compose := testcontainers.NewLocalDockerCompose([]string{path}, "mongo-set")
-	t.Cleanup(func() {
-		exErr := compose.Down()
-		if err := checkIfError(exErr); err != nil {
-			log.Printf("Error on compose shutdown: %v\n", err)
-		}
-	})
-
-	exErr := compose.Down()
-	require.NoError(t, checkIfError(exErr), "Error on compose shutdown")
-
-	exErr = compose.
-		WithCommand([]string{"up", "-d"}).
-		Invoke()
-	require.NoError(t, checkIfError(exErr))
-}
-
-func checkIfError(err testcontainers.ExecError) error {
-	if err.Error != nil {
-		return faults.Errorf("Failed when running %v: %v", err.Command, err.Error)
-	}
-
-	if err.Stdout != nil {
-		return faults.Errorf("An error in Stdout happened when running %v: %v", err.Command, err.Stdout)
-	}
-
-	if err.Stderr != nil {
-		return faults.Errorf("An error in Stderr happened when running %v: %v", err.Command, err.Stderr)
-	}
-	return nil
 }
 
 func dbSchema(cli *mongo.Client) error {

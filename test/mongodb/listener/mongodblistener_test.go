@@ -18,7 +18,6 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/log"
-	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
 	tmg "github.com/quintans/eventsourcing/test/mongodb"
@@ -85,11 +84,10 @@ func TestMongoListenere(t *testing.T) {
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-			partitions := partitionSize(tt.partitionSlots)
-			mockSink := test.NewMockSink(partitions)
+			data := test.NewMockSinkData()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			errs := feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
+			errs := feeding(ctx, dbConfig, tt.partitionSlots, data)
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
@@ -108,7 +106,7 @@ func TestMongoListenere(t *testing.T) {
 				require.NoError(t, <-errs, "Error feeding #1")
 			}
 
-			events := mockSink.GetEvents()
+			events := data.GetEvents()
 
 			require.Equal(t, 3, len(events), "event size")
 			assert.Equal(t, "AccountCreated", events[0].Kind.String())
@@ -117,10 +115,10 @@ func TestMongoListenere(t *testing.T) {
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
+			errs = feeding(ctx, dbConfig, tt.partitionSlots, data)
 
 			time.Sleep(time.Second)
-			events = mockSink.GetEvents()
+			events = data.GetEvents()
 
 			assert.Equal(t, 3, len(events), "event size")
 
@@ -132,7 +130,7 @@ func TestMongoListenere(t *testing.T) {
 			require.NoError(t, err)
 
 			time.Sleep(500 * time.Millisecond)
-			events = mockSink.GetEvents()
+			events = data.GetEvents()
 
 			require.Equal(t, 5, len(events), "event size")
 			assert.Equal(t, "MoneyWithdrawn", events[3].Kind.String())
@@ -143,14 +141,14 @@ func TestMongoListenere(t *testing.T) {
 			}
 
 			// listening ALL from the beginning
-			mockSink = test.NewMockSink(partitions)
+			data = test.NewMockSinkData()
 
 			// connecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
+			errs = feeding(ctx, dbConfig, tt.partitionSlots, data)
 
 			time.Sleep(500 * time.Millisecond)
-			events = mockSink.GetEvents()
+			events = data.GetEvents()
 
 			require.Equal(t, 5, len(events), "event size")
 
@@ -159,17 +157,17 @@ func TestMongoListenere(t *testing.T) {
 				require.NoError(t, <-errs, "Error feeding #3")
 			}
 
-			lastMessages := mockSink.LastResumes()
+			lastMessages := data.LastResumes()
 			// listening messages from a specific message
-			mockSink = test.NewMockSink(partitions)
-			mockSink.SetLastResumes(lastMessages)
+			data = test.NewMockSinkData()
+			data.SetLastResumes(lastMessages)
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, partitions, tt.partitionSlots, mockSink)
+			errs = feeding(ctx, dbConfig, tt.partitionSlots, data)
 
 			time.Sleep(500 * time.Millisecond)
-			events = mockSink.GetEvents()
+			events = data.GetEvents()
 			// when reconnecting the resume token may refer to one or more events (one document - many events)
 			// but it is filtered by the event id
 			require.Equal(t, 0, len(events), "event size")
@@ -192,15 +190,19 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tmg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker) chan error {
+func feeding(ctx context.Context, dbConfig tmg.DBConfig, slots []slot, data *test.MockSinkData) chan error {
+	partitions := partitionSize(slots)
+
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for _, v := range slots {
-		wg.Add(1)
-		listener, err := mongodb.NewFeed(logger, dbConfig.URL(), dbConfig.Database, sinker, mongodb.WithPartitions(partitions, v.low, v.high))
+		mockSink := test.NewMockSink(data, partitions, v.low, v.high)
+		listener, err := mongodb.NewFeed(logger, dbConfig.URL(), dbConfig.Database, mockSink)
 		if err != nil {
 			panic(err)
 		}
+
+		wg.Add(1)
 		go func() {
 			wg.Done()
 			err := listener.Run(ctx)

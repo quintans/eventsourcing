@@ -12,6 +12,7 @@ import (
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 
 	"github.com/IBM/sarama"
 )
@@ -21,14 +22,20 @@ var _ sink.Sinker = (*Sink)(nil)
 const checkPointBuffer = 1_000
 
 type Sink struct {
-	kvStore  store.KVStore
-	logger   log.Logger
-	producer sarama.SyncProducer
-	topic    string
-	codec    sink.Codec
-	brokers  []string
+	kvStore    store.KVStore
+	logger     log.Logger
+	producer   sarama.SyncProducer
+	topic      string
+	partitions []uint32
+	codec      sink.Codec
+	brokers    []string
 
-	checkPointCh chan encoding.Base64
+	checkPointCh chan resume
+}
+
+type resume struct {
+	key   string
+	value encoding.Base64
 }
 
 // NewSink instantiate a Kafka sink
@@ -40,32 +47,49 @@ func NewSink(logger log.Logger, kvStore store.KVStore, topic string, brokers []s
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
 
-	prd, err := sarama.NewSyncProducer(brokers, config)
+	client, err := sarama.NewClient(brokers, config)
 	if err != nil {
-		return nil, faults.Errorf("initializing kafka sink: %w", err)
+		return nil, faults.Errorf("initializing kafka client: %w", err)
+	}
+	prd, err := sarama.NewSyncProducerFromClient(client)
+	if err != nil {
+		return nil, faults.Errorf("initializing kafka producer: %w", err)
+	}
+
+	partitions, err := client.Partitions(topic)
+	if err != nil {
+		return nil, faults.Errorf("getting partitions: %w", err)
 	}
 
 	s := &Sink{
 		kvStore:      kvStore,
-		logger:       logger,
+		logger:       logger.WithTags(log.Tags{"sink": "kafka"}),
 		topic:        topic,
 		codec:        sink.JSONCodec{},
 		producer:     prd,
+		partitions:   util.NormalizePartitions(partitions),
 		brokers:      brokers,
-		checkPointCh: make(chan encoding.Base64, checkPointBuffer),
+		checkPointCh: make(chan resume, checkPointBuffer),
 	}
 
 	// saves into the resume db. It is fine if it sporadically fails. It will just pickup from there
 	go func() {
-		for token := range s.checkPointCh {
-			ts := token.String()
-			err := s.kvStore.Put(context.Background(), topic, ts)
+		for cp := range s.checkPointCh {
+			if cp.key == "" {
+				fmt.Printf("===> IGNORING event to save: %+v\n", cp)
+				// quit received
+				return
+			}
+
+			ts := cp.value.String()
+			err := s.kvStore.Put(context.Background(), cp.key, ts)
 			if err != nil {
 				logger.WithError(err).WithTags(log.Tags{
 					"topic":  topic,
 					"resume": ts,
 				}).Error("Failed to save sink resume key")
 			}
+			fmt.Printf("===> saved sink checkpoint: (%s=%s)\n", cp.key, ts)
 		}
 	}()
 
@@ -80,32 +104,45 @@ func (s *Sink) Close() {
 	if s.producer != nil {
 		s.producer.Close()
 	}
+	s.checkPointCh <- resume{} // signal quit
 }
 
-// ResumeToken gets the last saved resumed token
-// It will return 0 if there is no last message
-func (s *Sink) ResumeToken(ctx context.Context, partition uint32) (encoding.Base64, error) {
-	topic, err := resumeTokenKey(s.topic, partition)
-	if err != nil {
-		return nil, faults.Wrap(err)
-	}
-	resume, err := s.kvStore.Get(ctx, topic)
-	if err != nil {
-		if errors.Is(err, store.ErrResumeTokenNotFound) {
-			return nil, nil
-		}
-		return nil, faults.Wrap(err)
-	}
+func (s *Sink) Partitions() (total uint32, partitions []uint32) {
+	return uint32(len(s.partitions)), s.partitions
+}
 
-	dec, err := encoding.ParseBase64(resume)
-	if err != nil {
-		return nil, faults.Wrap(err)
+// ResumeTokens iterates over all the last saved resumed token per partition
+// It will return 0 if there is no last message
+func (s *Sink) ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) (e error) {
+	defer faults.Catch(&e, "ResumeTokens(...)")
+
+	for _, partition := range s.partitions {
+		topic, err := resumeTokenKey(s.topic, partition)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+		resume, err := s.kvStore.Get(ctx, topic)
+		if err != nil {
+			if errors.Is(err, store.ErrResumeTokenNotFound) {
+				continue
+			}
+			return faults.Wrap(err)
+		}
+
+		dec, err := encoding.ParseBase64(resume)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+		err = forEach(dec)
+		if err != nil {
+			return faults.Wrap(err)
+		}
 	}
-	return dec, nil
+	return nil
 }
 
 func resumeTokenKey(topic string, partitionID uint32) (_ string, e error) {
-	defer faults.Catch(&e, "ComposeTopic(topic=%s, partitionID=%d)", topic, partitionID)
+	defer faults.Catch(&e, "resumeTokenKey(topic=%s, partitionID=%d)", topic, partitionID)
 
 	if topic == "" {
 		return "", faults.New("topic root cannot be empty")
@@ -116,8 +153,14 @@ func resumeTokenKey(topic string, partitionID uint32) (_ string, e error) {
 	return fmt.Sprintf("%s#%d", topic, partitionID), nil
 }
 
+func (s *Sink) Accepts(_ uint32) bool {
+	return true
+}
+
 // Sink sends the event to the message queue
-func (s *Sink) Sink(_ context.Context, e *eventsourcing.Event, m sink.Meta) error {
+func (s *Sink) Sink(_ context.Context, e *eventsourcing.Event, m sink.Meta) (er error) {
+	defer faults.Catch(&er, "Sink(...)")
+
 	body, err := s.codec.Encode(e)
 	if err != nil {
 		return faults.Errorf("encoding event: %w", err)
@@ -132,12 +175,17 @@ func (s *Sink) Sink(_ context.Context, e *eventsourcing.Event, m sink.Meta) erro
 		Key:   sarama.StringEncoder(e.AggregateID),
 		Value: sarama.ByteEncoder(body),
 	}
-	_, _, err = s.producer.SendMessage(msg)
+	partition, offset, err := s.producer.SendMessage(msg)
 	if err != nil {
 		return faults.Errorf("encoding event: %w", err)
 	}
+	fmt.Printf("===> message sent to topic='%s', partition=%d, offset=%d\n", s.topic, partition, offset)
 
-	s.checkPointCh <- m.ResumeToken
+	topic, err := resumeTokenKey(s.topic, uint32(partition+1))
+	if err != nil {
+		return faults.Wrap(err)
+	}
+	s.checkPointCh <- resume{key: topic, value: m.ResumeToken}
 
 	return nil
 }

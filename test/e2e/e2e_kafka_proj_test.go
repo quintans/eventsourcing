@@ -4,40 +4,29 @@ package e2e
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/quintans/eventsourcing"
-	eslog "github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
-	pnats "github.com/quintans/eventsourcing/projection/nats"
-	"github.com/quintans/eventsourcing/sink/nats"
+	pkafka "github.com/quintans/eventsourcing/projection/kafka"
+	"github.com/quintans/eventsourcing/sink/kafka"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/toolkit/latch"
-	"github.com/sirupsen/logrus"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-var logger = eslog.NewLogrus(logrus.StandardLogger())
-
-const (
-	database = "eventsourcing"
-	topic    = "accounts"
-)
-
-func TestNATSProjectionBeforeData(t *testing.T) {
+func TestKafkaProjectionBeforeData(t *testing.T) {
 	ctx := context.Background()
 
-	dbConfig := shared.Setup(t)
+	// uris := runKafkaContainer(t)
+	uris := []string{"localhost:29092"}
 
-	uri := runNatsContainer(t)
+	dbConfig := shared.Setup(t)
 
 	esRepo, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
@@ -47,11 +36,12 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink(&MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
+	sinker, err := kafka.NewSink(&logger, &MockKVStore{}, topic, uris)
 	require.NoError(t, err)
 	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
-	proj := projectionFromNATS(t, ctx, uri, esRepo)
+	// before data
+	proj := projectionFromKafka(t, ctx, uris, esRepo)
 
 	id := util.MustNewULID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -63,7 +53,7 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	require.NoError(t, err)
 
 	// giving time to forward events
-	time.Sleep(time.Second)
+	time.Sleep(10 * time.Second)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -77,12 +67,12 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	time.Sleep(time.Second)
 }
 
-func TestNATSProjectionAfterData(t *testing.T) {
+func TestKafkaProjectionAfterData(t *testing.T) {
 	ctx := context.Background()
 
-	dbConfig := shared.Setup(t)
+	uris := runKafkaContainer(t)
 
-	uri := runNatsContainer(t)
+	dbConfig := shared.Setup(t)
 
 	esRepo, err := mysql.NewStoreWithURL(dbConfig.URL())
 	require.NoError(t, err)
@@ -92,7 +82,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink(&MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
+	sinker, err := kafka.NewSink(&logger, &MockKVStore{}, topic, uris)
 	require.NoError(t, err)
 	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
@@ -108,8 +98,8 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	// giving time to forward events
 	time.Sleep(time.Second)
 
-	// replay: start projection after we have some data on the event bus
-	proj := projectionFromNATS(t, ctx, uri, esRepo)
+	// after data (replay): start projection after we have some data on the event bus
+	proj := projectionFromKafka(t, ctx, uris, esRepo)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -125,7 +115,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	})
 
 	// giving time to project events through the subscription
-	time.Sleep(time.Second)
+	time.Sleep(10 * time.Second)
 
 	balance, ok = proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -139,63 +129,36 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	time.Sleep(time.Second)
 }
 
-// natsContainer represents the nats container type used in the module
-type natsContainer struct {
+// kafkaContainer represents the Kafka container type used in the module
+type kafkaContainer struct {
 	testcontainers.Container
 	URI string
 }
 
-// runContainer creates an instance of the nats container type
-func runNatsContainer(t *testing.T) string {
-	ctx := context.Background()
-	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.9",
-		ExposedPorts: []string{"4222/tcp", "6222/tcp", "8222/tcp"},
-		Cmd:          []string{"-DV", "-js"},
-		WaitingFor:   wait.ForLog("Listening for client connections on 0.0.0.0:4222"),
-	}
-
-	genericContainerReq := testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	}
-	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		assert.NoError(t, container.Terminate(context.Background()), "failed to terminate container")
-	})
-
-	mappedPort, err := container.MappedPort(ctx, "4222/tcp")
-	require.NoError(t, err)
-
-	hostIP, err := container.Host(ctx)
-	require.NoError(t, err)
-
-	return fmt.Sprintf("nats://%s:%s", hostIP, mappedPort.Port())
+// runKafkaContainer creates an instance of the Kafka container type
+func runKafkaContainer(t *testing.T) []string {
+	test.DockerCompose(t, "./docker-compose-kafka.yaml", "kafka", 5*time.Second)
+	return []string{"localhost:29092"}
 }
 
-func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository) *ProjectionMock {
+func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository) *ProjectionMock {
 	// create projection
 	proj := NewProjectionMock("balances")
 
-	topic := projection.ConsumerTopic{
-		Topic:      "accounts",
-		Partitions: []uint32{1},
-	}
 	kvStore := &MockKVStore{}
 
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic, kvStore)
+	sub, err := pkafka.NewSubscriberWithBrokers(ctx, logger, uri, "accounts", kvStore)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
 	projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
+
 	ok, err := projector.Start(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// giving time to catchup and project events from the database
-	time.Sleep(time.Second)
+	// giving time to catchup and project events from the database and for the consumer group to be ready
+	time.Sleep(10 * time.Second)
 
 	return proj
 }

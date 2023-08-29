@@ -18,7 +18,6 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/eventsourcing/store"
 )
 
 type Feed struct {
@@ -26,21 +25,10 @@ type Feed struct {
 	connString       string
 	dbName           string
 	eventsCollection string
-	partitions       uint32
-	partitionsLow    uint32
-	partitionsHi     uint32
 	sinker           sink.Sinker
 }
 
 type FeedOption func(*Feed)
-
-func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
-	return func(p *Feed) {
-		p.partitions = partitions
-		p.partitionsLow = partitionsLow
-		p.partitionsHi = partitionsHi
-	}
-}
 
 func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	return func(p *Feed) {
@@ -50,7 +38,7 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 
 func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) (Feed, error) {
 	feed := Feed{
-		logger:           logger,
+		logger:           logger.WithTags(log.Tags{"feed": "mongo"}),
 		dbName:           database,
 		connString:       connString,
 		eventsCollection: "events",
@@ -59,16 +47,6 @@ func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker,
 
 	for _, o := range opts {
 		o(&feed)
-	}
-
-	if feed.partitions < 1 {
-		return Feed{}, faults.Errorf("the number of partitions (%d) must be greater than than 0", feed.partitions)
-	}
-	if feed.partitionsLow < 1 {
-		return Feed{}, faults.Errorf("the the partitions low bound (%d) must be greater than than 0", feed.partitionsLow)
-	}
-	if feed.partitionsHi < feed.partitionsLow {
-		return Feed{}, faults.Errorf("the the partitions high bound (%d) must be greater or equal than partitions low bound (%d) ", feed.partitionsHi, feed.partitionsLow)
 	}
 
 	return feed, nil
@@ -81,7 +59,7 @@ type ChangeEvent struct {
 func (f *Feed) Run(ctx context.Context) error {
 	f.logger.Infof("Starting Feed for '%s.%s'", f.dbName, f.eventsCollection)
 	var lastResumeToken []byte
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(resumeToken encoding.Base64) error {
+	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
 		if bytes.Compare(resumeToken, lastResumeToken) > 0 {
 			lastResumeToken = resumeToken
 		}
@@ -104,8 +82,9 @@ func (f *Feed) Run(ctx context.Context) error {
 	match := bson.D{
 		{"operationType", "insert"},
 	}
-	if f.partitions > 1 {
-		match = append(match, f.feedPartitionFilter())
+	total, partitions := f.sinker.Partitions()
+	if len(partitions) > 1 {
+		match = append(match, f.feedPartitionFilter(total, partitions))
 	}
 
 	matchPipeline := bson.D{{Key: "$match", Value: match}}
@@ -114,13 +93,13 @@ func (f *Feed) Run(ctx context.Context) error {
 	eventsCollection := client.Database(f.dbName).Collection(f.eventsCollection)
 	var eventsStream *mongo.ChangeStream
 	if len(lastResumeToken) != 0 {
-		f.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%X'", f.partitionsLow, f.partitionsHi, lastResumeToken)
+		f.logger.Infof("Starting feeding (partitions: %+v) from '%X'", partitions, lastResumeToken)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
 		if err != nil {
 			return faults.Wrap(err)
 		}
 	} else {
-		f.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", f.partitionsLow, f.partitionsHi)
+		f.logger.Infof("Starting feeding (partitions: %v) from the beginning", partitions)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
 		if err != nil {
 			return faults.Wrap(err)
@@ -176,44 +155,22 @@ func (f *Feed) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f *Feed) feedPartitionFilter() bson.E {
-	field := "$fullDocument.aggregate_id_hash"
-	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, m.partitions]}],  m.partitionsLow - 1]} }
-	if f.partitionsLow == f.partitionsHi {
-		return bson.E{
-			"$expr",
-			bson.D{
-				{"$eq", bson.A{
-					bson.D{
-						{"$mod", bson.A{field, f.partitions}},
-					},
-					f.partitionsLow - 1,
-				}},
-			},
-		}
+func (f *Feed) feedPartitionFilter(maxPartition uint32, partitions []uint32) bson.E {
+	parts := make([]uint32, 0, len(partitions))
+	for k, v := range partitions {
+		parts[k] = v - 1
 	}
 
-	// {$expr: {$and: [{"$gte": [ { "$mod" : [$field, m.partitions] }, m.partitionsLow - 1 ]}, {$lte: [ { $mod : [$field, m.partitions] }, partitionsHi - 1 ]}  ] }});
+	field := "$fullDocument.aggregate_id_hash"
+	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, m.partitions]}],  m.partitionsLow - 1]} }
 	return bson.E{
 		"$expr",
 		bson.D{
-			{"$and", bson.A{
+			{"$in", bson.A{
 				bson.D{
-					{"$gte", bson.A{
-						bson.D{
-							{"$mod", bson.A{field, f.partitions}},
-						},
-						f.partitionsLow - 1,
-					}},
+					{"$mod", bson.A{field, maxPartition}},
 				},
-				bson.D{
-					{"$lte", bson.A{
-						bson.D{
-							{"$mod", bson.A{field, f.partitions}},
-						},
-						f.partitionsHi - 1,
-					}},
-				},
+				parts,
 			}},
 		},
 	}

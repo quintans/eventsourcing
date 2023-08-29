@@ -79,6 +79,7 @@ func WithAckWait(ackWait time.Duration) ConsumerOption {
 
 type Consumer interface {
 	TopicPartitions() (string, []uint32)
+	// returns the subscriber Positions. The first Position should be 1
 	Positions(ctx context.Context) (map[uint32]SubscriberPosition, error)
 	StartConsumer(ctx context.Context, projectionName string, handle ConsumerHandler, options ...ConsumerOption) error
 }
@@ -92,7 +93,7 @@ type ConsumerTopic struct {
 
 type SubscriberPosition struct {
 	EventID  eventid.EventID
-	Sequence uint64
+	Position uint64
 }
 
 type Event struct {

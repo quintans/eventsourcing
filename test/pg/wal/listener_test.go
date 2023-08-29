@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
 	tpg "github.com/quintans/eventsourcing/test/pg"
@@ -88,10 +87,9 @@ func TestListener(t *testing.T) {
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
-			partitions := partitionSize(tt.splitSlots)
-			s := test.NewMockSink(partitions)
+			data := test.NewMockSinkData()
 			ctx, cancel := context.WithCancel(context.Background())
-			err = feeding(ctx, dbConfig, partitions, tt.splitSlots, s)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
 
 			id := util.MustNewULID()
@@ -111,7 +109,7 @@ func TestListener(t *testing.T) {
 			// simulating shutdown
 			cancel()
 
-			events := s.GetEvents()
+			events := data.GetEvents()
 			require.Equal(t, 3, len(events), "event size")
 			assert.Equal(t, "AccountCreated", events[0].Kind.String())
 			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
@@ -127,23 +125,23 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			err = feeding(ctx, dbConfig, partitions, tt.splitSlots, s)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
-			events = s.GetEvents()
+			events = data.GetEvents()
 			assert.Len(t, events, 5, "event size")
 
 			cancel()
 
 			// resume from the begginning
-			s = test.NewMockSink(partitions)
+			data = test.NewMockSinkData()
 			ctx, cancel = context.WithCancel(context.Background())
-			err = feeding(ctx, dbConfig, partitions, tt.splitSlots, s)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
-			events = s.GetEvents()
+			events = data.GetEvents()
 			assert.Equal(t, 5, len(events), "event size")
 
 			cancel()
@@ -161,13 +159,17 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tpg.DBConfig, splits uint32, slots []slot, sinker sink.Sinker) error {
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, slots []slot, data *test.MockSinkData) error {
+	partitions := partitionSize(slots)
+
 	var wg sync.WaitGroup
 	for k, v := range slots {
-		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), sinker, postgresql.WithPartitions(splits, v.low, v.high))
+		mockSink := test.NewMockSink(data, partitions, v.low, v.high)
+		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), mockSink)
 		if err != nil {
 			return faults.Wrap(err)
 		}
+
 		wg.Add(1)
 		go func() {
 			wg.Done()

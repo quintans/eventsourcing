@@ -157,7 +157,7 @@ func TestPollListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 
-	mockSink := test.NewMockSink(1)
+	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
@@ -220,7 +220,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 
-	mockSink := test.NewMockSink(1)
+	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
@@ -290,7 +290,7 @@ func TestListenerWithLabels(t *testing.T) {
 	var mu sync.Mutex
 	errCh := make(chan error, 1)
 
-	mockSink := test.NewMockSink(1)
+	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {

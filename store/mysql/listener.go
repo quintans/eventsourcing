@@ -24,8 +24,6 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util"
 )
 
 const resumeTokenSep = ":"
@@ -34,23 +32,12 @@ type Feed struct {
 	logger                log.Logger
 	config                DBConfig
 	eventsTable           string
-	partitions            uint32
-	partitionsLow         uint32
-	partitionsHi          uint32
 	flavour               string
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker
 }
 
 type FeedOption func(*Feed)
-
-func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
-	return func(p *Feed) {
-		p.partitions = partitions
-		p.partitionsLow = partitionsLow
-		p.partitionsHi = partitionsHi
-	}
-}
 
 func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	return func(p *Feed) {
@@ -80,7 +67,7 @@ type DBConfig struct {
 
 func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...FeedOption) (*Feed, error) {
 	feed := &Feed{
-		logger:                logger,
+		logger:                logger.WithTags(log.Tags{"feed": "mysql"}),
 		config:                config,
 		eventsTable:           "events",
 		flavour:               "mariadb",
@@ -91,16 +78,6 @@ func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...Fee
 		o(feed)
 	}
 
-	if feed.partitions < 1 {
-		return nil, faults.Errorf("the number of partitions (%d) must be greater than than 0", feed.partitions)
-	}
-	if feed.partitionsLow < 1 {
-		return nil, faults.Errorf("the the partitions low bound (%d) must be greater than than 0", feed.partitionsLow)
-	}
-	if feed.partitionsHi < feed.partitionsLow {
-		return nil, faults.Errorf("the the partitions high bound (%d) must be greater or equal than partitions low bound (%d) ", feed.partitionsHi, feed.partitionsLow)
-	}
-
 	return feed, nil
 }
 
@@ -108,7 +85,7 @@ func (f *Feed) Run(ctx context.Context) error {
 	f.logger.Infof("Starting Feed for '%s'", f.eventsTable)
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(resumeToken encoding.Base64) error {
+	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
 		p, err := parse(resumeToken.AsString())
 		if err != nil {
 			return faults.Wrap(err)
@@ -147,9 +124,6 @@ func (f *Feed) Run(ctx context.Context) error {
 		logger:          f.logger,
 		sinker:          f.sinker,
 		lastResumeToken: lastResumeToken,
-		partitions:      f.partitions,
-		partitionsLow:   f.partitionsLow,
-		partitionsHi:    f.partitionsHi,
 		backoff:         b,
 		chanel:          c,
 		eventsTable:     f.eventsTable,
@@ -159,10 +133,10 @@ func (f *Feed) Run(ctx context.Context) error {
 	return backoff.Retry(func() error {
 		var err error
 		if lastResumePosition.Name == "" {
-			f.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", f.partitionsLow, f.partitionsHi)
+			f.logger.Info("Starting feeding from the beginning")
 			err = c.Run()
 		} else {
-			f.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", f.partitionsLow, f.partitionsHi, lastResumePosition)
+			f.logger.Info("Starting feeding from '%s'", lastResumePosition)
 			err = c.RunFrom(lastResumePosition)
 		}
 		if err != nil {
@@ -233,9 +207,6 @@ type binlogHandler struct {
 	events                  []*eventsourcing.Event
 	sinker                  sink.Sinker
 	lastResumeToken         []byte
-	partitions              uint32
-	partitionsLow           uint32
-	partitionsHi            uint32
 	backoff                 *backoff.ExponentialBackOff
 	chanel                  *canal.Canal
 	eventsTable             string
@@ -262,8 +233,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		// and for the same aggregate
 		if i == 0 {
 			// check if the event is to be forwarded to the sinker
-			part := util.CalcPartition(hash, h.partitions)
-			if part < h.partitionsLow || part > h.partitionsHi {
+			if !h.sinker.Accepts(hash) {
 				// filtering out events that are not inside the partition range
 				// we exit the loop because all rows are for the same aggregate
 				return nil

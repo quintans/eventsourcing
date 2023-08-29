@@ -181,7 +181,7 @@ func InMemDBNewFeed(db *InMemDB, sinker sink.Sinker) InMemDBFeed {
 
 func (f InMemDBFeed) Run(ctx context.Context) error {
 	var lastResumeToken []byte
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, 0, 0, func(resumeToken encoding.Base64) error {
+	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
 		if bytes.Compare(resumeToken, lastResumeToken) > 0 {
 			lastResumeToken = resumeToken
 		}

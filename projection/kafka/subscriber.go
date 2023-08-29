@@ -17,6 +17,7 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 )
 
 func NewSubscriberWithBrokers(
@@ -28,6 +29,7 @@ func NewSubscriberWithBrokers(
 ) (*Subscriber, error) {
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
+	config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	client, err := sarama.NewClient(brokers, config)
 	if err != nil {
 		return nil, faults.Errorf("instantiating Kafka client: %w", err)
@@ -35,6 +37,7 @@ func NewSubscriberWithBrokers(
 	subscriber, err := NewSubscriberWithClient(
 		logger,
 		client,
+		brokers,
 		topic,
 		resumeStore,
 	)
@@ -62,6 +65,7 @@ var _ projection.Consumer = (*Subscriber)(nil)
 type Subscriber struct {
 	logger      log.Logger
 	client      sarama.Client
+	brokers     []string
 	topic       string
 	partitions  []uint32
 	codec       sink.Codec
@@ -71,6 +75,7 @@ type Subscriber struct {
 func NewSubscriberWithClient(
 	logger log.Logger,
 	client sarama.Client,
+	brokers []string,
 	topic string,
 	resumeStore store.KVStore,
 	options ...SubOption,
@@ -86,15 +91,16 @@ func NewSubscriberWithClient(
 
 	s := &Subscriber{
 		resumeStore: resumeStore,
-		logger:      logger,
-		client:      client,
-		topic:       topic,
-		partitions:  partitionsUint32(partitions),
-		codec:       sink.JSONCodec{},
+		logger: logger.WithTags(log.Tags{
+			"subscriber": "kafka",
+			"id":         "subscriber-" + shortid.MustGenerate(),
+		}),
+		client:     client,
+		brokers:    brokers,
+		topic:      topic,
+		partitions: util.NormalizePartitions(partitions),
+		codec:      sink.JSONCodec{},
 	}
-	s.logger = logger.WithTags(log.Tags{
-		"id": "subscriber-" + shortid.MustGenerate(),
-	})
 
 	for _, o := range options {
 		o(s)
@@ -103,39 +109,32 @@ func NewSubscriberWithClient(
 	return s, nil
 }
 
-func partitionsUint32(p []int32) []uint32 {
-	out := make([]uint32, len(p))
-	for k, v := range p {
-		out[k] = uint32(v)
-	}
-	return out
-}
-
-func (s *Subscriber) TopicPartitions() (string, []uint32) {
+func (s *Subscriber) TopicPartitions() (topic string, partitions []uint32) {
 	return s.topic, s.partitions
 }
 
 func (s *Subscriber) Positions(ctx context.Context) (map[uint32]projection.SubscriberPosition, error) {
 	bms := map[uint32]projection.SubscriberPosition{}
 	for _, p := range s.partitions {
-		seq, eventID, err := s.lastBUSMessage(ctx, int32(p))
+		seq, eventID, err := s.lastBUSMessage(ctx, int32(p-1))
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
 		bms[p] = projection.SubscriberPosition{
 			EventID:  eventID,
-			Sequence: seq,
+			Position: seq,
 		}
 	}
 
 	return bms, nil
 }
 
-func (s *Subscriber) lastBUSMessage(ctx context.Context, partition int32) (uint64, eventid.EventID, error) {
+func (s *Subscriber) lastBUSMessage(_ context.Context, partition int32) (_ uint64, _ eventid.EventID, e error) {
+	defer faults.Catch(&e, "lastBUSMessage(partition=%d)", partition)
 	// get last nextOffset
 	nextOffset, err := s.client.GetOffset(s.topic, partition, sarama.OffsetNewest)
 	if err != nil {
-		return 0, eventid.Zero, faults.Errorf("initializing consumer to get last message: %w", err)
+		return 0, eventid.Zero, faults.Errorf("getting offset: %w", err)
 	}
 	if nextOffset == 0 {
 		return 0, eventid.Zero, nil
@@ -143,7 +142,7 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition int32) (uint6
 
 	consumer, err := sarama.NewConsumerFromClient(s.client)
 	if err != nil {
-		return 0, eventid.Zero, faults.Errorf("initializing consumer to get last message: %w", err)
+		return 0, eventid.Zero, faults.Errorf("initializing consumer client: %w", err)
 	}
 	defer consumer.Close()
 
@@ -152,7 +151,7 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition int32) (uint6
 		if errors.Is(err, sarama.ErrOffsetOutOfRange) {
 			return 0, eventid.Zero, nil
 		}
-		return 0, eventid.Zero, faults.Errorf("initializing consumer to get last message: %w", err)
+		return 0, eventid.Zero, faults.Errorf("getting last message: %w", err)
 	}
 
 	select {
@@ -168,24 +167,25 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition int32) (uint6
 	}
 }
 
-func groupName(projName string, topic string) string {
-	return fmt.Sprintf("%s:%s", projName, topic)
+func groupName(projName, topic string) string {
+	return fmt.Sprintf("%s_%s", projName, topic)
 }
 
 func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler projection.ConsumerHandler, options ...projection.ConsumerOption) error {
-	opts := projection.ConsumerOptions{
-		AckWait: 30 * time.Second,
-	}
+	opts := projection.ConsumerOptions{}
 	for _, v := range options {
 		v(&opts)
 	}
 
+	config := sarama.NewConfig()
+	config.Consumer.Return.Errors = true
+	config.Consumer.Offsets.Initial = sarama.OffsetOldest
+
 	groupName := groupName(projName, s.topic)
-	group, err := sarama.NewConsumerGroupFromClient(groupName, s.client)
+	group, err := sarama.NewConsumerGroup(s.brokers, groupName, config)
 	if err != nil {
 		return faults.Errorf("creating consumer group '%s': %w", groupName, err)
 	}
-	defer group.Close()
 
 	logger := s.logger.WithTags(log.Tags{
 		"topic":          s.topic,
@@ -197,6 +197,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 		sub:         s,
 		opts:        opts,
 		projName:    projName,
+		handler:     handler,
 		ready:       make(chan bool),
 	}
 
@@ -205,17 +206,18 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 	go func() {
 		defer wg.Done()
 		for {
-			err = group.Consume(ctx, []string{s.topic}, gh)
+			err = group.Consume(ctx, []string{s.topic}, &gh)
+			if err != nil {
+				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
+					return
+				}
+				logger.WithError(err).Fatal("Error from consumer")
+			}
 			if ctx.Err() != nil {
 				return
 			}
-			if errors.Is(err, sarama.ErrClosedConsumerGroup) {
-				continue
-			}
-			if err != nil {
-				logger.WithError(err).Fatal("Error from consumer")
-			}
 			gh.ready = make(chan bool)
+			s.logger.Info("===> REBALANCING")
 		}
 	}()
 
@@ -246,12 +248,18 @@ type groupHandler struct {
 	ready       chan bool
 }
 
-func (h groupHandler) Setup(sess sarama.ConsumerGroupSession) error {
+func (h *groupHandler) Setup(sess sarama.ConsumerGroupSession) (er error) {
+	defer func() {
+		if er != nil {
+			fmt.Println("===> ERROR:", er)
+		}
+	}()
+
 	claims := sess.Claims()
 
 	for topic, parts := range claims {
 		for _, part := range parts {
-			resume, err := projection.NewResumeKey(h.projName, topic, uint32(part))
+			resume, err := projection.NewResumeKey(h.projName, topic, uint32(part+1))
 			if err != nil {
 				return faults.Wrap(err)
 			}
@@ -271,10 +279,11 @@ func (h groupHandler) Setup(sess sarama.ConsumerGroupSession) error {
 				h.logger.WithTags(log.Tags{"topic": h.sub.topic}).Info("Starting consuming all available events")
 				startOffset = sarama.OffsetOldest
 			} else {
-				h.logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": topic}).Info("Starting consumer")
+				h.logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": topic}).Info("Starting consumer from an offset")
 				startOffset = int64(token.ConsumerSequence())
 			}
 
+			fmt.Printf("===> resetting partition=%d to offset=%d", part, startOffset)
 			sess.ResetOffset(topic, part, startOffset, "start")
 		}
 	}
@@ -284,29 +293,44 @@ func (h groupHandler) Setup(sess sarama.ConsumerGroupSession) error {
 	return nil
 }
 
-func (groupHandler) Cleanup(_ sarama.ConsumerGroupSession) error {
+func (*groupHandler) Cleanup(_ sarama.ConsumerGroupSession) error {
 	return nil
 }
 
-func (h groupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for msg := range claim.Messages() {
-		evt, er := h.sub.codec.Decode(msg.Value)
-		if er != nil {
-			return faults.Errorf("unmarshal event '%s': %w", string(msg.Value), er)
-		}
-		if h.opts.Filter == nil || h.opts.Filter(evt) {
-			h.logger.Debugf("Handling received event '%+v'", evt)
-			er = h.handler(
-				context.Background(),
-				evt,
-				uint32(msg.Partition),
-				uint64(msg.Offset),
-			)
-			if er != nil {
-				return faults.Errorf("handling event with ID '%s': %w", evt.ID, er)
+func (h *groupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	h.logger.Info("===> listening to messages")
+	for {
+		select {
+		case msg, ok := <-claim.Messages():
+			if !ok {
+				h.logger.Debug("message channel was closed")
+				return nil
 			}
+
+			fmt.Println("===> got message: offset =", msg.Offset)
+			evt, er := h.sub.codec.Decode(msg.Value)
+			if er != nil {
+				return faults.Errorf("unmarshal event '%s': %w", string(msg.Value), er)
+			}
+			if h.opts.Filter == nil || h.opts.Filter(evt) {
+				h.logger.Debugf("Handling received event '%+v'", evt)
+				er = h.handler(
+					context.Background(),
+					evt,
+					uint32(msg.Partition),
+					uint64(msg.Offset),
+				)
+				if er != nil {
+					return faults.Errorf("handling event with ID '%s': %w", evt.ID, er)
+				}
+			}
+
+			fmt.Printf("===> Message claimed: value = %s, timestamp = %v, topic = %s\n", string(msg.Value), msg.Timestamp, msg.Topic)
+			session.MarkMessage(msg, "")
+
+		case <-session.Context().Done():
+			fmt.Println("===> BYE BYE")
+			return nil
 		}
 	}
-
-	return nil
 }

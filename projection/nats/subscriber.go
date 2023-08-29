@@ -21,8 +21,6 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-const checkPointBuffer = 1_000
-
 func NewSubscriberWithURL(
 	ctx context.Context,
 	logger log.Logger,
@@ -102,7 +100,8 @@ func NewSubscriber(
 		resumeStore: resumeStore,
 	}
 	s.logger = logger.WithTags(log.Tags{
-		"id": "subscriber-" + shortid.MustGenerate(),
+		"subscriber": "nats",
+		"id":         "subscriber-" + shortid.MustGenerate(),
 	})
 
 	for _, o := range options {
@@ -125,7 +124,7 @@ func (s *Subscriber) Positions(ctx context.Context) (map[uint32]projection.Subsc
 		}
 		bms[p] = projection.SubscriberPosition{
 			EventID:  eventID,
-			Sequence: seq,
+			Position: seq,
 		}
 	}
 

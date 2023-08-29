@@ -20,8 +20,6 @@ import (
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util"
 )
 
 const (
@@ -31,14 +29,6 @@ const (
 )
 
 type FeedLogreplOption func(*FeedLogrepl)
-
-func WithPartitions(partitions, partitionLow, partitionHi uint32) FeedLogreplOption {
-	return func(p *FeedLogrepl) {
-		p.partitions = partitions
-		p.partitionLow = partitionLow
-		p.partitionHi = partitionHi
-	}
-}
 
 func WithPublication(publicationName string) FeedLogreplOption {
 	return func(p *FeedLogrepl) {
@@ -60,9 +50,6 @@ func WithEventsTable(col string) FeedLogreplOption {
 
 type FeedLogrepl struct {
 	dburl                 string
-	partitions            uint32
-	partitionLow          uint32
-	partitionHi           uint32
 	publicationName       string
 	slotIndex             int
 	totalSlots            int
@@ -92,16 +79,6 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, o
 		o(&f)
 	}
 
-	if f.partitions < 1 {
-		return FeedLogrepl{}, faults.Errorf("splits (%d) must be greater than 0", f.partitions)
-	}
-	if f.partitionLow < 1 {
-		return FeedLogrepl{}, faults.Errorf("split lower bound (%d) must be greater than 0", f.partitionLow)
-	}
-	if f.partitionHi < f.partitionLow {
-		return FeedLogrepl{}, faults.Errorf("split higher bound (%d) must be greater or equal than split lower bound (%d)", f.partitionHi, f.partitionLow)
-	}
-
 	return f, nil
 }
 
@@ -109,7 +86,7 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, o
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
 func (f *FeedLogrepl) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionLow, f.partitionHi, func(resumeToken encoding.Base64) error {
+	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
 		xLogPos, err := pglogrepl.ParseLSN(resumeToken.AsString())
 		if err != nil {
 			return faults.Errorf("ParseLSN failed: %w", err)
@@ -255,8 +232,7 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		}
 
 		// check if the event is to be forwarded to the sinker
-		part := util.CalcPartition(uint32(aggregateIDHash), f.partitions)
-		if part < f.partitionLow || part > f.partitionHi {
+		if !f.sinker.Accepts(uint32(aggregateIDHash)) {
 			// filtering out events that are not inside the partition range
 			return nil, nil
 		}
