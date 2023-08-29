@@ -1,6 +1,6 @@
-//go:build e2e
+//go:build integration
 
-package e2e
+package nats
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"github.com/quintans/eventsourcing/sink/nats"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
+	"github.com/quintans/eventsourcing/test/integration"
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/toolkit/latch"
@@ -47,9 +48,9 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink(&MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
+	sinker, err := nats.NewSink(&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
 	require.NoError(t, err)
-	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
 	proj := projectionFromNATS(t, ctx, uri, esRepo)
 
@@ -67,7 +68,7 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
-	require.Equal(t, Balance{
+	require.Equal(t, integration.Balance{
 		Name:   "Paulo",
 		Amount: 130,
 	}, balance)
@@ -92,9 +93,9 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink(&MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
+	sinker, err := nats.NewSink(&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
 	require.NoError(t, err)
-	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
 	id := util.MustNewULID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -113,7 +114,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
-	require.Equal(t, Balance{
+	require.Equal(t, integration.Balance{
 		Name:   "Paulo",
 		Amount: 130,
 	}, balance)
@@ -129,7 +130,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 
 	balance, ok = proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
-	require.Equal(t, Balance{
+	require.Equal(t, integration.Balance{
 		Name:   "Paulo",
 		Amount: 115,
 	}, balance)
@@ -175,15 +176,15 @@ func runNatsContainer(t *testing.T) string {
 	return fmt.Sprintf("nats://%s:%s", hostIP, mappedPort.Port())
 }
 
-func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository) *ProjectionMock {
+func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository) *integration.ProjectionMock {
 	// create projection
-	proj := NewProjectionMock("balances")
+	proj := integration.NewProjectionMock("balances")
 
 	topic := projection.ConsumerTopic{
 		Topic:      "accounts",
 		Partitions: []uint32{1},
 	}
-	kvStore := &MockKVStore{}
+	kvStore := &integration.MockKVStore{}
 
 	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic, kvStore)
 	require.NoError(t, err)

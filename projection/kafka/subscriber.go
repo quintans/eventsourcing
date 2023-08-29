@@ -181,7 +181,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 	gn := groupName(projName, s.topic)
 	client, err := sarama.NewConsumerGroupFromClient(gn, s.client)
 	if err != nil {
-		return faults.Errorf("creating consumer group '%s': %w", groupName, err)
+		return faults.Errorf("creating consumer group '%s': %w", gn, err)
 	}
 	logger := s.logger.WithTags(log.Tags{
 		"topic":          s.topic,

@@ -156,7 +156,7 @@ func (f *Feed) Run(ctx context.Context) error {
 }
 
 func (f *Feed) feedPartitionFilter(maxPartition uint32, partitions []uint32) bson.E {
-	parts := make([]uint32, 0, len(partitions))
+	parts := make([]uint32, len(partitions))
 	for k, v := range partitions {
 		parts[k] = v - 1
 	}

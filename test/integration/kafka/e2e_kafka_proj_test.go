@@ -1,6 +1,6 @@
-//go:build e2e
+//go:build integration
 
-package e2e
+package kafka
 
 import (
 	"context"
@@ -8,17 +8,27 @@ import (
 	"time"
 
 	"github.com/quintans/eventsourcing"
+	eslog "github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
 	pkafka "github.com/quintans/eventsourcing/projection/kafka"
 	"github.com/quintans/eventsourcing/sink/kafka"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
+	"github.com/quintans/eventsourcing/test/integration"
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/toolkit/latch"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
+)
+
+var logger = eslog.NewLogrus(logrus.StandardLogger())
+
+const (
+	database = "eventsourcing"
+	topic    = "accounts"
 )
 
 func TestKafkaProjectionBeforeData(t *testing.T) {
@@ -35,9 +45,9 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := kafka.NewSink(&logger, &MockKVStore{}, topic, uris)
+	sinker, err := kafka.NewSink(&logger, &integration.MockKVStore{}, topic, uris)
 	require.NoError(t, err)
-	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
 	// before data
 	proj := projectionFromKafka(t, ctx, uris, esRepo)
@@ -56,7 +66,7 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	assert.True(t, ok)
-	assert.Equal(t, Balance{
+	assert.Equal(t, integration.Balance{
 		Name:   "Paulo",
 		Amount: 130,
 	}, balance)
@@ -79,9 +89,9 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := kafka.NewSink(&logger, &MockKVStore{}, topic, uris)
+	sinker, err := kafka.NewSink(&logger, &integration.MockKVStore{}, topic, uris)
 	require.NoError(t, err)
-	eventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
 	id := util.MustNewULID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -100,7 +110,7 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
-	require.Equal(t, Balance{
+	require.Equal(t, integration.Balance{
 		Name:   "Paulo",
 		Amount: 130,
 	}, balance)
@@ -116,7 +126,7 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 
 	balance, ok = proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
-	require.Equal(t, Balance{
+	require.Equal(t, integration.Balance{
 		Name:   "Paulo",
 		Amount: 115,
 	}, balance)
@@ -134,15 +144,15 @@ type kafkaContainer struct {
 
 // runKafkaContainer creates an instance of the Kafka container type
 func runKafkaContainer(t *testing.T) []string {
-	test.DockerCompose(t, "./docker-compose.yaml", "kafka", 5*time.Second)
+	test.DockerCompose(t, "./docker-compose.yaml", "kafka", time.Second)
 	return []string{"localhost:29092"}
 }
 
-func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository) *ProjectionMock {
+func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository) *integration.ProjectionMock {
 	// create projection
-	proj := NewProjectionMock("balances")
+	proj := integration.NewProjectionMock("balances")
 
-	kvStore := &MockKVStore{}
+	kvStore := &integration.MockKVStore{}
 
 	sub, err := pkafka.NewSubscriberWithBrokers(ctx, logger, uri, "accounts", kvStore)
 	require.NoError(t, err)

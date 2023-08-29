@@ -1,6 +1,4 @@
-//go:build e2e
-
-package e2e
+package integration
 
 import (
 	"context"
@@ -17,9 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// eventForwarderWorkerToNATS creates workers that listen to database changes,
+// EventForwarderWorkerToNATS creates workers that listen to database changes,
 // transform them to events and publish them into the message bus.
-func eventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger, ltx *latch.CountDownLatch, dbConfig shared.DBConfig, sinker sink.Sinker) {
+func EventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger, ltx *latch.CountDownLatch, dbConfig shared.DBConfig, sinker sink.Sinker) {
 	lockExpiry := 10 * time.Second
 
 	dbConf := mysql.DBConfig{

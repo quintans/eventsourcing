@@ -5,6 +5,7 @@ go 1.21
 require (
 	github.com/IBM/sarama v1.40.1
 	github.com/avast/retry-go/v3 v3.1.1
+	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/docker/go-connections v0.4.0
 	github.com/go-mysql-org/go-mysql v1.7.0
