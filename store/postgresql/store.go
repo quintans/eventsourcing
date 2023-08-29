@@ -17,7 +17,7 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
 )
@@ -41,8 +41,6 @@ type Event struct {
 	CreatedAt        time.Time          `db:"created_at"`
 	Migration        int                `db:"migration"`
 	Migrated         bool               `db:"migrated"`
-	Partition        int32              `db:"sink_part"`
-	Sequence         uint64             `db:"sink_seq"`
 }
 
 // NilString converts nil to empty string
@@ -79,18 +77,20 @@ type Snapshot struct {
 	CreatedAt        time.Time          `db:"created_at,omitempty"`
 }
 
-var _ eventsourcing.EsRepository = (*EsRepository)(nil)
-
 type Option func(*EsRepository)
 
-func WithPublisher(publisher store.Publisher) Option {
+func WithTxHandler(txHandler store.InTxHandler) Option {
 	return func(r *EsRepository) {
-		r.publisher = publisher
+		r.txHandlers = append(r.txHandlers, txHandler)
 	}
 }
 
 type Repository struct {
 	db *sqlx.DB
+}
+
+func (r Repository) Connection() *sqlx.DB {
+	return r.db
 }
 
 func (r Repository) TxRunner() func(ctx context.Context, fn func(context.Context) error) error {
@@ -125,9 +125,14 @@ func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, *s
 	return tx.Commit()
 }
 
+var (
+	_ eventsourcing.EsRepository  = (*EsRepository)(nil)
+	_ projection.EventsRepository = (*EsRepository)(nil)
+)
+
 type EsRepository struct {
 	Repository
-	publisher store.Publisher
+	txHandlers []store.InTxHandler
 }
 
 func NewStoreWithURL(connString string, options ...Option) (*EsRepository, error) {
@@ -209,16 +214,23 @@ func (r *EsRepository) saveEvent(ctx context.Context, tx *sql.Tx, event *Event) 
 		return faults.Errorf("unable to insert event: %w", err)
 	}
 
-	return r.publish(ctx, event)
+	return r.applyTxHandlers(ctx, event)
 }
 
-func (r *EsRepository) publish(ctx context.Context, event *Event) error {
-	if r.publisher == nil {
+func (r *EsRepository) applyTxHandlers(ctx context.Context, event *Event) error {
+	if len(r.txHandlers) == 0 {
 		return nil
 	}
 
 	e := toEventsourcingEvent(event)
-	return r.publisher.Publish(ctx, e)
+	for _, handler := range r.txHandlers {
+		err := handler(ctx, e)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+	}
+
+	return nil
 }
 
 func isDup(err error) bool {
@@ -347,48 +359,11 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	return nil
 }
 
-func (r *EsRepository) GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error) {
+func (r *EsRepository) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
 	var query bytes.Buffer
-	query.WriteString("SELECT COALESCE(MAX(sink_seq), 0) FROM events WHERE migration = 0")
-	args := []interface{}{}
-	args = buildFilter(filter, &query, args)
-	var seq uint64
-	if err := r.db.GetContext(ctx, &seq, query.String(), args...); err != nil {
-		if err != sql.ErrNoRows {
-			return 0, faults.Errorf("unable to get the last event ID: %w", err)
-		}
-	}
-
-	return seq, nil
-}
-
-func (r *EsRepository) GetEvents(ctx context.Context, afterSeq uint64, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
-	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events WHERE sink_seq > $1 AND migration = 0")
-	args := []interface{}{afterSeq}
-	args = buildFilter(filter, &query, args)
-	query.WriteString(" ORDER BY sink_seq ASC")
-	if batchSize > 0 {
-		query.WriteString(" LIMIT ")
-		query.WriteString(strconv.Itoa(batchSize))
-	}
-
-	rows, err := r.queryEvents(ctx, query.String(), args...)
-	if err != nil {
-		return nil, faults.Errorf("unable to get events after '%d' for filter %+v: %w", afterSeq, filter, err)
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-
-	return rows, nil
-}
-
-func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
-	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events WHERE sink_seq = 0 AND migration = 0")
-	args := []interface{}{}
-	args = buildFilter(filter, &query, args)
+	query.WriteString("SELECT * FROM events WHERE id > $1 AND id <= $2 AND migration = 0")
+	args := []interface{}{after, until}
+	args = buildFilter(&query, " AND ", filter, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -397,7 +372,7 @@ func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filt
 
 	rows, err := r.queryEvents(ctx, query.String(), args...)
 	if err != nil {
-		return nil, faults.Errorf("unable to get pending events after for filter %+v: %w", filter, err)
+		return nil, faults.Errorf("getting events between ('%d', '%s'] for filter %+v: %w", after, until, filter, err)
 	}
 	if len(rows) == 0 {
 		return nil, nil
@@ -406,14 +381,11 @@ func (r *EsRepository) GetPendingEvents(ctx context.Context, batchSize int, filt
 	return rows, nil
 }
 
-func (r *EsRepository) SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error {
-	_, err := r.db.ExecContext(ctx, "UPDATE events SET sink_part = $1, sink_seq = $2 WHERE ID = $3", data.Partition(), data.Sequence(), eID.String())
-	return faults.Wrapf(err, "setting publish partition %d and sequence %d for event id '%s'", data.Partition(), data.Sequence(), eID)
-}
-
-func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) []interface{} {
+func buildFilter(qry *bytes.Buffer, prefix string, filter store.Filter, args []interface{}) []interface{} {
+	var conditions []string
 	if len(filter.AggregateKinds) > 0 {
-		query.WriteString(" AND (")
+		var query strings.Builder
+		query.WriteString("(")
 		for k, v := range filter.AggregateKinds {
 			if k > 0 {
 				query.WriteString(" OR ")
@@ -422,23 +394,20 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 			query.WriteString(fmt.Sprintf("aggregate_kind = $%d", len(args)))
 		}
 		query.WriteString(")")
+		conditions = append(conditions, query.String())
 	}
 
-	if filter.PartitionLow > 1 && filter.PartitionHi > 1 {
+	if filter.Splits > 1 && filter.Split > 1 {
 		size := len(args)
-		if filter.PartitionLow == filter.PartitionHi {
-			args = append(args, filter.PartitionLow-1)
-			query.WriteString(fmt.Sprintf(" AND sink_part = $%d", size+1))
-		} else {
-			args = append(args, filter.PartitionLow-1, filter.PartitionHi-1)
-			query.WriteString(fmt.Sprintf(" AND sink_part BETWEEN $%d AND $%d", size+1, size+2))
-		}
+		args = append(args, filter.Splits, filter.Split)
+		conditions = append(conditions, fmt.Sprintf("MOD(aggregate_id_hash, $%d) = $%d", size+1, size+2))
 	}
 
 	if len(filter.Metadata) > 0 {
 		for k, values := range filter.Metadata {
 			k = escape(k)
-			query.WriteString(" AND (")
+			var query strings.Builder
+			query.WriteString("(")
 			for idx, v := range values {
 				if idx > 0 {
 					query.WriteString(" OR ")
@@ -447,7 +416,13 @@ func buildFilter(filter store.Filter, query *bytes.Buffer, args []interface{}) [
 				query.WriteString(fmt.Sprintf(`metadata  @> '{"%s": "%s"}'`, k, v))
 				query.WriteString(")")
 			}
+			conditions = append(conditions, query.String())
 		}
+	}
+
+	if len(conditions) > 0 {
+		qry.WriteString(prefix)
+		qry.WriteString(strings.Join(conditions, " AND "))
 	}
 	return args
 }
@@ -457,7 +432,11 @@ func escape(s string) string {
 }
 
 func (r *EsRepository) queryEvents(ctx context.Context, query string, args ...interface{}) ([]*eventsourcing.Event, error) {
-	rows, err := r.db.QueryxContext(ctx, query, args...)
+	return queryEvents(ctx, r.db, query, args...)
+}
+
+func queryEvents(ctx context.Context, db *sqlx.DB, query string, args ...interface{}) ([]*eventsourcing.Event, error) {
+	rows, err := db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return []*eventsourcing.Event{}, nil
@@ -489,7 +468,15 @@ func toEventsourcingEvent(e *Event) *eventsourcing.Event {
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
-		Partition:        uint32(e.Partition),
-		Sequence:         e.Sequence,
 	}
+}
+
+func (r *EsRepository) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event, error) {
+	qry, args, err := sqlx.In("SELECT * FROM events WHERE id IN (?) ORDER BY id ASC", ids) // the query must use the '?' bind var
+	if err != nil {
+		return nil, faults.Errorf("getting pending events (IDs=%v): %w", ids, err)
+	}
+	qry = r.db.Rebind(qry) // sqlx.In returns queries with the `?` bindvar, we can rebind it for our backend
+
+	return queryEvents(ctx, r.db, qry, args...)
 }

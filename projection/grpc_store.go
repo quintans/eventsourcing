@@ -28,27 +28,7 @@ func NewGrpcRepository(address string) GrpcRepository {
 	}
 }
 
-func (c GrpcRepository) GetMaxSeq(ctx context.Context, filter store.Filter) (uint64, error) {
-	cli, conn, err := c.dial()
-	if err != nil {
-		return 0, err
-	}
-	defer conn.Close()
-
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	pbFilter := filterToPbFilter(filter)
-	r, err := cli.GetMaxSeq(ctx, &pb.GetMaxSeqRequest{
-		Filter: pbFilter,
-	})
-	if err != nil {
-		return 0, faults.Errorf("could not get last event id: %w", err)
-	}
-
-	return r.Sequence, nil
-}
-
-func (c GrpcRepository) GetEvents(ctx context.Context, afterSeq uint64, limit int, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (c GrpcRepository) GetEvents(ctx context.Context, after, until eventid.EventID, limit int, filter store.Filter) ([]*eventsourcing.Event, error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -60,9 +40,10 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterSeq uint64, limit in
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	r, err := cli.GetEvents(ctx, &pb.GetEventsRequest{
-		AfterSequence: afterSeq,
-		Limit:         int32(limit),
-		Filter:        pbFilter,
+		AfterEventId: after.String(),
+		UntilEventId: until.String(),
+		Limit:        int32(limit),
+		Filter:       pbFilter,
 	})
 	if err != nil {
 		return nil, faults.Errorf("could not get events: %w", err)
@@ -88,8 +69,6 @@ func (c GrpcRepository) GetEvents(ctx context.Context, afterSeq uint64, limit in
 			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         encoding.JSONOfString(v.Metadata),
 			CreatedAt:        *createdAt,
-			Partition:        v.Partition,
-			Sequence:         v.Sequence,
 		}
 	}
 	return events, nil
@@ -109,8 +88,8 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 	return &pb.Filter{
 		AggregateKinds: types,
 		Metadata:       metadata,
-		PartitionLow:   filter.PartitionLow,
-		PartitionHi:    filter.PartitionHi,
+		Splits:         filter.Splits,
+		Split:          filter.Split,
 	}
 }
 

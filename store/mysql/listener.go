@@ -24,8 +24,6 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util"
 )
 
 const resumeTokenSep = ":"
@@ -34,31 +32,12 @@ type Feed struct {
 	logger                log.Logger
 	config                DBConfig
 	eventsTable           string
-	partitions            uint32
-	partitionsLow         uint32
-	partitionsHi          uint32
 	flavour               string
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker
-	setSeqRepo            SetSeqRepository
-}
-
-type SetSeqRepository interface {
-	SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error
 }
 
 type FeedOption func(*Feed)
-
-func WithPartitions(partitions, partitionsLow, partitionsHi uint32) FeedOption {
-	return func(p *Feed) {
-		if partitions <= 1 {
-			return
-		}
-		p.partitions = partitions
-		p.partitionsLow = partitionsLow
-		p.partitionsHi = partitionsHi
-	}
-}
 
 func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	return func(p *Feed) {
@@ -86,35 +65,34 @@ type DBConfig struct {
 	Password string
 }
 
-func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, setSeqRepo SetSeqRepository, opts ...FeedOption) Feed {
-	feed := Feed{
-		logger:                logger,
+func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...FeedOption) (*Feed, error) {
+	feed := &Feed{
+		logger:                logger.WithTags(log.Tags{"feed": "mysql"}),
 		config:                config,
 		eventsTable:           "events",
 		flavour:               "mariadb",
 		backoffMaxElapsedTime: 10 * time.Second,
 		sinker:                sinker,
-		setSeqRepo:            setSeqRepo,
 	}
 	for _, o := range opts {
-		o(&feed)
+		o(feed)
 	}
 
-	return feed
+	return feed, nil
 }
 
 func (f *Feed) Run(ctx context.Context) error {
 	f.logger.Infof("Starting Feed for '%s'", f.eventsTable)
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(_ uint64, message *sink.Message) error {
-		p, err := parse(string(message.ResumeToken))
+	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
+		p, err := parse(resumeToken.AsString())
 		if err != nil {
 			return faults.Wrap(err)
 		}
 		if p.Compare(lastResumePosition) > 0 {
 			lastResumePosition = p
-			lastResumeToken = message.ResumeToken
+			lastResumeToken = resumeToken
 		}
 		return nil
 	})
@@ -146,23 +124,19 @@ func (f *Feed) Run(ctx context.Context) error {
 		logger:          f.logger,
 		sinker:          f.sinker,
 		lastResumeToken: lastResumeToken,
-		partitions:      f.partitions,
-		partitionsLow:   f.partitionsLow,
-		partitionsHi:    f.partitionsHi,
 		backoff:         b,
 		chanel:          c,
 		eventsTable:     f.eventsTable,
-		setSeqRepo:      f.setSeqRepo,
 	}
 	c.SetEventHandler(blh)
 
 	return backoff.Retry(func() error {
 		var err error
 		if lastResumePosition.Name == "" {
-			f.logger.Infof("Starting feeding (partitions: [%d-%d]) from the beginning", f.partitionsLow, f.partitionsHi)
+			f.logger.Info("Starting feeding from the beginning")
 			err = c.Run()
 		} else {
-			f.logger.Infof("Starting feeding (partitions: [%d-%d]) from '%s'", f.partitionsLow, f.partitionsHi, lastResumePosition)
+			f.logger.Info("Starting feeding from '%s'", lastResumePosition)
 			err = c.RunFrom(lastResumePosition)
 		}
 		if err != nil {
@@ -233,13 +207,9 @@ type binlogHandler struct {
 	events                  []*eventsourcing.Event
 	sinker                  sink.Sinker
 	lastResumeToken         []byte
-	partitions              uint32
-	partitionsLow           uint32
-	partitionsHi            uint32
 	backoff                 *backoff.ExponentialBackOff
 	chanel                  *canal.Canal
 	eventsTable             string
-	setSeqRepo              SetSeqRepository
 }
 
 func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
@@ -261,10 +231,10 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		hash := r.getAsUint32("aggregate_id_hash")
 		// we check the first because all the rows are for the same transaction,
 		// and for the same aggregate
-		if i == 0 && h.partitions > 0 {
+		if i == 0 {
 			// check if the event is to be forwarded to the sinker
-			part := util.WhichPartition(hash, h.partitions)
-			if part < h.partitionsLow || part > h.partitionsHi {
+			if !h.sinker.Accepts(hash) {
+				// filtering out events that are not inside the partition range
 				// we exit the loop because all rows are for the same aggregate
 				return nil
 			}
@@ -273,6 +243,8 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 		if err != nil {
 			return faults.Wrap(err)
 		}
+		// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
+		// They will be populate with the values returned by the sink.
 		h.events = append(h.events, &eventsourcing.Event{
 			ID:               id,
 			AggregateID:      r.getAsString("aggregate_id"),
@@ -363,11 +335,7 @@ func (h *binlogHandler) OnXID(header *replication.EventHeader, xid mysql.Positio
 			// we update the resume token on the last event of the transaction
 			h.lastResumeToken = format(xid)
 		}
-		data, err := h.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: h.lastResumeToken})
-		if err != nil {
-			return faults.Wrap(backoff.Permanent(err))
-		}
-		err = h.setSeqRepo.SetSinkData(context.Background(), event.ID, data)
+		err := h.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: h.lastResumeToken})
 		if err != nil {
 			return faults.Wrap(backoff.Permanent(err))
 		}

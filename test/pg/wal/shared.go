@@ -93,11 +93,9 @@ func dbSchema(config tpg.DBConfig) error {
 			body bytea,
 			idempotency_key VARCHAR (50),
 			metadata JSONB,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			migration INTEGER NOT NULL DEFAULT 0,
-			migrated BOOLEAN NOT NULL DEFAULT false,
-			sink_part INTEGER NOT NULL DEFAULT 0,
-			sink_seq BIGINT NOT NULL DEFAULT 0
+			migrated BOOLEAN NOT NULL DEFAULT false
 		);`,
 		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);`,
 		`CREATE INDEX evt_id_migrated_idx ON events (id, migration);`,
@@ -105,7 +103,6 @@ func dbSchema(config tpg.DBConfig) error {
 		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
 		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migration);`,
 		`CREATE INDEX evt_metadata_idx ON events USING GIN (metadata jsonb_path_ops);`,
-		`CREATE INDEX evt_sink_seq_idx ON events (sink_part, sink_seq, migration);`,
 
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,
@@ -113,11 +110,19 @@ func dbSchema(config tpg.DBConfig) error {
 			aggregate_version INTEGER NOT NULL,
 			aggregate_kind VARCHAR (50) NOT NULL,
 			body bytea NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW()::TIMESTAMP,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			FOREIGN KEY (id) REFERENCES events (id)
 		);`,
 		`CREATE INDEX snap_agg_id_idx ON snapshots (aggregate_id);`,
 		`CREATE PUBLICATION events_pub FOR TABLE events WITH (publish = 'insert');`,
+		`CREATE TABLE IF NOT EXISTS outbox(
+			id VARCHAR (50) PRIMARY KEY,
+			aggregate_id VARCHAR (50) NOT NULL,
+			aggregate_id_hash INTEGER NOT NULL,
+			aggregate_kind VARCHAR (50) NOT NULL,
+			kind VARCHAR (50) NOT NULL,
+			metadata JSONB
+		);`,
 	}
 
 	for _, s := range sqls {

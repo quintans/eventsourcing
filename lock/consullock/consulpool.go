@@ -1,10 +1,10 @@
 package consullock
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/quintans/faults"
 )
 
 type Pool struct {
@@ -19,7 +19,7 @@ func NewPool(consulAddress string) (Pool, error) {
 	}
 
 	if err != nil {
-		return Pool{}, fmt.Errorf("session create err: %w", err)
+		return Pool{}, faults.Errorf("session create err: %w", err)
 	}
 
 	return Pool{

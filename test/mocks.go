@@ -9,6 +9,7 @@ import (
 
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/projection"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/worker"
 	"github.com/quintans/faults"
 )
@@ -135,7 +136,7 @@ func NewInMemResumeStore() *InMemResumeStore {
 func (s *InMemResumeStore) GetStreamResumeToken(ctx context.Context, key projection.ResumeKey) (string, error) {
 	value, ok := s.tokens.Load(key.String())
 	if !ok {
-		return "", projection.ErrResumeTokenNotFound
+		return "", store.ErrResumeTokenNotFound
 	}
 	return value.(string), nil
 }

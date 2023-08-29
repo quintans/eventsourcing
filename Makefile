@@ -25,10 +25,10 @@ test-redis: docker-clean
 test-consul: docker-clean
 	go test -tags consul -race -count=1 -v -p 1 ./...
 
-test-e2e: docker-clean
-	go test -tags e2e -race -count=1 -v -p 1 ./...
+test-integration: docker-clean
+	go test -tags integration -race -count=1 -v -p 1 ./...
 
-test-all: test test-redis test-consul test-pg test-mysql test-mongo test-e2e docker-clean
+test-all: test test-redis test-consul test-pg test-mysql test-mongo test-integration docker-clean
 
 .PHONY: generate
 generate:

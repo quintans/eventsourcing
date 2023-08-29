@@ -94,20 +94,17 @@ func dbSchema(dbURL string) error {
 			aggregate_version INTEGER NOT NULL,
 			aggregate_kind VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
+			metadata JSON,
 			body VARBINARY(60000),
 			idempotency_key VARCHAR (50),
-			metadata JSON,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			migration INTEGER NOT NULL DEFAULT 0,
-			migrated BOOLEAN NOT NULL DEFAULT false,
-			sink_part INTEGER NOT NULL DEFAULT 0,
-			sink_seq BIGINT UNSIGNED NOT NULL DEFAULT 0
+			migrated BOOLEAN NOT NULL DEFAULT false
 		)ENGINE=innodb;`,
 		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);`,
 		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);`,
 		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
 		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migration);`,
-		`CREATE INDEX evt_sink_seq_idx ON events (sink_part, sink_seq, migration);`,
 
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,
@@ -119,12 +116,20 @@ func dbSchema(dbURL string) error {
 			FOREIGN KEY (id) REFERENCES events (id)
 		)ENGINE=innodb;`,
 		`CREATE INDEX agg_id_idx ON snapshots(aggregate_id);`,
+		`CREATE TABLE IF NOT EXISTS outbox(
+			id VARCHAR (50) PRIMARY KEY,
+			aggregate_id VARCHAR (50) NOT NULL,
+			aggregate_id_hash INTEGER NOT NULL,
+			aggregate_kind VARCHAR (50) NOT NULL,
+			kind VARCHAR (50) NOT NULL,
+			metadata JSON
+		);`,
 	}
 
 	for _, cmd := range cmds {
 		_, err := db.Exec(cmd)
 		if err != nil {
-			return fmt.Errorf("failed to execute '%s': %w", cmd, err)
+			return faults.Errorf("failed to execute '%s': %w", cmd, err)
 		}
 	}
 

@@ -22,9 +22,7 @@ type Subscriber interface {
 	Subscribe(string, Subscription)
 }
 
-type Publisher interface {
-	Publish(context.Context, ...*eventsourcing.Event) error
-}
+type InTxHandler func(context.Context, *eventsourcing.Event) error
 
 type EventBus struct {
 	subscribers []subscription

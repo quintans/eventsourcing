@@ -20,8 +20,6 @@ import (
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
-	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util"
 )
 
 const (
@@ -31,17 +29,6 @@ const (
 )
 
 type FeedLogreplOption func(*FeedLogrepl)
-
-func WithLogRepPartitions(partitions, partitionsLow, partitionsHi uint32) FeedLogreplOption {
-	return func(p *FeedLogrepl) {
-		if partitions <= 1 {
-			return
-		}
-		p.partitions = partitions
-		p.partitionsLow = partitionsLow
-		p.partitionsHi = partitionsHi
-	}
-}
 
 func WithPublication(publicationName string) FeedLogreplOption {
 	return func(p *FeedLogrepl) {
@@ -63,26 +50,18 @@ func WithEventsTable(col string) FeedLogreplOption {
 
 type FeedLogrepl struct {
 	dburl                 string
-	partitions            uint32
-	partitionsLow         uint32
-	partitionsHi          uint32
 	publicationName       string
 	slotIndex             int
 	totalSlots            int
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker
 	eventsTable           string
-	setSeqRepo            SetSeqRepository
-}
-
-type SetSeqRepository interface {
-	SetSinkData(ctx context.Context, eID eventid.EventID, data sink.Data) error
 }
 
 // NewFeed creates a new Postgresql 10+ logic replication feed.
 // slotIndex is the index of this feed in a group of feeds. Its value should be between 1 and totalSlots.
 // slotIndex=1 has a special maintenance behaviour of dropping any slot above totalSlots.
-func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, setSeqRepo SetSeqRepository, options ...FeedLogreplOption) (FeedLogrepl, error) {
+func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, options ...FeedLogreplOption) (FeedLogrepl, error) {
 	if slotIndex < 1 || slotIndex > totalSlots {
 		return FeedLogrepl{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
 	}
@@ -94,7 +73,6 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, s
 		backoffMaxElapsedTime: 10 * time.Second,
 		sinker:                sinker,
 		eventsTable:           defaultEventsTable,
-		setSeqRepo:            setSeqRepo,
 	}
 
 	for _, o := range options {
@@ -108,18 +86,21 @@ func NewFeed(connString string, slotIndex, totalSlots int, sinker sink.Sinker, s
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
 func (f *FeedLogrepl) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
-	err := store.ForEachSequenceInSinkPartitions(ctx, f.sinker, f.partitionsLow, f.partitionsHi, func(_ uint64, message *sink.Message) error {
-		xLogPos, err := pglogrepl.ParseLSN(string(message.ResumeToken))
+	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
+		xLogPos, err := pglogrepl.ParseLSN(resumeToken.AsString())
 		if err != nil {
 			return faults.Errorf("ParseLSN failed: %w", err)
 		}
+
+		// looking for the highest sequence in all partitions.
+		// Sending a message to partitions is done synchronously and in order, so we should start from the last successful sent message.
 		if xLogPos > lastResumeToken {
 			lastResumeToken = xLogPos
 		}
 		return nil
 	})
 	if err != nil {
-		return err
+		return faults.Wrap(err)
 	}
 
 	conn, err := pgconn.Connect(ctx, f.dburl)
@@ -210,11 +191,7 @@ func (f *FeedLogrepl) Run(ctx context.Context) error {
 					if event == nil {
 						continue
 					}
-					data, err := f.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: []byte(clientXLogPos.String())})
-					if err != nil {
-						return faults.Wrap(backoff.Permanent(err))
-					}
-					err = f.setSeqRepo.SetSinkData(ctx, event.ID, data)
+					err = f.sinker.Sink(context.Background(), event, sink.Meta{ResumeToken: []byte(clientXLogPos.String())})
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
@@ -253,13 +230,11 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		if f.partitions > 0 {
-			// check if the event is to be forwarded to the sinker
-			part := util.WhichPartition(uint32(aggregateIDHash), f.partitions)
-			if part < f.partitionsLow || part > f.partitionsHi {
-				// we exit the loop because all rows are for the same aggregate
-				return nil, nil
-			}
+
+		// check if the event is to be forwarded to the sinker
+		if !f.sinker.Accepts(uint32(aggregateIDHash)) {
+			// filtering out events that are not inside the partition range
+			return nil, nil
 		}
 
 		var id string
@@ -292,6 +267,8 @@ func (f FeedLogrepl) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
+		// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
+		// They will be populate with the values returned by the sink.
 		e := eventsourcing.Event{
 			ID:               eid,
 			AggregateID:      aggregateID,

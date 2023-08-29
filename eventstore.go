@@ -55,8 +55,6 @@ type Event struct {
 	Metadata         *encoding.JSON
 	CreatedAt        time.Time
 	Migrated         bool
-	Partition        uint32
-	Sequence         uint64
 }
 
 func (e *Event) IsZero() bool {
@@ -140,9 +138,9 @@ type EventRecordDetail struct {
 
 type PersistOptions struct {
 	IdempotencyKey string
-	// Labels tags the event. eg: {"geo": "EU"}
-	Labels map[string]interface{}
-	clock  util.Clocker
+	// Metadata tags the event. eg: {"geo": "EU"}
+	Metadata map[string]interface{}
+	clock    util.Clocker
 }
 
 type PersistOption func(*PersistOptions)
@@ -155,7 +153,7 @@ func WithIdempotencyKey(key string) PersistOption {
 
 func WithMetadata(metadata map[string]interface{}) PersistOption {
 	return func(o *PersistOptions) {
-		o.Labels = metadata
+		o.Metadata = metadata
 	}
 }
 
@@ -344,7 +342,7 @@ func (es EventStore[T]) save(
 		Version:        version,
 		AggregateKind:  tName,
 		IdempotencyKey: opts.IdempotencyKey,
-		Metadata:       opts.Labels,
+		Metadata:       opts.Metadata,
 		CreatedAt:      now,
 		Details:        details,
 	}

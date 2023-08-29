@@ -9,6 +9,20 @@ The goal of this project is to implement an event store and how this event store
 
 This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS and eventually be consumed by a projector.
 
+This project offers implementation for the following:
+
+**Event Stores**
+* MySQL
+* PostgreSQL
+* Mongo
+
+and
+
+**Event BUS**
+* NATS
+* Kafka
+
+
 To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
 We can write the read model into the same database in the same transaction as the write model (dual write).
 
@@ -302,119 +316,6 @@ If the events are delivered concurrently, we just have a concurrent error.
 
 The goal of an idempotency key is not to fail an operation but to allow us to skip an operation (if the data is still the same). 
 
-Some pseudo code:
-
-```go
-func (p Reactor) Handler(ctx context.Context, e eventsourcing.Event) error {
-	evt,  := eventsourcing.RehydrateEvent(p.factory, p.codec, nil, e.Kind, e.Body)
-
-	switch t := evt.(type) {
-	case event.TransactionCreated:
-		err = p.TransactionCreated(ctx, t)
-	case event.TransactionFailed:
-		err = p.txUC.TransactionFailed(ctx, aggID, t)
-	}
-	return err
-}
-
-// TransactionCreated processes a transaction.
-// This demonstrates how we can use the idempotency key to guard against duplicated events.
-// Since all aggregates belong to the same service, there is no reason to split into several event handlers.
-func (uc Reactor) TransactionCreated(ctx context.Context, e event.TransactionCreated) error {
-	ok, err := uc.whitdraw(ctx, e.From, e.Money, e.ID)
-	if !ok || err != nil {
-		return err
-	}
-
-	ok, err = uc.deposit(ctx, e.To, e.Money, e.ID)
-	if !ok || err != nil {
-		return err
-	}
-
-	// complete transaction
-	return uc.txRepo.Exec(ctx, e.ID, func(t *entity.Transaction) (*entity.Transaction, error) {
-		t.Succeeded()
-		return t, nil
-	}, eventsourcing.EmptyIdempotencyKey)
-}
-
-func (uc Reactor) whitdraw(ctx context.Context, accID uuid.UUID, money int64, txID uuid.UUID) (bool, error) {
-	if accID == uuid.Nil {
-		return true, nil
-	}
-
-	var failed bool
-	idempotencyKey := txID.String() + "/withdraw"
-	err := uc.accRepo.Exec(ctx, accID, func(acc *entity.Account) (*entity.Account, error) {
-		err := acc.Withdraw(txID, money)
-		if err == nil {
-			return acc, nil
-		}
-
-		failed = true
-		// transaction failed
-		errTx := uc.txRepo.Exec(ctx, txID, func(tx *entity.Transaction) (*entity.Transaction, error) {
-			tx.WithdrawFailed("From account: " + err.Error())
-			return tx, nil
-		}, idempotencyKey)
-
-		return nil, errTx
-	}, idempotencyKey)
-	if failed || err != nil {
-		return false, err
-	}
-
-	return true, nil
-}
-
-func (uc Reactor) deposit(ctx context.Context, accID uuid.UUID, money int64, txID uuid.UUID) (bool, error) {
-	if accID == uuid.Nil {
-		return true, nil
-	}
-
-	var failed bool
-	idempotencyKey := txID.String() + "/deposit"
-	err := uc.accRepo.Exec(ctx, accID, func(acc *entity.Account) (*entity.Account, error) {
-		err := acc.Deposit(txID, money)
-		if err == nil {
-			return acc, nil
-		}
-
-		failed = true
-		// transaction failed. Need to rollback withdraw
-		errTx := uc.txRepo.Exec(ctx, txID, func(tx *entity.Transaction) (*entity.Transaction, error) {
-			tx.DepositFailed("To account: " + err.Error())
-			return tx, nil
-		}, idempotencyKey)
-
-		return nil, errTx
-	}, idempotencyKey)
-	if failed || err != nil {
-		return false, err
-	}
-
-	return true, nil
-}
-
-func (uc Reactor) TransactionFailed(ctx context.Context, aggregateID uuid.UUID, e event.TransactionFailed) error {
-	if !e.Rollback {
-		return nil
-	}
-
-	tx, err := uc.txRepo.Get(ctx, aggregateID)
-	if err != nil {
-		return err
-	}
-	err = uc.accRepo.Exec(ctx, tx.From, func(acc *entity.Account) (*entity.Account, error) {
-		err := acc.Deposit(tx.ID, tx.Money)
-		return acc, err
-	}, tx.ID.String()+"/rollback")
-
-	return err
-}
-```
-
----
 
 ## Event Sourcing + Command Query Responsibility Segregation (CQRS)
 
@@ -465,7 +366,7 @@ Regarding the event-bus, this will not be a problem if we consider a limited ret
 
 ## Performance
 
-### Key Partition
+### Key Partition for an event bus without (NATS)
 
 The read side may become a bottleneck as it handles more aggregates and do more database operations to create a consistent projection. An approach is needed to evenly distribute this load over the existing services instances, and this can be done with key partitioning.
 
@@ -556,7 +457,7 @@ workers := return projection.EventForwarderWorkers(ctx, logger, "forwarder", loc
 
 ```
 
-### Client Balancing
+### Client Balancing for Event Bus without consumer groups
 
 Since events can be partitioned when forwarding database changes we provide a client balancer to spread the partitions over a set of workers in different service instances.
 

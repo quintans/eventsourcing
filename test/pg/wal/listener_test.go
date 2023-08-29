@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
 	tpg "github.com/quintans/eventsourcing/test/pg"
@@ -33,12 +32,12 @@ func TestListener(t *testing.T) {
 	t.Parallel()
 
 	testcases := []struct {
-		name           string
-		partitionSlots []slot
+		name       string
+		splitSlots []slot
 	}{
 		{
 			name: "no_partition",
-			partitionSlots: []slot{
+			splitSlots: []slot{
 				{
 					low:  1,
 					high: 1,
@@ -47,7 +46,7 @@ func TestListener(t *testing.T) {
 		},
 		{
 			name: "two_single_partitions",
-			partitionSlots: []slot{
+			splitSlots: []slot{
 				{
 					low:  1,
 					high: 1,
@@ -60,7 +59,7 @@ func TestListener(t *testing.T) {
 		},
 		{
 			name: "two_double_partitions",
-			partitionSlots: []slot{
+			splitSlots: []slot{
 				{
 					low:  1,
 					high: 2,
@@ -88,10 +87,9 @@ func TestListener(t *testing.T) {
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
-			partitions := partitionSize(tt.partitionSlots)
-			s := test.NewMockSink(partitions)
+			data := test.NewMockSinkData()
 			ctx, cancel := context.WithCancel(context.Background())
-			errs, err := feeding(ctx, dbConfig, partitions, tt.partitionSlots, s, repository)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
 
 			id := util.MustNewULID()
@@ -110,11 +108,8 @@ func TestListener(t *testing.T) {
 
 			// simulating shutdown
 			cancel()
-			for i := 0; i < len(tt.partitionSlots); i++ {
-				require.NoError(t, <-errs, "Error feeding #1: %d", i)
-			}
 
-			events := s.GetEvents()
+			events := data.GetEvents()
 			require.Equal(t, 3, len(events), "event size")
 			assert.Equal(t, "AccountCreated", events[0].Kind.String())
 			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
@@ -130,32 +125,26 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s, repository)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
-			events = s.GetEvents()
+			events = data.GetEvents()
 			assert.Len(t, events, 5, "event size")
 
 			cancel()
-			for i := 0; i < len(tt.partitionSlots); i++ {
-				require.NoError(t, <-errs, "Error feeding #2: %d", i)
-			}
 
 			// resume from the begginning
-			s = test.NewMockSink(partitions)
+			data = test.NewMockSinkData()
 			ctx, cancel = context.WithCancel(context.Background())
-			errs, err = feeding(ctx, dbConfig, partitions, tt.partitionSlots, s, repository)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
-			events = s.GetEvents()
+			events = data.GetEvents()
 			assert.Equal(t, 5, len(events), "event size")
 
 			cancel()
-			for i := 0; i < len(tt.partitionSlots); i++ {
-				require.NoError(t, <-errs, "Error feeding #3: %d", i)
-			}
 		})
 	}
 }
@@ -170,27 +159,28 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tpg.DBConfig, partitions uint32, slots []slot, sinker sink.Sinker, seqRepo postgresql.SetSeqRepository) (chan error, error) {
-	errCh := make(chan error, len(slots))
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, slots []slot, data *test.MockSinkData) error {
+	partitions := partitionSize(slots)
+
 	var wg sync.WaitGroup
 	for k, v := range slots {
-		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), sinker, seqRepo, postgresql.WithLogRepPartitions(partitions, v.low, v.high))
+		mockSink := test.NewMockSink(data, partitions, v.low, v.high)
+		listener, err := postgresql.NewFeed(dbConfig.ReplicationURL(), k+1, len(slots), mockSink)
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return faults.Wrap(err)
 		}
+
 		wg.Add(1)
 		go func() {
 			wg.Done()
 			err := listener.Run(ctx)
 			if err != nil && !errors.Is(err, context.Canceled) {
-				errCh <- err
-			} else {
-				errCh <- nil
+				panic(err)
 			}
 		}()
 	}
 	// wait for all goroutines to start
 	wg.Wait()
 	time.Sleep(2 * time.Second)
-	return errCh, nil
+	return nil
 }
