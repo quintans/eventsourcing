@@ -9,7 +9,6 @@ import (
 
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/util"
 )
 
 const (
@@ -140,7 +139,6 @@ type PersistOptions struct {
 	IdempotencyKey string
 	// Metadata tags the event. eg: {"geo": "EU"}
 	Metadata map[string]interface{}
-	clock    util.Clocker
 }
 
 type PersistOption func(*PersistOptions)
@@ -154,13 +152,6 @@ func WithIdempotencyKey(key string) PersistOption {
 func WithMetadata(metadata map[string]interface{}) PersistOption {
 	return func(o *PersistOptions) {
 		o.Metadata = metadata
-	}
-}
-
-// WithClock allows to set a logical clock and time relate two aggregates
-func WithClock(clock util.Clocker) PersistOption {
-	return func(o *PersistOptions) {
-		o.clock = clock
 	}
 }
 
@@ -314,14 +305,10 @@ func (es EventStore[T]) save(
 		return nil
 	}
 
-	opts := PersistOptions{
-		clock: util.NewClock(),
-	}
+	opts := PersistOptions{}
 	for _, fn := range options {
 		fn(&opts)
 	}
-
-	now := opts.clock.After(updatedAt)
 
 	tName := aggregate.GetKind()
 	details := make([]EventRecordDetail, eventsLen)
@@ -337,6 +324,7 @@ func (es EventStore[T]) save(
 		}
 	}
 
+	now := time.Now()
 	rec := &EventRecord{
 		AggregateID:    aggregate.GetID(),
 		Version:        version,

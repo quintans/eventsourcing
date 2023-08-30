@@ -62,7 +62,7 @@ func TestSaveAndGet(t *testing.T) {
 
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.MustNewULID()
+	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
@@ -182,7 +182,7 @@ func TestPollListener(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.MustNewULID()
+	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
@@ -244,7 +244,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.MustNewULID()
+	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
@@ -306,7 +306,7 @@ func TestListenerWithLabels(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.MustNewULID()
+	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
@@ -370,7 +370,7 @@ func TestForget(t *testing.T) {
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.MustNewULID()
+	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.UpdateOwner("Paulo Quintans")

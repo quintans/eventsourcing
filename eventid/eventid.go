@@ -1,11 +1,9 @@
 package eventid
 
 import (
-	"crypto/rand"
 	"database/sql/driver"
 	"errors"
-	"io"
-	mrand "math/rand"
+	"math/rand"
 	"time"
 
 	"github.com/quintans/faults"
@@ -26,39 +24,28 @@ type EventID struct {
 	u ulid.ULID
 }
 
-type Entropy struct {
-	entropy *ulid.MonotonicEntropy
+func entropyFactory() *ulid.MonotonicEntropy {
+	entropy := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return ulid.Monotonic(entropy, 0)
 }
 
-func NewEntropy() *Entropy {
-	return &Entropy{
-		// beware that entropy isn't safe for concurrent use.
-		entropy: ulid.Monotonic(rand.Reader, 0),
-	}
+func New() EventID {
+	return EventID{ulid.Make()}
 }
 
-func (e *Entropy) NewID(t time.Time) (EventID, error) {
-	return New(t, e.entropy)
-}
-
-func EntropyFactory(t time.Time) *ulid.MonotonicEntropy {
-	return ulid.Monotonic(mrand.New(mrand.NewSource(t.UnixNano())), 0)
-}
-
-func New(t time.Time, entropy io.Reader) (EventID, error) {
+func NewWithTime(t time.Time) EventID {
+	entropy := entropyFactory()
 	id, err := ulid.New(ulid.Timestamp(t), entropy)
-	if err != nil {
-		return Zero, err
-	}
-	return EventID{u: id}, nil
-}
-
-func MustNew(t time.Time, entropy io.Reader) EventID {
-	id, err := New(t, entropy)
 	if err != nil {
 		panic(err)
 	}
-	return id
+	return EventID{id}
+}
+
+func NewAfterTime(t time.Time) EventID {
+	t = afterPlus1ms(t)
+
+	return NewWithTime(t)
 }
 
 func TimeOnly(t time.Time) EventID {
@@ -163,4 +150,53 @@ func (e *EventID) Scan(value interface{}) error {
 
 func (e EventID) Value() (driver.Value, error) {
 	return e.String(), nil
+}
+
+type Generator struct {
+	entropy *ulid.MonotonicEntropy
+	after   time.Time
+}
+
+func NewGeneratorNow() *Generator {
+	entropy := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return &Generator{
+		// beware that entropy isn't safe for concurrent use.
+		entropy: ulid.Monotonic(entropy, 0),
+		after:   time.Now(),
+	}
+}
+
+// NewGenerator generates EventIDs with time.Now().
+// If due to clock skews, time.Now() <= t + 1ms, then the time used will be t + 1ms.
+func NewGenerator(t time.Time) *Generator {
+	entropy := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return &Generator{
+		// beware that entropy isn't safe for concurrent use.
+		entropy: ulid.Monotonic(entropy, 0),
+		after:   t.Add(time.Millisecond),
+	}
+}
+
+func (s *Generator) NewID() EventID {
+	t := time.Now()
+	if t.Before(s.after) {
+		t = s.after
+	}
+	id, err := ulid.New(ulid.Timestamp(t), s.entropy)
+	if err != nil {
+		panic(err)
+	}
+	return EventID{id}
+}
+
+func afterPlus1ms(last time.Time) time.Time {
+	now := time.Now()
+	// due to clock skews, 't' can be less or equal than the last update
+	// so we make sure that it will be at least 1ms after.
+	if now.UnixMilli() <= last.UnixMilli() {
+		now = last.Add(time.Millisecond)
+	}
+	// we only need millisecond precision
+	now = now.Truncate(time.Millisecond)
+	return now
 }

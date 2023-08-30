@@ -12,17 +12,13 @@ import (
 
 func TestMarshal(t *testing.T) {
 	ts := ulid.Time(0x0000f00000000000)
-	entropy := EntropyFactory(ts)
-	eid, err := New(ts, entropy)
-	require.NoError(t, err)
+	eid := NewWithTime(ts)
 	assert.Equal(t, "7G00000000D0AJ8894M178DT3P", eid.String())
 }
 
 func TestUnmarshalWithCount(t *testing.T) {
 	ts := ulid.Time(0x0000f00000000000)
-	entropy := EntropyFactory(ts)
-	eid, err := New(ts, entropy)
-	require.NoError(t, err)
+	eid := NewWithTime(ts)
 
 	testCases := []struct {
 		name      string

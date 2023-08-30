@@ -92,7 +92,7 @@ func TestListener(t *testing.T) {
 			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
 
-			id := util.MustNewULID()
+			id := util.NewID()
 			acc, err := test.CreateAccount("Paulo", id, 100)
 			require.NoError(t, err)
 			acc.Deposit(10)
@@ -117,7 +117,7 @@ func TestListener(t *testing.T) {
 
 			ctx, cancel = context.WithCancel(context.Background())
 
-			id = util.MustNewULID()
+			id = util.NewID()
 			acc, err = test.CreateAccount("Quintans", id, 100)
 			require.NoError(t, err)
 			acc.Deposit(30)

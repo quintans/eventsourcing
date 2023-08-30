@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/quintans/faults"
 
@@ -107,25 +108,20 @@ func (r *EsRepository) saveMigration(
 	revision int,
 ) error {
 	version := last.AggregateVersion
-	clock := util.NewClockAfter(last.CreatedAt)
-	entropy := eventid.NewEntropy()
+	gen := eventid.NewGenerator(last.CreatedAt)
 
 	return r.WithTx(ctx, func(c context.Context, tx *sql.Tx) error {
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
-		t := clock.Now()
-		id, err := entropy.NewID(t)
-		if err != nil {
-			return faults.Wrap(err)
-		}
-		err = r.saveEvent(c, tx, &Event{
+		id := gen.NewID()
+		err := r.saveEvent(c, tx, &Event{
 			ID:               id,
 			AggregateID:      last.AggregateID,
 			AggregateIDHash:  util.Int32ring(last.AggregateIDHash),
 			AggregateVersion: version,
 			AggregateKind:    last.AggregateKind,
 			Kind:             eventsourcing.InvalidatedKind,
-			CreatedAt:        t,
+			CreatedAt:        time.Now(),
 		})
 		if err != nil {
 			return err
@@ -154,14 +150,11 @@ func (r *EsRepository) saveMigration(
 		}
 
 		// insert new events
+		now := time.Now()
 		var lastID eventid.EventID
-		t = clock.Now()
 		for _, mig := range migration {
 			version++
-			lastID, err = entropy.NewID(t)
-			if err != nil {
-				return faults.Wrap(err)
-			}
+			lastID = gen.NewID()
 			event := &Event{
 				ID:               lastID,
 				AggregateID:      last.AggregateID,
@@ -172,7 +165,7 @@ func (r *EsRepository) saveMigration(
 				Body:             mig.Body,
 				IdempotencyKey:   NilString(mig.IdempotencyKey),
 				Metadata:         mig.Metadata,
-				CreatedAt:        t,
+				CreatedAt:        now,
 				Migrated:         true,
 			}
 			err = r.saveEvent(c, tx, event)
@@ -200,7 +193,7 @@ func (r *EsRepository) saveMigration(
 				AggregateVersion: version,
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,
-				CreatedAt:        clock.Now(),
+				CreatedAt:        now,
 			})
 			if err != nil {
 				return err
