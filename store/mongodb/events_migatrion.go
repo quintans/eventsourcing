@@ -12,7 +12,6 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/util"
 )
 
 func (r *EsRepository) MigrateInPlaceCopyReplace(
@@ -130,18 +129,14 @@ func (r *EsRepository) saveMigration(
 	revision int,
 ) error {
 	version := last.AggregateVersion
-	clock := util.NewClockAfter(last.CreatedAt)
-	entropy := eventid.NewEntropy()
+	gen := eventid.NewGenerator(last.CreatedAt)
 
 	return r.WithTx(ctx, func(ctx context.Context) error {
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
-		t := clock.Now()
-		id, err := entropy.NewID(t)
-		if err != nil {
-			return faults.Wrap(err)
-		}
-		err = r.saveEvent(
+		now := time.Now()
+		id := gen.NewID()
+		err := r.saveEvent(
 			ctx,
 			&Event{
 				ID:               id.String(),
@@ -150,7 +145,7 @@ func (r *EsRepository) saveMigration(
 				AggregateVersion: version,
 				AggregateKind:    last.AggregateKind,
 				Kind:             eventsourcing.InvalidatedKind,
-				CreatedAt:        t,
+				CreatedAt:        now,
 			},
 			id,
 		)
@@ -191,17 +186,14 @@ func (r *EsRepository) saveMigration(
 
 		// insert new events
 		var lastID eventid.EventID
-		t = clock.Now()
+		now = time.Now()
 		for _, mig := range migration {
 			version++
 			metadata, err := mig.Metadata.AsMap()
 			if err != nil {
 				return faults.Wrap(err)
 			}
-			lastID, err = entropy.NewID(t)
-			if err != nil {
-				return faults.Wrap(err)
-			}
+			lastID = gen.NewID()
 			event := &Event{
 				ID:               lastID.String(),
 				AggregateID:      last.AggregateID,
@@ -212,7 +204,7 @@ func (r *EsRepository) saveMigration(
 				Body:             mig.Body,
 				IdempotencyKey:   mig.IdempotencyKey,
 				Metadata:         metadata,
-				CreatedAt:        t,
+				CreatedAt:        now,
 				Migrated:         true,
 			}
 			err = r.saveEvent(ctx, event, lastID)

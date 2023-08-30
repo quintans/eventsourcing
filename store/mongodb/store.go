@@ -180,15 +180,10 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventR
 	version := eRec.Version
 	idempotencyKey := eRec.IdempotencyKey
 	err := r.WithTx(ctx, func(ctx context.Context) error {
-		entropy := eventid.NewEntropy()
 		for _, e := range eRec.Details {
 			version++
-			var err error
-			id, err = entropy.NewID(eRec.CreatedAt)
-			if err != nil {
-				return faults.Wrap(err)
-			}
-			err = r.saveEvent(
+			id = e.ID
+			err := r.saveEvent(
 				ctx,
 				&Event{
 					ID:               id.String(),

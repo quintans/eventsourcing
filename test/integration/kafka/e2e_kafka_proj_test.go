@@ -52,7 +52,7 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	// before data
 	proj := projectionFromKafka(t, ctx, uris, esRepo)
 
-	id := util.MustNewULID()
+	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
@@ -93,7 +93,7 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
-	id := util.MustNewULID()
+	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)

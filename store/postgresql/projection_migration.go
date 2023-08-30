@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/avast/retry-go/v3"
 	"github.com/quintans/faults"
@@ -218,24 +219,19 @@ func (r *EsRepository) distinctAggregates(
 }
 
 func (r *EsRepository) addNoOp(ctx context.Context, metadata store.AggregateMetadata) error {
-	clock := util.NewClock()
-	t := clock.After(metadata.UpdatedAt)
 	ver := metadata.Version + 1
 	aggID := metadata.ID
 	hash := util.Hash(aggID)
-	id, err := eventid.NewEntropy().NewID(t)
-	if err != nil {
-		return faults.Wrap(err)
-	}
+	id := eventid.NewAfterTime(metadata.UpdatedAt)
 	tx := TxFromContext(ctx)
-	err = r.saveEvent(ctx, tx, &Event{
+	err := r.saveEvent(ctx, tx, &Event{
 		ID:               id,
 		AggregateID:      aggID,
 		AggregateIDHash:  util.Int32ring(hash),
 		AggregateVersion: ver,
 		AggregateKind:    metadata.Type,
 		Kind:             eventsourcing.KindNoOpEvent,
-		CreatedAt:        t,
+		CreatedAt:        time.Now(),
 	})
 	return faults.Wrap(err)
 }

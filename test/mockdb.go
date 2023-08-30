@@ -20,24 +20,22 @@ import (
 var _ projection.EventsRepository = (*InMemDB)(nil)
 
 type InMemDB struct {
-	mu      sync.RWMutex
-	events  []*eventsourcing.Event
-	cursor  *Cursor
-	entropy *ulid.MonotonicEntropy
+	mu     sync.RWMutex
+	events []*eventsourcing.Event
+	cursor *Cursor
 }
 
 func NewInMemDB() *InMemDB {
-	return &InMemDB{
-		entropy: eventid.EntropyFactory(time.Now()),
-	}
+	return &InMemDB{}
 }
 
 func (db *InMemDB) Add(event *eventsourcing.Event) *eventsourcing.Event {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	event.ID = NewID(db.entropy)
-	event.CreatedAt = time.Now().UTC()
+	t := time.Now()
+	event.ID = eventid.New()
+	event.CreatedAt = t.UTC()
 	db.events = append(db.events, event)
 
 	// signal all cursors of a change
@@ -54,8 +52,7 @@ func (db *InMemDB) Add(event *eventsourcing.Event) *eventsourcing.Event {
 }
 
 func NewID(entropy *ulid.MonotonicEntropy) eventid.EventID {
-	now := time.Now()
-	return eventid.MustNew(now, entropy)
+	return eventid.New()
 }
 
 func (db *InMemDB) GetFrom(id eventid.EventID) []*eventsourcing.Event {

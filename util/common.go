@@ -1,9 +1,7 @@
 package util
 
 import (
-	"crypto/rand"
 	"hash/fnv"
-	"time"
 
 	"github.com/oklog/ulid/v2"
 )
@@ -35,19 +33,8 @@ func In[T comparable](test T, values ...T) bool {
 	return false
 }
 
-func MustNewULID() ulid.ULID {
-	id, err := NewULID()
-	if err != nil {
-		panic(err)
-	}
-	return id
-}
-
-func NewULID() (ulid.ULID, error) {
-	t := time.Now().UTC()
-	entropy := ulid.Monotonic(rand.Reader, 0)
-
-	return ulid.New(ulid.Timestamp(t), entropy)
+func NewID() ulid.ULID {
+	return ulid.Make()
 }
 
 func IfZero[T comparable](test, def T) T {
