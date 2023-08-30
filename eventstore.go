@@ -131,6 +131,7 @@ type EventRecord struct {
 }
 
 type EventRecordDetail struct {
+	ID   eventid.EventID
 	Kind Kind
 	Body []byte
 }
@@ -310,6 +311,7 @@ func (es EventStore[T]) save(
 		fn(&opts)
 	}
 
+	gen := eventid.NewGenerator(updatedAt)
 	tName := aggregate.GetKind()
 	details := make([]EventRecordDetail, eventsLen)
 	for i := 0; i < eventsLen; i++ {
@@ -319,6 +321,7 @@ func (es EventStore[T]) save(
 			return er
 		}
 		details[i] = EventRecordDetail{
+			ID:   gen.NewID(),
 			Kind: e.GetKind(),
 			Body: body,
 		}

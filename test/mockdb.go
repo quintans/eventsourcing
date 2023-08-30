@@ -20,16 +20,13 @@ import (
 var _ projection.EventsRepository = (*InMemDB)(nil)
 
 type InMemDB struct {
-	mu      sync.RWMutex
-	events  []*eventsourcing.Event
-	cursor  *Cursor
-	entropy *eventid.Generator
+	mu     sync.RWMutex
+	events []*eventsourcing.Event
+	cursor *Cursor
 }
 
 func NewInMemDB() *InMemDB {
-	return &InMemDB{
-		entropy: eventid.NewGeneratorNow(),
-	}
+	return &InMemDB{}
 }
 
 func (db *InMemDB) Add(event *eventsourcing.Event) *eventsourcing.Event {
@@ -37,7 +34,7 @@ func (db *InMemDB) Add(event *eventsourcing.Event) *eventsourcing.Event {
 	defer db.mu.Unlock()
 
 	t := time.Now()
-	event.ID = db.entropy.NewID()
+	event.ID = eventid.New()
 	event.CreatedAt = t.UTC()
 	db.events = append(db.events, event)
 

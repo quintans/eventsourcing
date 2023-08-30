@@ -180,10 +180,9 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventR
 	version := eRec.Version
 	idempotencyKey := eRec.IdempotencyKey
 	err := r.WithTx(ctx, func(ctx context.Context) error {
-		gen := eventid.NewGenerator(eRec.CreatedAt)
 		for _, e := range eRec.Details {
 			version++
-			id = gen.NewID()
+			id = e.ID
 			err := r.saveEvent(
 				ctx,
 				&Event{

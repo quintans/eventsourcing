@@ -165,13 +165,11 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventR
 	version := eRec.Version
 	var id eventid.EventID
 	err := r.WithTx(ctx, func(c context.Context, tx *sql.Tx) error {
-		gen := eventid.NewGenerator(eRec.CreatedAt)
 		for _, e := range eRec.Details {
 			version++
+			id = e.ID
 			hash := util.Hash(eRec.AggregateID)
-			var err error
-			id = gen.NewID()
-			err = r.saveEvent(c, tx, &Event{
+			err := r.saveEvent(c, tx, &Event{
 				ID:               id,
 				AggregateID:      eRec.AggregateID,
 				AggregateIDHash:  util.Int32ring(hash),
