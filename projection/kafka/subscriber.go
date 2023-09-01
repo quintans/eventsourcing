@@ -179,7 +179,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 	}
 
 	gn := groupName(projName, s.topic)
-	client, err := sarama.NewConsumerGroupFromClient(gn, s.client)
+	group, err := sarama.NewConsumerGroupFromClient(gn, s.client)
 	if err != nil {
 		return faults.Errorf("creating consumer group '%s': %w", gn, err)
 	}
@@ -206,7 +206,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 			// `Consume` should be called inside an infinite loop, when a
 			// server-side rebalance happens, the consumer session will need to be
 			// recreated to get the new claims
-			if err := client.Consume(ctx, []string{s.topic}, &consumer); err != nil {
+			if err := group.Consume(ctx, []string{s.topic}, &consumer); err != nil {
 				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
 					return
 				}
@@ -230,7 +230,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 		logger.Infof("Terminating: context cancelled")
 
 		wg.Wait()
-		if err = client.Close(); err != nil {
+		if err = group.Close(); err != nil {
 			logger.WithError(err).Error("Error closing consumer group")
 		}
 	}()
@@ -250,39 +250,7 @@ type Consumer struct {
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
-func (c *Consumer) Setup(session sarama.ConsumerGroupSession) (er error) {
-	claims := session.Claims()
-
-	for topic, parts := range claims {
-		for _, part := range parts {
-			resume, err := projection.NewResumeKey(c.projName, topic, uint32(part+1))
-			if err != nil {
-				return faults.Wrap(err)
-			}
-
-			data, err := c.resumeStore.Get(session.Context(), resume.String())
-			if err != nil && !errors.Is(err, store.ErrResumeTokenNotFound) {
-				return faults.Errorf("Could not retrieve resume token for '%s': %w", c.sub.topic, err)
-			}
-
-			token, err := projection.ParseToken(data)
-			if err != nil {
-				return faults.Wrap(err)
-			}
-
-			var startOffset int64
-			if token.IsEmpty() {
-				c.logger.WithTags(log.Tags{"topic": c.sub.topic}).Info("Starting consuming all available events")
-				startOffset = 0
-			} else {
-				c.logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": topic}).Info("Starting consumer from an offset")
-				startOffset = int64(token.ConsumerSequence())
-			}
-
-			session.ResetOffset(topic, part, startOffset, "start")
-		}
-	}
-
+func (c *Consumer) Setup(_ sarama.ConsumerGroupSession) (er error) {
 	// Mark the consumer as ready
 	close(c.ready)
 	return nil
@@ -343,4 +311,115 @@ func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 			return nil
 		}
 	}
+}
+
+func (s *Subscriber) ResetConsumer(ctx context.Context, projName string) (er error) {
+	defer faults.Catch(&er, "ResetConsumer(projName=%s)", projName)
+
+	gn := groupName(projName, s.topic)
+	group, err := sarama.NewConsumerGroupFromClient(gn, s.client)
+	if err != nil {
+		return faults.Errorf("creating consumer group '%s': %w", gn, err)
+	}
+	logger := s.logger.WithTags(log.Tags{
+		"topic":          s.topic,
+		"consumer_group": gn,
+	})
+
+	consumer := ResetConsumer{
+		resumeStore: s.resumeStore,
+		logger:      logger,
+		sub:         s,
+		projName:    projName,
+		ready:       make(chan bool),
+	}
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			// `Consume` should be called inside an infinite loop, when a
+			// server-side rebalance happens, the consumer session will need to be
+			// recreated to get the new claims
+			if err := group.Consume(ctx, []string{s.topic}, &consumer); err != nil {
+				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
+					return
+				}
+				logger.WithError(err).Error("Error from consumer group")
+				return
+			}
+			// check if context was cancelled, signaling that the consumer should stop
+			if ctx.Err() != nil {
+				return
+			}
+
+			consumer.ready = make(chan bool)
+		}
+	}()
+
+	<-consumer.ready // Await till the consumer has been set up
+	if err = group.Close(); err != nil {
+		return faults.Errorf("closing consumer group: %w", err)
+	}
+	logger.Infof("Consumer group up reset!...")
+
+	return nil
+}
+
+// Consumer represents a Sarama consumer group consumer
+type ResetConsumer struct {
+	resumeStore store.KVRStore
+	logger      log.Logger
+	sub         *Subscriber
+	projName    string
+	ready       chan bool
+}
+
+// Setup is run at the beginning of a new session, before ConsumeClaim
+func (c *ResetConsumer) Setup(session sarama.ConsumerGroupSession) (er error) {
+	claims := session.Claims()
+
+	for topic, parts := range claims {
+		for _, part := range parts {
+			resume, err := projection.NewResumeKey(c.projName, topic, uint32(part+1))
+			if err != nil {
+				return faults.Wrap(err)
+			}
+
+			data, err := c.resumeStore.Get(session.Context(), resume.String())
+			if err != nil && !errors.Is(err, store.ErrResumeTokenNotFound) {
+				return faults.Errorf("Could not retrieve resume token for '%s': %w", c.sub.topic, err)
+			}
+
+			token, err := projection.ParseToken(data)
+			if err != nil {
+				return faults.Wrap(err)
+			}
+
+			var startOffset int64
+			if token.IsEmpty() {
+				c.logger.WithTags(log.Tags{"topic": c.sub.topic}).Info("Starting consuming all available events")
+				startOffset = 0
+			} else {
+				c.logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": topic}).Info("Starting consumer from an offset")
+				startOffset = int64(token.ConsumerSequence())
+			}
+
+			session.ResetOffset(topic, part, startOffset, "start")
+		}
+	}
+
+	// Mark the consumer as ready
+	close(c.ready)
+	return nil
+}
+
+// Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
+func (c *ResetConsumer) Cleanup(sarama.ConsumerGroupSession) error {
+	return nil
+}
+
+func (c *ResetConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	return nil
 }

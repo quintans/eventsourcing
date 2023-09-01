@@ -65,39 +65,32 @@ func Project(
 		projection.Name(),
 		nil,
 		func(ctx context.Context) error {
-			// saves into the resume db. It is fine if it sporadically fails. It will just pickup from there
 			checkPointCh := make(chan resumeKV, checkPointBuffer)
+			done := asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic, checkPointCh)
 			go func() {
-				for kv := range checkPointCh {
-					if (kv == resumeKV{}) {
-						// quit received
-						return
-					}
-
-					var t Token
-					if !kv.eventID.IsZero() {
-						t = NewCatchupToken(kv.eventID)
-					} else {
-						t = NewConsumerToken(kv.sequence)
-					}
-					err := saveResume(ctx, resumeStore, projection.Name(), topic, kv.partition, t)
-					if err != nil {
-						logger.WithError(err).WithTags(log.Tags{
-							"resumeKey": t.String(),
-							"token":     t.String(),
-						}).Errorf("Failed to save resume token")
-					}
+				select {
+				case <-ctx.Done():
+					checkPointCh <- resumeKV{} // signal quit
+				case <-done:
+					checkPointCh <- resumeKV{} // signal quit
 				}
-			}()
-			go func() {
-				<-ctx.Done()
-				checkPointCh <- resumeKV{} // signal quit
 			}()
 
 			err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore, checkPointCh)
 			if err != nil {
+				if errors.Is(err, ctx.Err()) {
+					return nil
+				}
 				return faults.Wrap(err)
 			}
+
+			<-done // wait for everything is saved before switching to the consumer phase
+
+			_ = asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic, checkPointCh)
+			go func() {
+				<-ctx.Done()
+				checkPointCh <- resumeKV{} // signal quit
+			}()
 
 			handler := func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error {
 				er := projection.Handle(ctx, e)
@@ -121,6 +114,40 @@ func Project(
 			return nil
 		},
 	)
+}
+
+func asyncSaveResumes(ctx context.Context, logger log.Logger, resumeStore store.KVStore, projName, topic string, checkPointCh chan resumeKV) <-chan struct{} {
+	done := make(chan struct{})
+
+	// saves into the resume db. It is fine if it sporadically fails. It will just pickup from there
+	go func() {
+		defer close(done)
+		for kv := range checkPointCh {
+			if (kv == resumeKV{}) {
+				// quit received
+				return
+			}
+
+			var t Token
+			if !kv.eventID.IsZero() {
+				t = NewCatchupToken(kv.eventID)
+			} else {
+				t = NewConsumerToken(kv.sequence)
+			}
+			err := saveResume(ctx, resumeStore, projName, topic, kv.partition, t)
+			if err != nil {
+				if errors.Is(err, ctx.Err()) {
+					return
+				}
+				logger.WithError(err).WithTags(log.Tags{
+					"resumeKey": t.String(),
+					"token":     t.String(),
+				}).Errorf("Failed to save resume token")
+			}
+		}
+	}()
+
+	return done
 }
 
 func joinUints(p []uint32) string {
@@ -170,7 +197,6 @@ func catchUp(
 		}
 	}
 
-	var subPos map[uint32]SubscriberPosition
 	options := projection.CatchUpOptions()
 	catchUpWindow := util.IfZero(options.CatchUpWindow, defaultCatchupWindow)
 
@@ -181,7 +207,7 @@ func catchUp(
 		start := time.Now()
 
 		var er error
-		subPos, er = subscriber.Positions(ctx)
+		subPos, er := subscriber.Positions(ctx)
 		if er != nil {
 			return faults.Wrap(er)
 		}
@@ -268,14 +294,17 @@ func catchUp(
 
 		// if the catch up took less than catchUpWindow we can safely exit and switch to the event bus
 		if time.Since(start) < catchUpWindow {
+
+			// save all positions before switching
+			for partition, pos := range subPos {
+				checkPointCh <- resumeKV{
+					partition: partition,
+					sequence:  pos.Position,
+				}
+			}
+
 			break
 		}
-	}
-
-	// save all positions before switching
-	err := saveConsumerPositions(ctx, resumeStore, projection.Name(), topic, subPos)
-	if err != nil {
-		return faults.Wrap(err)
 	}
 
 	logger.Info("Finished successfully catching up projection")
@@ -353,18 +382,6 @@ func getSavedToken(ctx context.Context, topic string, partition uint32, prj Proj
 	}
 
 	return token, faults.Wrap(err)
-}
-
-func saveConsumerPositions(ctx context.Context, resumeStore store.KVStore, prjName, topic string, subPos map[uint32]SubscriberPosition) (e error) {
-	defer faults.Catch(&e, "saveConsumerPositions")
-
-	for partition, pos := range subPos {
-		err := saveResume(ctx, resumeStore, prjName, topic, partition, NewConsumerToken(pos.Position))
-		if err != nil {
-			return faults.Wrap(err)
-		}
-	}
-	return nil
 }
 
 func saveResume(ctx context.Context, resumeStore store.KVStore, prjName, topic string, partition uint32, t Token) (e error) {
