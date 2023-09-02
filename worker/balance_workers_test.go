@@ -6,29 +6,24 @@ package worker_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 
-	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/worker"
 )
 
 var (
 	lockerPool = test.NewInMemLockerPool()
-	logger     log.LogrusWrap
+	logger     = slog.New(slog.NewTextHandler(os.Stdout, nil))
 )
-
-func init() {
-	logrus.SetLevel(logrus.ErrorLevel)
-	logger = log.NewLogrus(logrus.StandardLogger())
-}
 
 func TestMembersList(t *testing.T) {
 	members := &sync.Map{}
@@ -135,7 +130,7 @@ func newBalancer(name string, members *sync.Map) ([]worker.Worker, context.Cance
 	member := test.NewInMemMemberList(ctx, members)
 	ws := getWorkers(name)
 	balancer := worker.NewMembersBalancer(
-		log.NewLogrus(logrus.StandardLogger()),
+		slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		name,
 		member,
 		ws,

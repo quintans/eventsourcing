@@ -2,10 +2,10 @@ package integration
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
-	eslog "github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/mysql"
@@ -17,7 +17,7 @@ import (
 
 // EventForwarderWorkerToNATS creates workers that listen to database changes,
 // transform them to events and publish them into the message bus.
-func EventForwarderWorker(t *testing.T, ctx context.Context, logger eslog.Logger, ltx *latch.CountDownLatch, dbConfig shared.DBConfig, sinker sink.Sinker) {
+func EventForwarderWorker(t *testing.T, ctx context.Context, logger *slog.Logger, ltx *latch.CountDownLatch, dbConfig shared.DBConfig, sinker sink.Sinker) {
 	lockExpiry := 10 * time.Second
 
 	dbConf := mysql.DBConfig{

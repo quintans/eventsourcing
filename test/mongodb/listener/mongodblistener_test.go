@@ -5,6 +5,7 @@ package listener
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -12,19 +13,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
 	tmg "github.com/quintans/eventsourcing/test/mongodb"
 	"github.com/quintans/eventsourcing/util"
 )
 
-var logger = log.NewLogrus(logrus.StandardLogger())
+var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 type slot struct {
 	low  uint32

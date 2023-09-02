@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/quintans/faults"
 
@@ -23,7 +24,7 @@ const checkPointBuffer = 1_000
 
 type Sink struct {
 	kvStore    store.KVStore
-	logger     log.Logger
+	logger     *slog.Logger
 	producer   sarama.SyncProducer
 	topic      string
 	partitions []uint32
@@ -39,7 +40,7 @@ type resume struct {
 }
 
 // NewSink instantiate a Kafka sink
-func NewSink(logger log.Logger, kvStore store.KVStore, topic string, brokers []string) (*Sink, error) {
+func NewSink(logger *slog.Logger, kvStore store.KVStore, topic string, brokers []string) (*Sink, error) {
 	// producer config
 	config := sarama.NewConfig()
 	config.Producer.Retry.Max = 5
@@ -63,7 +64,7 @@ func NewSink(logger log.Logger, kvStore store.KVStore, topic string, brokers []s
 
 	s := &Sink{
 		kvStore:      kvStore,
-		logger:       logger.WithTags(log.Tags{"sink": "kafka"}),
+		logger:       logger.With("sink", "kafka"),
 		topic:        topic,
 		codec:        sink.JSONCodec{},
 		producer:     prd,
@@ -83,10 +84,11 @@ func NewSink(logger log.Logger, kvStore store.KVStore, topic string, brokers []s
 			ts := cp.value.String()
 			err := s.kvStore.Put(context.Background(), cp.key, ts)
 			if err != nil {
-				logger.WithError(err).WithTags(log.Tags{
-					"topic":  topic,
-					"resume": ts,
-				}).Error("Failed to save sink resume key")
+				logger.Error("Failed to save sink resume key",
+					"topic", topic,
+					"resume", ts,
+					log.Err(err),
+				)
 			}
 		}
 	}()

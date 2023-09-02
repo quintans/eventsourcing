@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 
 func NewSubscriberWithBrokers(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	brokers []string,
 	topic string,
 	config *sarama.Config,
@@ -64,7 +65,7 @@ func WithMsgCodec(codec sink.Codec) SubOption {
 var _ projection.Consumer = (*Subscriber)(nil)
 
 type Subscriber struct {
-	logger     log.Logger
+	logger     *slog.Logger
 	client     sarama.Client
 	topic      string
 	partitions []uint32
@@ -75,7 +76,7 @@ type Subscriber struct {
 }
 
 func NewSubscriberWithClient(
-	logger log.Logger,
+	logger *slog.Logger,
 	client sarama.Client,
 	topic string,
 	options ...SubOption,
@@ -88,12 +89,11 @@ func NewSubscriberWithClient(
 	if err != nil {
 		return nil, faults.Errorf("getting partitions: %w", err)
 	}
-
 	s := &Subscriber{
-		logger: logger.WithTags(log.Tags{
-			"subscriber": "kafka",
-			"id":         "subscriber-" + shortid.MustGenerate(),
-		}),
+		logger: logger.With(
+			"subscriber", "kafka",
+			"id", "subscriber-"+shortid.MustGenerate(),
+		),
 		client:     client,
 		topic:      topic,
 		partitions: util.NormalizePartitions(partitions),
@@ -203,10 +203,10 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 	if err != nil {
 		return faults.Errorf("creating consumer group '%s': %w", gID, err)
 	}
-	logger := s.logger.WithTags(log.Tags{
-		"topic":          s.topic,
-		"consumer_group": gID,
-	})
+	logger := s.logger.With(
+		"topic", s.topic,
+		"consumer_group", gID,
+	)
 
 	consumer := Consumer{
 		logger:   logger,
@@ -231,7 +231,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
 					return
 				}
-				logger.WithError(err).Error("Error from consumer")
+				logger.Error("Error from consumer", log.Err(err))
 				return
 			}
 			// check if context was cancelled, signaling that the consumer should stop
@@ -244,17 +244,17 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 	}()
 
 	<-consumer.ready // Await till the consumer has been set up
-	logger.Infof("Consumer group up and running!...")
+	logger.Info("Consumer group up and running!...")
 
 	s.AddShutdownHook(func() {
 		if err = group.Close(); err != nil {
-			logger.WithError(err).Error("Error closing consumer group")
+			logger.Error("Error closing consumer group", log.Err(err))
 		}
 	})
 
 	go func() {
 		<-ctx.Done()
-		logger.Infof("Terminating: context cancelled")
+		logger.Info("Terminating: context cancelled")
 
 		wg.Wait()
 		s.Shutdown()
@@ -265,7 +265,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 
 // Consumer represents a Sarama consumer group consumer
 type Consumer struct {
-	logger   log.Logger
+	logger   *slog.Logger
 	sub      *Subscriber
 	opts     projection.ConsumerOptions
 	projName string
@@ -287,10 +287,17 @@ func (c *Consumer) Setup(session sarama.ConsumerGroupSession) (er error) {
 	for part, pos := range c.subPos {
 		var startOffset int64
 		if pos.Position == 0 {
-			c.logger.WithTags(log.Tags{"topic": c.sub.topic, "partition": part - 1}).Info("Starting consuming all available events")
+			c.logger.Info("Starting consuming all available events",
+				"topic", c.sub.topic,
+				"partition", part-1,
+			)
 			startOffset = 0
 		} else {
-			c.logger.WithTags(log.Tags{"from": pos.Position + 1, "topic": c.topic, "partition": part - 1}).Info("Starting consumer from an offset")
+			c.logger.Info("Starting consumer from an offset",
+				"from", pos.Position+1,
+				"topic", c.topic,
+				"partition", part-1,
+			)
 			startOffset = int64(pos.Position + 1)
 		}
 

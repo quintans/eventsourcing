@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +21,7 @@ var _ Worker = (*RunWorker)(nil)
 
 // RunWorker is responsible for refreshing the lease
 type RunWorker struct {
-	logger     log.Logger
+	logger     *slog.Logger
 	name       string
 	group      string
 	locker     lock.Locker
@@ -30,14 +31,15 @@ type RunWorker struct {
 	mu         sync.RWMutex
 }
 
-func NewRunWorker(logger log.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
+func NewRunWorker(logger *slog.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
 	return newRunWorker(logger, name, group, locker, task)
 }
 
-func newRunWorker(logger log.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
-	logger = logger.WithTags(log.Tags{
-		"id": "worker-" + shortid.MustGenerate(),
-	})
+func newRunWorker(logger *slog.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
+	logger = logger.With(
+		"id", "worker-"+shortid.MustGenerate(),
+		"name", name,
+	)
 	return &RunWorker{
 		logger: logger,
 		name:   name,
@@ -108,12 +110,12 @@ func (w *RunWorker) Stop(ctx context.Context) {
 
 func (w *RunWorker) stop(ctx context.Context) {
 	if w.isRunning() {
-		w.logger.Infof("Stopping worker '%s'", w.name)
+		w.logger.Info("Stopping worker")
 		w.cancel()
 		if w.locker != nil {
 			err := w.locker.Unlock(ctx)
 			if err != nil {
-				w.logger.WithError(err).Error("Failed to unlock worker '%s'", w.name)
+				w.logger.Error("Failed to unlock worker", log.Err(err))
 			}
 			w.cancelLock()
 		}
@@ -124,12 +126,12 @@ func (w *RunWorker) stop(ctx context.Context) {
 func (w *RunWorker) start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	w.logger.Infof("Starting worker '%s'", w.name)
+	w.logger.Info("Starting worker")
 
 	go func() {
 		err := w.task(ctx)
 		if err != nil {
-			w.logger.WithError(err).Errorf("Error while running")
+			w.logger.Error("Error while running", log.Err(err))
 			w.Stop(context.Background())
 			return
 		}

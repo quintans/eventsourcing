@@ -3,7 +3,9 @@ package mongodb
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -16,12 +18,11 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 )
 
 type Feed struct {
-	logger           log.Logger
+	logger           *slog.Logger
 	connString       string
 	dbName           string
 	eventsCollection string
@@ -36,9 +37,9 @@ func WithFeedEventsCollection(eventsCollection string) FeedOption {
 	}
 }
 
-func NewFeed(logger log.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) (Feed, error) {
+func NewFeed(logger *slog.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) (Feed, error) {
 	feed := Feed{
-		logger:           logger.WithTags(log.Tags{"feed": "mongo"}),
+		logger:           logger.With("feed", "mongo"),
 		dbName:           database,
 		connString:       connString,
 		eventsCollection: "events",
@@ -57,7 +58,7 @@ type ChangeEvent struct {
 }
 
 func (f *Feed) Run(ctx context.Context) error {
-	f.logger.Infof("Starting Feed for '%s.%s'", f.dbName, f.eventsCollection)
+	f.logger.Info("Starting Feed", "dbName", f.dbName, "eventsCollection", f.eventsCollection)
 	var lastResumeToken []byte
 	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
 		if bytes.Compare(resumeToken, lastResumeToken) > 0 {
@@ -93,13 +94,13 @@ func (f *Feed) Run(ctx context.Context) error {
 	eventsCollection := client.Database(f.dbName).Collection(f.eventsCollection)
 	var eventsStream *mongo.ChangeStream
 	if len(lastResumeToken) != 0 {
-		f.logger.Infof("Starting feeding (partitions: %+v) from '%X'", partitions, lastResumeToken)
+		f.logger.Info("Starting feeding", "partitions", partitions, "lastResumeToken", hex.EncodeToString(lastResumeToken))
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
 		if err != nil {
 			return faults.Wrap(err)
 		}
 	} else {
-		f.logger.Infof("Starting feeding (partitions: %v) from the beginning", partitions)
+		f.logger.Info("Starting feeding from the beginning", "partitions", partitions)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
 		if err != nil {
 			return faults.Wrap(err)

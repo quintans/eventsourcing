@@ -26,7 +26,6 @@ require (
 	github.com/oklog/ulid/v2 v2.1.0
 	github.com/quintans/faults v1.7.1
 	github.com/quintans/toolkit v0.3.5
-	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.8.4
 	github.com/teris-io/shortid v0.0.0-20201117134242-e59966efd125
 	github.com/testcontainers/testcontainers-go v0.13.0
@@ -105,6 +104,7 @@ require (
 	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/siddontang/go v0.0.0-20180604090527-bdc77568d726 // indirect
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07 // indirect
+	github.com/sirupsen/logrus v1.8.1 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect

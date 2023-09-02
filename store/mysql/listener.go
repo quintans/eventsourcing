@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -22,14 +23,13 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink"
 )
 
 const resumeTokenSep = ":"
 
 type Feed struct {
-	logger                log.Logger
+	logger                *slog.Logger
 	config                DBConfig
 	eventsTable           string
 	flavour               string
@@ -65,9 +65,9 @@ type DBConfig struct {
 	Password string
 }
 
-func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...FeedOption) (*Feed, error) {
+func NewFeed(logger *slog.Logger, config DBConfig, sinker sink.Sinker, opts ...FeedOption) (*Feed, error) {
 	feed := &Feed{
-		logger:                logger.WithTags(log.Tags{"feed": "mysql"}),
+		logger:                logger.With("feed", "mysql"),
 		config:                config,
 		eventsTable:           "events",
 		flavour:               "mariadb",
@@ -82,7 +82,7 @@ func NewFeed(logger log.Logger, config DBConfig, sinker sink.Sinker, opts ...Fee
 }
 
 func (f *Feed) Run(ctx context.Context) error {
-	f.logger.Infof("Starting Feed for '%s'", f.eventsTable)
+	f.logger.Info("Starting Feed", "eventsTable", f.eventsTable)
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
 	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
@@ -203,7 +203,7 @@ func format(xid mysql.Position) []byte {
 
 type binlogHandler struct {
 	canal.DummyEventHandler // Dummy handler from external lib
-	logger                  log.Logger
+	logger                  *slog.Logger
 	events                  []*eventsourcing.Event
 	sinker                  sink.Sinker
 	lastResumeToken         []byte
@@ -219,7 +219,7 @@ func (h *binlogHandler) OnRow(e *canal.RowsEvent) error {
 
 	defer func() {
 		if r := recover(); r != nil {
-			h.logger.Error(r, " ", string(debug.Stack()))
+			h.logger.Error("panic", "recover", r, "stack", string(debug.Stack()))
 		}
 	}()
 
