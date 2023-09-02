@@ -33,7 +33,6 @@ const (
 
 func TestKafkaProjectionBeforeData(t *testing.T) {
 	uris := runKafkaContainer(t)
-	// uris := []string{"localhost:29092"}
 
 	dbConfig := shared.Setup(t)
 
@@ -62,7 +61,10 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	require.NoError(t, err)
 
 	// giving time to forward events
-	time.Sleep(2 * time.Second)
+	time.Sleep(time.Second)
+
+	events := proj.Events()
+	assert.Len(t, events, 3)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	assert.True(t, ok)
@@ -115,14 +117,17 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 		Amount: 130,
 	}, balance)
 
-	// updating after the subscription isin place
+	// updating after the subscription is in place
 	es.Update(ctx, acc.GetID(), func(a *test.Account) (*test.Account, error) {
 		acc.Withdraw(15)
 		return acc, nil
 	})
 
 	// giving time to project events through the subscription
-	time.Sleep(10 * time.Second)
+	time.Sleep(time.Second)
+
+	events := proj.Events()
+	assert.Len(t, events, 4)
 
 	balance, ok = proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -154,7 +159,7 @@ func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo
 
 	kvStore := &integration.MockKVStore{}
 
-	sub, err := pkafka.NewSubscriberWithBrokers(ctx, logger, uri, "accounts", kvStore)
+	sub, err := pkafka.NewSubscriberWithBrokers(ctx, logger, uri, "accounts", nil)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
