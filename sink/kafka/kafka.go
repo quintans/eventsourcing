@@ -164,10 +164,6 @@ func (s *Sink) Sink(_ context.Context, e *eventsourcing.Event, m sink.Meta) (er 
 		return faults.Errorf("encoding event: %w", err)
 	}
 
-	s.logger.WithTags(log.Tags{
-		"topic": s.topic,
-	}).Debugf("publishing '%+v'", e)
-
 	msg := &sarama.ProducerMessage{
 		Topic: s.topic,
 		Key:   sarama.StringEncoder(e.AggregateID),

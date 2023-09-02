@@ -81,7 +81,7 @@ type Consumer interface {
 	TopicPartitions() (string, []uint32)
 	// returns the subscriber Positions. The first Position should be 1
 	Positions(ctx context.Context) (map[uint32]SubscriberPosition, error)
-	StartConsumer(ctx context.Context, projectionName string, handle ConsumerHandler, options ...ConsumerOption) error
+	StartConsumer(ctx context.Context, subPos map[uint32]SubscriberPosition, projectionName string, handle ConsumerHandler, options ...ConsumerOption) error
 }
 
 type ConsumerHandler func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error

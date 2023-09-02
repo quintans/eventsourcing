@@ -66,6 +66,9 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	// giving time to forward events
 	time.Sleep(time.Second)
 
+	events := proj.Events()
+	assert.Len(t, events, 3)
+
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
 	require.Equal(t, integration.Balance{
@@ -128,6 +131,9 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	// giving time to project events through the subscription
 	time.Sleep(time.Second)
 
+	events := proj.Events()
+	assert.Len(t, events, 4)
+
 	balance, ok = proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
 	require.Equal(t, integration.Balance{
@@ -186,7 +192,7 @@ func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *m
 	}
 	kvStore := &integration.MockKVStore{}
 
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic, kvStore)
+	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository

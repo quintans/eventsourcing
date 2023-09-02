@@ -25,6 +25,7 @@ type ProjectionMock struct {
 	mu               sync.Mutex
 	balances         map[string]Balance
 	aggregateVersion map[string]uint32
+	events           []*sink.Message
 }
 
 func NewProjectionMock(name string) *ProjectionMock {
@@ -47,6 +48,8 @@ func (*ProjectionMock) CatchUpOptions() projection.CatchUpOptions {
 func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	p.events = append(p.events, e)
 
 	// check if it was already handled
 	if p.aggregateVersion[e.AggregateID] >= e.AggregateVersion {
@@ -94,4 +97,11 @@ func (p *ProjectionMock) BalanceByID(id string) (Balance, bool) {
 
 	b, ok := p.balances[id]
 	return b, ok
+}
+
+func (p *ProjectionMock) Events() []*sink.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.events[:]
 }

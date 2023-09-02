@@ -2,7 +2,6 @@ package nats
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -18,7 +17,6 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	snats "github.com/quintans/eventsourcing/sink/nats"
-	"github.com/quintans/eventsourcing/store"
 )
 
 func NewSubscriberWithURL(
@@ -26,7 +24,6 @@ func NewSubscriberWithURL(
 	logger log.Logger,
 	url string,
 	topic projection.ConsumerTopic,
-	resumeStore store.KVStore,
 ) (*Subscriber, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
@@ -36,7 +33,6 @@ func NewSubscriberWithURL(
 		logger,
 		nc,
 		topic,
-		resumeStore,
 	)
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -54,14 +50,13 @@ func NewSubscriberWithConn(
 	logger log.Logger,
 	nc *nats.Conn,
 	topic projection.ConsumerTopic,
-	resumeStore store.KVStore,
 ) (*Subscriber, error) {
 	stream, err := nc.JetStream()
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
 
-	return NewSubscriber(logger, stream, topic, resumeStore), nil
+	return NewSubscriber(logger, stream, topic), nil
 }
 
 type SubOption func(*Subscriber)
@@ -75,11 +70,10 @@ func WithMsgCodec(codec sink.Codec) SubOption {
 var _ projection.Consumer = (*Subscriber)(nil)
 
 type Subscriber struct {
-	logger      log.Logger
-	js          nats.JetStreamContext
-	topic       projection.ConsumerTopic
-	codec       sink.Codec
-	resumeStore store.KVStore
+	logger log.Logger
+	js     nats.JetStreamContext
+	topic  projection.ConsumerTopic
+	codec  sink.Codec
 
 	mu            sync.RWMutex
 	subscriptions []*nats.Subscription
@@ -89,15 +83,13 @@ func NewSubscriber(
 	logger log.Logger,
 	js nats.JetStreamContext,
 	topic projection.ConsumerTopic,
-	resumeStore store.KVStore,
 	options ...SubOption,
 ) *Subscriber {
 	s := &Subscriber{
-		logger:      logger,
-		js:          js,
-		topic:       topic,
-		codec:       sink.JSONCodec{},
-		resumeStore: resumeStore,
+		logger: logger,
+		js:     js,
+		topic:  topic,
+		codec:  sink.JSONCodec{},
 	}
 	s.logger = logger.WithTags(log.Tags{
 		"subscriber": "nats",
@@ -174,7 +166,7 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint
 	return msg.sequence, event.ID, nil
 }
 
-func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler projection.ConsumerHandler, options ...projection.ConsumerOption) (er error) {
+func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projection.SubscriberPosition, projName string, handler projection.ConsumerHandler, options ...projection.ConsumerOption) (er error) {
 	logger := s.logger.WithTags(log.Tags{"topic": s.topic.Topic})
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
@@ -184,33 +176,10 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 	}
 
 	for _, part := range s.topic.Partitions {
-		resumeKey, err := projection.NewResumeKey(projName, s.topic.Topic, part)
-		if err != nil {
-			return faults.Wrap(err)
-		}
-
-		data, err := s.resumeStore.Get(ctx, resumeKey.String())
-		if err != nil && !errors.Is(err, store.ErrResumeTokenNotFound) {
-			return faults.Errorf("Could not retrieve resume token for '%s': %w", resumeKey, err)
-		}
-
-		token, err := projection.ParseToken(data)
-		if err != nil {
-			return faults.Wrap(err)
-		}
 
 		natsTopic, err := snats.ComposeTopic(s.topic.Topic, part)
 		if err != nil {
 			return faults.Wrap(err)
-		}
-
-		var startOption nats.SubOpt
-		if token.IsEmpty() || token.Kind() == projection.CatchUpToken {
-			logger.WithTags(log.Tags{"topic": natsTopic}).Info("Starting consuming all available events")
-			startOption = nats.StartSequence(1)
-		} else {
-			logger.WithTags(log.Tags{"from": token.ConsumerSequence(), "topic": natsTopic}).Info("Starting consumer")
-			startOption = nats.StartSequence(token.ConsumerSequence() + 1) // after seq
 		}
 
 		callback := func(m *nats.Msg) {
@@ -238,12 +207,26 @@ func (s *Subscriber) StartConsumer(ctx context.Context, projName string, handler
 		}
 		// no dots (.) allowed
 		groupName := strings.ReplaceAll(fmt.Sprintf("%s:%s", s.topic.Topic, projName), ".", "_")
+
 		natsOpts := []nats.SubOpt{
-			startOption,
 			nats.Durable(groupName),
 			nats.MaxAckPending(1),
 			nats.AckExplicit(),
 			nats.AckWait(opts.AckWait),
+		}
+
+		if subPos != nil {
+			pos := subPos[uint32(part)]
+			var startOption nats.SubOpt
+			if pos.Position == 0 {
+				logger.WithTags(log.Tags{"topic": natsOpts, "partition": part}).Info("Starting consuming all available events")
+				startOption = nats.StartSequence(1)
+			} else {
+				logger.WithTags(log.Tags{"from": pos.Position + 1, "topic": natsOpts, "partition": part}).Info("Starting consumer from an offset")
+				startOption = nats.StartSequence(pos.Position + 1) // after seq
+			}
+
+			natsOpts = append(natsOpts, startOption)
 		}
 
 		sub, err := s.js.QueueSubscribe(natsTopic, groupName, callback, natsOpts...)
