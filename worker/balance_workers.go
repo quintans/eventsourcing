@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -53,7 +54,7 @@ type MembersBalancerOption func(*MembersBalancer)
 //   - Paused worker will hold its execution and will not be balanced-
 type MembersBalancer struct {
 	name             string
-	logger           log.Logger
+	logger           *slog.Logger
 	member           Memberlister
 	workers          []Worker
 	heartbeat        time.Duration
@@ -64,12 +65,12 @@ type MembersBalancer struct {
 	done chan struct{}
 }
 
-func NewMembersBalancer(logger log.Logger, name string, member Memberlister, workers []Worker, options ...MembersBalancerOption) *MembersBalancer {
+func NewMembersBalancer(logger *slog.Logger, name string, member Memberlister, workers []Worker, options ...MembersBalancerOption) *MembersBalancer {
 	mb := &MembersBalancer{
 		name: name,
-		logger: logger.WithTags(log.Tags{
-			"name": name,
-		}),
+		logger: logger.With(
+			"name", name,
+		),
 		member:           member,
 		workers:          workers,
 		heartbeat:        5 * time.Second,
@@ -115,7 +116,7 @@ func (b *MembersBalancer) Start(ctx context.Context) <-chan struct{} {
 		for {
 			err := b.run(ctx, ticker)
 			if err != nil {
-				b.logger.Warnf("Error while balancing %s's partitions: %+v", b.name, err)
+				b.logger.Warn("Error while balancing partitions", log.Err(err))
 			}
 			select {
 			case <-done:
@@ -145,7 +146,7 @@ func (b *MembersBalancer) Stop(ctx context.Context) {
 
 	err := b.member.Unregister(context.Background())
 	if err != nil {
-		b.logger.Warnf("Error while cleaning register for %s: %+v", b.name, err)
+		b.logger.Warn("Error while cleaning register", log.Err(err))
 	}
 
 	close(b.done)
@@ -300,7 +301,7 @@ func (b *MembersBalancer) balance(ctx context.Context, workers []Worker, workers
 
 			ok, err := w.Start(ctx)
 			if err != nil {
-				b.logger.WithError(err).Error("Failed to start worker")
+				b.logger.Error("Failed to start worker", log.Err(err))
 			}
 
 			if ok {
@@ -326,7 +327,7 @@ func mapToString(m map[string]bool) []string {
 var _ Balancer = (*SingleBalancer)(nil)
 
 type SingleBalancer struct {
-	logger    log.Logger
+	logger    *slog.Logger
 	name      string
 	worker    Worker
 	heartbeat time.Duration
@@ -335,7 +336,7 @@ type SingleBalancer struct {
 	done chan struct{}
 }
 
-func NewSingleBalancer(logger log.Logger, worker Worker, heartbeat time.Duration) *SingleBalancer {
+func NewSingleBalancer(logger *slog.Logger, worker Worker, heartbeat time.Duration) *SingleBalancer {
 	return &SingleBalancer{
 		logger:    logger,
 		name:      worker.Group(),

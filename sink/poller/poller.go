@@ -2,6 +2,7 @@ package poller
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/quintans/eventsourcing"
@@ -22,7 +23,7 @@ type Repository interface {
 }
 
 type Poller struct {
-	logger         log.Logger
+	logger         *slog.Logger
 	store          Repository
 	pullInterval   time.Duration
 	limit          int
@@ -82,7 +83,7 @@ func WithMetadata(metadata store.Metadata) Option {
 	}
 }
 
-func New(logger log.Logger, repository Repository, options ...Option) Poller {
+func New(logger *slog.Logger, repository Repository, options ...Option) Poller {
 	p := Poller{
 		logger:       logger,
 		pullInterval: 200 * time.Millisecond,
@@ -117,9 +118,10 @@ func (p *Poller) pull(ctx context.Context, sinker sink.Sinker) {
 			if wait > maxWait {
 				wait = maxWait
 			}
-			p.logger.WithTags(log.Tags{"backoff": wait}).
-				WithError(err).
-				Error("Failure retrieving events. Backing off.")
+			p.logger.Error("Failure retrieving events. Backing off.",
+				"backoff", wait,
+				log.Err(err),
+			)
 		} else {
 			wait = p.pullInterval - time.Since(now)
 			if wait < 0 {

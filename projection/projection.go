@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +45,7 @@ type resumeKV struct {
 //
 // The catch up function should replay all events from all event stores needed for this
 func Project(
-	logger log.Logger,
+	logger *slog.Logger,
 	lockerFactory LockerFactory,
 	esRepo EventsRepository,
 	subscriber Consumer,
@@ -55,9 +56,9 @@ func Project(
 	topic, parts := subscriber.TopicPartitions()
 	joinedParts := joinUints(parts)
 	name := fmt.Sprintf("%s-%s.%s", projection.Name(), topic, joinedParts)
-	logger = logger.WithTags(log.Tags{
-		"projection": projection.Name(),
-	})
+	logger = logger.With(
+		"projection", projection.Name(),
+	)
 
 	return worker.NewRunWorker(
 		logger,
@@ -83,7 +84,7 @@ func Project(
 	)
 }
 
-func asyncSaveResumes(ctx context.Context, logger log.Logger, resumeStore store.KVStore, projName, topic string) (chan resumeKV, <-chan struct{}) {
+func asyncSaveResumes(ctx context.Context, logger *slog.Logger, resumeStore store.KVStore, projName, topic string) (chan resumeKV, <-chan struct{}) {
 	checkPointCh := make(chan resumeKV, checkPointBuffer)
 	done := make(chan struct{})
 
@@ -107,10 +108,11 @@ func asyncSaveResumes(ctx context.Context, logger log.Logger, resumeStore store.
 				if errors.Is(err, ctx.Err()) {
 					return
 				}
-				logger.WithError(err).WithTags(log.Tags{
-					"resumeKey": t.String(),
-					"token":     t.String(),
-				}).Errorf("Failed to save resume token")
+				logger.Error("Failed to save resume token",
+					"resumeKey", t.String(),
+					"token,", t.String(),
+					log.Err(err),
+				)
 			}
 		}
 	}()
@@ -139,7 +141,7 @@ func joinUints(p []uint32) string {
 // If we have multiple replicas for one subscription, we will have only one catch up running.
 func catchUp(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	lockerFactory LockerFactory,
 	esRepo EventsRepository,
 	topic string,
@@ -164,7 +166,7 @@ func catchUp(
 			defer func() {
 				er := locker.Unlock(context.Background())
 				if er != nil {
-					logger.WithError(er).Error("unlock on catchUp")
+					logger.Error("unlock on catchUp", log.Err(er))
 				}
 			}()
 		}
@@ -226,7 +228,7 @@ func catchUp(
 					if errors.Is(err, catchupCtx.Err()) {
 						return
 					}
-					logger.WithError(err).Error("catching up projection")
+					logger.Error("catching up projection", log.Err(err))
 					cancel()
 					errsCh <- err
 					return
@@ -258,7 +260,7 @@ func catchUp(
 	}
 }
 
-func startConsuming(ctx context.Context, logger log.Logger, subPos map[uint32]SubscriberPosition, topic string, subscriber Consumer, projection Projection, resumeStore store.KVStore) error {
+func startConsuming(ctx context.Context, logger *slog.Logger, subPos map[uint32]SubscriberPosition, topic string, subscriber Consumer, projection Projection, resumeStore store.KVStore) error {
 	checkPointCh, _ := asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic)
 
 	handler := func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error {
@@ -314,7 +316,7 @@ func catchupAfterUntil(ctx context.Context, topic string, projection Projection,
 
 func catching(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	esRepo EventsRepository,
 	after eventid.EventID,
 	until eventid.EventID,
@@ -322,7 +324,7 @@ func catching(
 	projection Projection,
 	checkPointCh chan resumeKV,
 ) error {
-	logger.WithTags(log.Tags{"startAt": after}).Info("Catching up events")
+	logger.Info("Catching up events", "startAt", after)
 	options := projection.CatchUpOptions()
 
 	// safety margin
@@ -334,7 +336,7 @@ func catching(
 	// loop until it is safe to switch to the subscriber
 	lastReplayed := after
 
-	logger.WithTags(log.Tags{"from": lastReplayed, "until": until}).Info("Replaying all events from the event store")
+	logger.Info("Replaying all events from the event store", "from", lastReplayed, "until", until)
 	option := store.WithFilter(store.Filter{
 		AggregateKinds: options.AggregateKinds,
 		Metadata:       options.Metadata,
@@ -359,8 +361,7 @@ func catching(
 		return faults.Errorf("replaying events from '%d' until '%d': %w", lastReplayed, until, err)
 	}
 
-	logger.WithTags(log.Tags{"from": after, "until": lastReplayed}).
-		Info("All events replayed for the catchup.")
+	logger.Info("All events replayed for the catchup.", "from", after, "until", lastReplayed)
 
 	return nil
 }

@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -23,7 +24,7 @@ const checkPointBuffer = 1_000
 
 type Sink struct {
 	kvStore         store.KVStore
-	logger          log.Logger
+	logger          *slog.Logger
 	topic           string
 	nc              *nats.Conn
 	js              nats.JetStreamContext
@@ -40,12 +41,12 @@ type resume struct {
 }
 
 // NewSink instantiate NATS sink
-func NewSink(kvStore store.KVStore, logger log.Logger, topic string, totalPartitions uint32, partitions []uint32, url string, options ...nats.Option) (_ *Sink, err error) {
+func NewSink(kvStore store.KVStore, logger *slog.Logger, topic string, totalPartitions uint32, partitions []uint32, url string, options ...nats.Option) (_ *Sink, err error) {
 	defer faults.Catch(&err, "NewSink(topic=%s, totalPartitions=%d, partitions=%v)", topic, totalPartitions, partitions)
 
 	p := &Sink{
 		kvStore:         kvStore,
-		logger:          logger.WithTags(log.Tags{"sink": "nats"}),
+		logger:          logger.With("sink", "nats"),
 		topic:           topic,
 		totalPartitions: totalPartitions,
 		partitions:      partitions,
@@ -84,10 +85,11 @@ func NewSink(kvStore store.KVStore, logger log.Logger, topic string, totalPartit
 			ts := cp.value.String()
 			err := p.kvStore.Put(context.Background(), cp.key, ts)
 			if err != nil {
-				logger.WithError(err).WithTags(log.Tags{
-					"topic":  cp.key,
-					"resume": ts,
-				}).Error("Failed to save sink resume key")
+				logger.Error("Failed to save sink resume key",
+					"topic", cp.key,
+					"resume", ts,
+					log.Err(err),
+				)
 			}
 		}
 	}()
@@ -161,9 +163,6 @@ func (s *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) er
 	if err != nil {
 		return faults.Wrap(err)
 	}
-	s.logger.WithTags(log.Tags{
-		"topic": natsTopic,
-	}).Debugf("publishing '%+v'", e)
 
 	// TODO should be configurable
 	bo := backoff.NewExponentialBackOff()
@@ -188,15 +187,15 @@ func (s *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) er
 	return nil
 }
 
-func createStream(logger log.Logger, js nats.JetStreamContext, topic string) error {
+func createStream(logger *slog.Logger, js nats.JetStreamContext, topic string) error {
 	// Check if the ORDERS stream already exists; if not, create it.
 	_, err := js.StreamInfo(topic)
 	if err == nil {
-		logger.Infof("stream found '%s'", topic)
+		logger.Info("stream found", "stream", topic)
 		return nil
 	}
 
-	logger.Infof("stream not found '%s'. creating.", topic)
+	logger.Info("stream not found. creating.", "stream", topic)
 	_, err = js.AddStream(&nats.StreamConfig{
 		Name: topic,
 	})

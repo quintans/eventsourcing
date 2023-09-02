@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -42,7 +43,7 @@ type getByIDFunc func(ctx context.Context, aggregateID string) (eventsourcing.Ag
 // MigrateConsistentProjection migrates a consistent projection by creating a new one
 func (r *EsRepository) MigrateConsistentProjection(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	locker lock.WaitLocker,
 	migrater ProjectionMigrater,
 	getByID getByIDFunc,
@@ -54,7 +55,7 @@ func (r *EsRepository) MigrateConsistentProjection(
 	go func() {
 		err := r.migrateProjection(ctx, logger, locker, migrater, getByID)
 		if err != nil {
-			logger.WithError(err).Error("Failed to catchup projection '%s'", migrater.Name())
+			logger.Error("Failed to catchup projection", "projection", migrater.Name(), log.Err(err))
 		}
 	}()
 
@@ -63,7 +64,7 @@ func (r *EsRepository) MigrateConsistentProjection(
 
 func (r *EsRepository) migrateProjection(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	locker lock.WaitLocker,
 	migrater ProjectionMigrater,
 	getByID getByIDFunc,
@@ -82,7 +83,7 @@ func (r *EsRepository) migrateProjection(
 		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
 			er := locker.WaitForUnlock(ctx)
 			if er != nil {
-				logger.WithError(er).Error("waiting for unlock")
+				logger.Error("waiting for unlock", log.Err(er))
 			}
 			continue
 		} else if err != nil {

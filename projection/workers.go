@@ -3,11 +3,11 @@ package projection
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/lock"
-	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/worker"
 )
@@ -16,7 +16,7 @@ type TaskerFactory func(partitionLow, partitionHi uint32) worker.Task
 
 // PartitionedEventForwarderWorkers create workers responsible to forward events to their managed topic partition
 // each worker is responsible to forward a range of partitions
-func PartitionedEventForwarderWorkers(logger log.Logger, name string, lockerFactory LockerFactory, taskerFactory TaskerFactory, partitionSlots []worker.PartitionSlot) []worker.Worker {
+func PartitionedEventForwarderWorkers(logger *slog.Logger, name string, lockerFactory LockerFactory, taskerFactory TaskerFactory, partitionSlots []worker.PartitionSlot) []worker.Worker {
 	workers := make([]worker.Worker, len(partitionSlots))
 	for i, v := range partitionSlots {
 		slotsName := fmt.Sprintf("%d-%d", v.From, v.To)
@@ -39,7 +39,7 @@ func PartitionedEventForwarderWorkers(logger log.Logger, name string, lockerFact
 }
 
 // EventForwarderWorker creates a single worker responsible of forwarding
-func EventForwarderWorker(logger log.Logger, name string, lockerFactory LockerFactory, task worker.Task) worker.Worker {
+func EventForwarderWorker(logger *slog.Logger, name string, lockerFactory LockerFactory, task worker.Task) worker.Worker {
 	var locker lock.Locker
 	if lockerFactory != nil {
 		locker = lockerFactory(name + "-lock")
@@ -60,7 +60,7 @@ type SubscriberFactory func(context.Context, ResumeKey) Consumer
 // This assumes that the balancing will be done by the message broker.
 func PartitionedWorkers(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	lockerFactory LockerFactory,
 	subscriberFactory SubscriberFactory,
 	topic string, partitions uint32,
@@ -87,7 +87,7 @@ func PartitionedWorkers(
 // If a locker is provided it is possible to balance workers between the several server instances using a [worker.Balancer]
 func PartitionedCompetingWorkers(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	lockerFactory LockerFactory,
 	subscriberFactory SubscriberFactory,
 	topic string, partitions uint32,
@@ -141,7 +141,7 @@ func PartitionedCompetingWorkers(
 // CreateWorker creates a worker that will run if acquires the lock
 func createProjector(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	lockerFactory LockerFactory,
 	subscriberFactory SubscriberFactory,
 	topic string,

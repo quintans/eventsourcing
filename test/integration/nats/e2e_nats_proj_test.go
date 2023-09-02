@@ -5,11 +5,12 @@ package nats
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/quintans/eventsourcing"
-	eslog "github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
 	pnats "github.com/quintans/eventsourcing/projection/nats"
 	"github.com/quintans/eventsourcing/sink/nats"
@@ -19,14 +20,13 @@ import (
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/toolkit/latch"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-var logger = eslog.NewLogrus(logrus.StandardLogger())
+var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 const (
 	database = "eventsourcing"

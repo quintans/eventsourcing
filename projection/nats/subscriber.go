@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +22,7 @@ import (
 
 func NewSubscriberWithURL(
 	ctx context.Context,
-	logger log.Logger,
+	logger *slog.Logger,
 	url string,
 	topic projection.ConsumerTopic,
 ) (*Subscriber, error) {
@@ -47,7 +48,7 @@ func NewSubscriberWithURL(
 }
 
 func NewSubscriberWithConn(
-	logger log.Logger,
+	logger *slog.Logger,
 	nc *nats.Conn,
 	topic projection.ConsumerTopic,
 ) (*Subscriber, error) {
@@ -70,7 +71,7 @@ func WithMsgCodec(codec sink.Codec) SubOption {
 var _ projection.Consumer = (*Subscriber)(nil)
 
 type Subscriber struct {
-	logger log.Logger
+	logger *slog.Logger
 	js     nats.JetStreamContext
 	topic  projection.ConsumerTopic
 	codec  sink.Codec
@@ -80,7 +81,7 @@ type Subscriber struct {
 }
 
 func NewSubscriber(
-	logger log.Logger,
+	logger *slog.Logger,
 	js nats.JetStreamContext,
 	topic projection.ConsumerTopic,
 	options ...SubOption,
@@ -91,10 +92,10 @@ func NewSubscriber(
 		topic:  topic,
 		codec:  sink.JSONCodec{},
 	}
-	s.logger = logger.WithTags(log.Tags{
-		"subscriber": "nats",
-		"id":         "subscriber-" + shortid.MustGenerate(),
-	})
+	s.logger = logger.With(
+		"subscriber", "nats",
+		"id", "subscriber-"+shortid.MustGenerate(),
+	)
 
 	for _, o := range options {
 		o(s)
@@ -167,7 +168,7 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint
 }
 
 func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projection.SubscriberPosition, projName string, handler projection.ConsumerHandler, options ...projection.ConsumerOption) (er error) {
-	logger := s.logger.WithTags(log.Tags{"topic": s.topic.Topic})
+	logger := s.logger.With("topic", s.topic.Topic)
 	opts := projection.ConsumerOptions{
 		AckWait: 30 * time.Second,
 	}
@@ -185,23 +186,22 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 		callback := func(m *nats.Msg) {
 			evt, er := s.codec.Decode(m.Data)
 			if er != nil {
-				logger.WithError(er).Errorf("unable to unmarshal event '%s'", string(m.Data))
+				logger.Error("unable to unmarshal event", "event", string(m.Data), log.Err(er))
 				_ = m.Nak()
 				return
 			}
 			seq := sequence(m)
 			if opts.Filter == nil || opts.Filter(evt) {
-				logger.Debugf("Handling received event '%+v'", evt)
 				er = handler(ctx, evt, part, seq)
 				if er != nil {
-					logger.WithError(er).Errorf("Error when handling event with ID '%s'", evt.ID)
+					logger.Error("Error when handling event", "eventID", evt.ID, log.Err(er))
 					_ = m.Nak()
 					return
 				}
 			}
 
 			if er := m.Ack(); er != nil {
-				logger.WithError(er).Errorf("Failed to ACK seq=%d, event=%+v", seq, evt)
+				logger.Error("Failed to ACK", "sequence", seq, "event", evt, log.Err(er))
 				return
 			}
 		}
@@ -219,10 +219,10 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 			pos := subPos[uint32(part)]
 			var startOption nats.SubOpt
 			if pos.Position == 0 {
-				logger.WithTags(log.Tags{"topic": natsOpts, "partition": part}).Info("Starting consuming all available events")
+				logger.Info("Starting consuming all available events", "topic", natsOpts, "partition", part)
 				startOption = nats.StartSequence(1)
 			} else {
-				logger.WithTags(log.Tags{"from": pos.Position + 1, "topic": natsOpts, "partition": part}).Info("Starting consumer from an offset")
+				logger.Info("Starting consumer from an offset", "from", pos.Position+1, "topic", natsOpts, "partition", part)
 				startOption = nats.StartSequence(pos.Position + 1) // after seq
 			}
 
@@ -256,9 +256,9 @@ func (s *Subscriber) stopConsumer() {
 	for _, sub := range s.subscriptions {
 		err := sub.Unsubscribe()
 		if err != nil {
-			s.logger.WithError(err).Warnf("Failed to unsubscribe from '%s'", s.topic.Topic)
+			s.logger.Warn("Failed to unsubscribe", "topic", s.topic.Topic, log.Err(err))
 		} else {
-			s.logger.Infof("Unsubscribed from '%s'", s.topic.Topic)
+			s.logger.Info("Unsubscribed", "topic", s.topic.Topic)
 		}
 	}
 

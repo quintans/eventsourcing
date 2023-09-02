@@ -4,18 +4,18 @@ package mysql
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/oklog/ulid/v2"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/sink/poller"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/store/postgresql"
@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	logger    = log.NewLogrus(logrus.StandardLogger())
+	logger    = slog.New(slog.NewTextHandler(os.Stdout, nil))
 	esOptions = &eventsourcing.EsOptions{
 		SnapshotThreshold: 3,
 	}

@@ -4,11 +4,12 @@ package kafka
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/quintans/eventsourcing"
-	eslog "github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
 	pkafka "github.com/quintans/eventsourcing/projection/kafka"
 	"github.com/quintans/eventsourcing/sink/kafka"
@@ -18,13 +19,12 @@ import (
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/toolkit/latch"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 )
 
-var logger = eslog.NewLogrus(logrus.StandardLogger())
+var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 const (
 	database = "eventsourcing"
@@ -44,7 +44,7 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := kafka.NewSink(&logger, &integration.MockKVStore{}, topic, uris)
+	sinker, err := kafka.NewSink(logger, &integration.MockKVStore{}, topic, uris)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
@@ -91,7 +91,7 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := kafka.NewSink(&logger, &integration.MockKVStore{}, topic, uris)
+	sinker, err := kafka.NewSink(logger, &integration.MockKVStore{}, topic, uris)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
 
