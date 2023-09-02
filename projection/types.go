@@ -81,6 +81,7 @@ type Consumer interface {
 	TopicPartitions() (string, []uint32)
 	// returns the subscriber Positions. The first Position should be 1
 	Positions(ctx context.Context) (map[uint32]SubscriberPosition, error)
+	ResetConsumer(ctx context.Context, projName string) error
 	StartConsumer(ctx context.Context, projectionName string, handle ConsumerHandler, options ...ConsumerOption) error
 }
 

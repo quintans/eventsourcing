@@ -65,18 +65,7 @@ func Project(
 		projection.Name(),
 		nil,
 		func(ctx context.Context) error {
-			checkPointCh := make(chan resumeKV, checkPointBuffer)
-			done := asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic, checkPointCh)
-			go func() {
-				select {
-				case <-ctx.Done():
-					checkPointCh <- resumeKV{} // signal quit
-				case <-done:
-					checkPointCh <- resumeKV{} // signal quit
-				}
-			}()
-
-			err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore, checkPointCh)
+			err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore)
 			if err != nil {
 				if errors.Is(err, ctx.Err()) {
 					return nil
@@ -84,13 +73,7 @@ func Project(
 				return faults.Wrap(err)
 			}
 
-			<-done // wait for everything is saved before switching to the consumer phase
-
-			_ = asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic, checkPointCh)
-			go func() {
-				<-ctx.Done()
-				checkPointCh <- resumeKV{} // signal quit
-			}()
+			checkPointCh, _ := asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic)
 
 			handler := func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error {
 				er := projection.Handle(ctx, e)
@@ -116,7 +99,8 @@ func Project(
 	)
 }
 
-func asyncSaveResumes(ctx context.Context, logger log.Logger, resumeStore store.KVStore, projName, topic string, checkPointCh chan resumeKV) <-chan struct{} {
+func asyncSaveResumes(ctx context.Context, logger log.Logger, resumeStore store.KVStore, projName, topic string) (chan resumeKV, <-chan struct{}) {
+	checkPointCh := make(chan resumeKV, checkPointBuffer)
 	done := make(chan struct{})
 
 	// saves into the resume db. It is fine if it sporadically fails. It will just pickup from there
@@ -146,8 +130,14 @@ func asyncSaveResumes(ctx context.Context, logger log.Logger, resumeStore store.
 			}
 		}
 	}()
+	go func() {
+		select {
+		case <-ctx.Done():
+			checkPointCh <- resumeKV{} // signal quit
+		}
+	}()
 
-	return done
+	return checkPointCh, done
 }
 
 func joinUints(p []uint32) string {
@@ -174,7 +164,6 @@ func catchUp(
 	subscriber Consumer,
 	projection Projection,
 	resumeStore store.KVStore,
-	checkPointCh chan resumeKV,
 ) error {
 	if lockerFactory != nil {
 		name := fmt.Sprintf("%s:%s#%s-lock", projection.Name(), topic, joinedParts)
@@ -196,6 +185,8 @@ func catchUp(
 			}()
 		}
 	}
+
+	checkPointCh, done := asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic)
 
 	options := projection.CatchUpOptions()
 	catchUpWindow := util.IfZero(options.CatchUpWindow, defaultCatchupWindow)
@@ -303,8 +294,17 @@ func catchUp(
 				}
 			}
 
+			checkPointCh <- resumeKV{} // signal quit
+
 			break
 		}
+	}
+
+	<-done
+
+	err := subscriber.ResetConsumer(ctx, projection.Name())
+	if err != nil {
+		return faults.Errorf("resetting consumer: %w", err)
 	}
 
 	logger.Info("Finished successfully catching up projection")
