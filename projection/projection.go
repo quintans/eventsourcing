@@ -66,20 +66,14 @@ func Project(
 		projection.Name(),
 		nil,
 		func(ctx context.Context) error {
-			didCatchup, err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore)
+			err := catchUp(ctx, logger, lockerFactory, esRepo, topic, splits, joinedParts, subscriber, projection, resumeStore)
 			if err != nil {
 				if errors.Is(err, ctx.Err()) {
 					return nil
 				}
 				return faults.Wrap(err)
 			}
-
-			if didCatchup {
-				return nil
-			}
-
-			logger.Info("Starting consumer normally")
-			return startConsuming(ctx, logger, nil, topic, subscriber, projection, resumeStore)
+			return nil
 		},
 	)
 }
@@ -150,7 +144,7 @@ func catchUp(
 	subscriber Consumer,
 	projection Projection,
 	resumeStore store.KVStore,
-) (bool, error) {
+) error {
 	if lockerFactory != nil {
 		name := fmt.Sprintf("%s:%s#%s-lock", projection.Name(), topic, joinedParts)
 		locker := lockerFactory(name)
@@ -160,7 +154,7 @@ func catchUp(
 			// lock for catchup
 			ctx, err = locker.WaitForLock(ctx)
 			if err != nil {
-				return false, faults.Wrap(err)
+				return faults.Wrap(err)
 			}
 
 			defer func() {
@@ -186,27 +180,27 @@ func catchUp(
 		var er error
 		subPos, er := subscriber.Positions(catchupCtx)
 		if er != nil {
-			return false, faults.Wrap(er)
+			return faults.Wrap(er)
 		}
 
 		if len(subPos) == 0 {
-			return false, faults.New("no subscriber positions were returned")
+			return faults.New("no subscriber positions were returned")
 		}
 
 		after, until, er := catchupAfterUntil(catchupCtx, topic, projection, resumeStore, subPos)
 		if er != nil {
-			return false, faults.Wrap(er)
+			return faults.Wrap(er)
 		}
 
 		cmp := after.Compare(until)
 		if cmp == 0 {
-			logger.Info("There is nothing to catchup")
 			// there is nothing to catchup
-			return false, nil
+			logger.Info("There is nothing to catchup. Starting consumer from the last position")
+			return startConsuming(ctx, logger, nil, topic, subscriber, projection, resumeStore)
 		}
 		if cmp > 0 {
 			// we are in an inconsistent state, so we error
-			return false, faults.Errorf(
+			return faults.Errorf(
 				"the events bus (%s) is behind the projection (%s-%s-%s=%s) witch is a problem",
 				after, projection.Name(), topic, joinedParts, until,
 			)
@@ -244,7 +238,7 @@ func catchUp(
 			err = errors.Join(err, e)
 		}
 		if err != nil {
-			return false, faults.Errorf("catching for all partitions %+v: %w", subPos, err)
+			return faults.Errorf("catching for all partitions %+v: %w", subPos, err)
 		}
 
 		// if the catch up took less than catchUpWindow we can safely exit and switch to the event bus
@@ -254,8 +248,7 @@ func catchUp(
 			// waits for all the catchup resume tokens to be saved
 			<-done
 
-			logger.Info("Starting consumer after catching up projection")
-			return true, startConsuming(ctx, logger, subPos, topic, subscriber, projection, resumeStore)
+			return startConsuming(ctx, logger, subPos, topic, subscriber, projection, resumeStore)
 		}
 	}
 }
