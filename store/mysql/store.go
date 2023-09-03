@@ -127,23 +127,23 @@ func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, *s
 	return tx.Commit()
 }
 
-type EsRepository struct {
+type EsRepository[T eventsourcing.Aggregater[K], K ID] struct {
 	Repository
 	txHandlers []store.InTxHandler
 }
 
-func NewStoreWithURL(connString string, options ...Option) (*EsRepository, error) {
+func NewStoreWithURL[T eventsourcing.Aggregater[K], K ID](connString string, options ...Option) (*EsRepository[T, K], error) {
 	db, err := sql.Open(driverName, connString)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
 
-	return NewStore(db, options...), nil
+	return NewStore[T, K](db, options...), nil
 }
 
-func NewStore(db *sql.DB, options ...Option) *EsRepository {
+func NewStore[T eventsourcing.Aggregater[K], K ID](db *sql.DB, options ...Option) *EsRepository[T, K] {
 	dbx := sqlx.NewDb(db, driverName)
-	r := &EsRepository{
+	r := &EsRepository[T, K]{
 		Repository: Repository{
 			db: dbx,
 		},
@@ -156,11 +156,11 @@ func NewStore(db *sql.DB, options ...Option) *EsRepository {
 	return r
 }
 
-func (r *EsRepository) Connection() *sql.DB {
+func (r *EsRepository[T, K]) Connection() *sql.DB {
 	return r.db.DB
 }
 
-func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
+func (r *EsRepository[T, K]) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord[K]) (eventid.EventID, uint32, error) {
 	idempotencyKey := eRec.IdempotencyKey
 
 	version := eRec.Version

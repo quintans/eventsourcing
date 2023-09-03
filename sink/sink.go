@@ -11,34 +11,34 @@ import (
 	"github.com/quintans/faults"
 )
 
-type Sinker interface {
+type Sinker[K eventsourcing.ID] interface {
 	Partitions() (uint32, []uint32)
 	Accepts(hash uint32) bool
-	Sink(ctx context.Context, e *eventsourcing.Event, meta Meta) error
+	Sink(ctx context.Context, e *eventsourcing.Event[K], meta Meta) error
 	ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) error
 	Close()
 }
 
-type Codec interface {
-	Encoder
-	Decoder
+type Codec[K eventsourcing.ID] interface {
+	Encoder[K]
+	Decoder[K]
 }
 
 type Meta struct {
 	ResumeToken encoding.Base64
 }
 
-type Encoder interface {
-	Encode(evt *eventsourcing.Event) ([]byte, error)
+type Encoder[K eventsourcing.ID] interface {
+	Encode(evt *eventsourcing.Event[K]) ([]byte, error)
 }
 
-type Decoder interface {
-	Decode([]byte) (*Message, error)
+type Decoder[K eventsourcing.ID] interface {
+	Decode([]byte) (*Message[K], error)
 }
 
-type Message struct {
+type Message[K eventsourcing.ID] struct {
 	ID               eventid.EventID
-	AggregateID      string
+	AggregateID      K
 	AggregateVersion uint32
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
@@ -60,11 +60,20 @@ type messageJSON struct {
 	CreatedAt        time.Time          `json:"created_at,omitempty"`
 }
 
-type JSONCodec struct{}
+type JSONCodec[K eventsourcing.ID] struct{}
 
-func (JSONCodec) Encode(e *eventsourcing.Event) ([]byte, error) {
-	msg := ToMessage(e)
-	msgJ := messageJSON(*msg)
+func (JSONCodec[K]) Encode(e *eventsourcing.Event[K]) ([]byte, error) {
+	msgJ := messageJSON{
+		ID:               e.ID,
+		AggregateID:      e.AggregateID.String(),
+		AggregateVersion: e.AggregateVersion,
+		AggregateKind:    e.AggregateKind,
+		Kind:             e.Kind,
+		Body:             e.Body,
+		IdempotencyKey:   e.IdempotencyKey,
+		Metadata:         e.Metadata,
+		CreatedAt:        e.CreatedAt,
+	}
 	b, err := json.Marshal(msgJ)
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -72,18 +81,34 @@ func (JSONCodec) Encode(e *eventsourcing.Event) ([]byte, error) {
 	return b, nil
 }
 
-func (JSONCodec) Decode(data []byte) (*Message, error) {
+func (JSONCodec[K]) Decode(data []byte) (*Message[K], error) {
 	e := &messageJSON{}
 	err := json.Unmarshal(data, e)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	m := Message(*e)
+	var id K
+	err = id.UnmarshalText([]byte(e.AggregateID))
+	if err != nil {
+		return nil, faults.Errorf("unmarshaling id '%s': %w", e.AggregateID, err)
+	}
+	m := Message[K]{
+		ID:               e.ID,
+		AggregateID:      id,
+		AggregateVersion: e.AggregateVersion,
+		AggregateKind:    e.AggregateKind,
+		Kind:             e.Kind,
+		Body:             e.Body,
+		IdempotencyKey:   e.IdempotencyKey,
+		Metadata:         e.Metadata,
+		CreatedAt:        e.CreatedAt,
+	}
+
 	return &m, nil
 }
 
-func ToMessage(e *eventsourcing.Event) *Message {
-	return &Message{
+func ToMessage[K eventsourcing.ID](e *eventsourcing.Event[K]) *Message[K] {
+	return &Message[K]{
 		ID:               e.ID,
 		AggregateID:      e.AggregateID,
 		AggregateVersion: e.AggregateVersion,

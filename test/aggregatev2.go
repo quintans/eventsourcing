@@ -148,8 +148,8 @@ func (a *AccountV2) PopEvents() []eventsourcing.Eventer {
 	return a.root.PopEvents()
 }
 
-func (a *AccountV2) GetID() string {
-	return a.id.String()
+func (a *AccountV2) GetID() ulid.ULID {
+	return a.id
 }
 
 func (a *AccountV2) ID() ulid.ULID {

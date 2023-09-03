@@ -4,7 +4,7 @@ import (
 	"github.com/quintans/faults"
 )
 
-func RehydrateAggregate[T Aggregater](decoder Decoder, aggregateKind Kind, body []byte) (T, error) {
+func RehydrateAggregate[T Aggregater[K], K ID](decoder Decoder, aggregateKind Kind, body []byte) (T, error) {
 	a, err := rehydrate(aggregateKind, decoder, body, false)
 	if err != nil {
 		var zero T

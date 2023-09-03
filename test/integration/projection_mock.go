@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/eventsourcing/encoding/jsoncodec"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
@@ -92,11 +93,11 @@ func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message) error {
 	return nil
 }
 
-func (p *ProjectionMock) BalanceByID(id string) (Balance, bool) {
+func (p *ProjectionMock) BalanceByID(id ulid.ULID) (Balance, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	b, ok := p.balances[id]
+	b, ok := p.balances[id.String()]
 	return b, ok
 }
 

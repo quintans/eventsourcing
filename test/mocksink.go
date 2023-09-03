@@ -55,40 +55,40 @@ func (s *MockSinkData) SetLastResumes(lastEvents map[uint32]encoding.Base64) {
 	s.lastResumes = lastEvents
 }
 
-type MockSinkClient struct {
+type MockSinkClient[K eventsourcing.ID] struct {
 	totalPartitions uint32
 	partitions      []uint32
-	onSink          func(ctx context.Context, e *eventsourcing.Event) error
+	onSink          func(ctx context.Context, e *eventsourcing.Event[K]) error
 	data            *MockSinkData
 }
 
-func NewMockSink(data *MockSinkData, partitions, partitionsLow, partitionHi uint32) *MockSinkClient {
+func NewMockSink[K eventsourcing.ID](data *MockSinkData, partitions, partitionsLow, partitionHi uint32) *MockSinkClient[K] {
 	parts := []uint32{}
 	for i := partitionsLow; i <= partitionHi; i++ {
 		parts = append(parts, i)
 	}
 
-	return &MockSinkClient{
+	return &MockSinkClient[K]{
 		data:            data,
 		partitions:      parts,
 		totalPartitions: partitions,
 	}
 }
 
-func (s *MockSinkClient) Partitions() (uint32, []uint32) {
+func (s *MockSinkClient[K]) Partitions() (uint32, []uint32) {
 	return s.totalPartitions, s.partitions
 }
 
-func (s *MockSinkClient) Accepts(hash uint32) bool {
+func (s *MockSinkClient[K]) Accepts(hash uint32) bool {
 	partition := util.CalcPartition(hash, uint32(len(s.partitions)))
 	return util.In(partition, s.partitions...)
 }
 
-func (s *MockSinkClient) OnSink(handler func(ctx context.Context, e *eventsourcing.Event) error) {
+func (s *MockSinkClient[K]) OnSink(handler func(ctx context.Context, e *eventsourcing.Event[K]) error) {
 	s.onSink = handler
 }
 
-func (s *MockSinkClient) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) error {
+func (s *MockSinkClient[K]) Sink(ctx context.Context, e *eventsourcing.Event[K], m sink.Meta) error {
 	partition := util.CalcPartition(e.AggregateIDHash, uint32(len(s.partitions)))
 	if !util.In(partition, s.partitions...) {
 		return nil
@@ -111,7 +111,7 @@ func (s *MockSinkClient) Sink(ctx context.Context, e *eventsourcing.Event, m sin
 	return nil
 }
 
-func (s *MockSinkClient) ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) error {
+func (s *MockSinkClient[K]) ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) error {
 	s.data.mu.Lock()
 	defer s.data.mu.Unlock()
 	for _, partition := range s.partitions {
@@ -127,4 +127,4 @@ func (s *MockSinkClient) ResumeTokens(ctx context.Context, forEach func(resumeTo
 	return nil
 }
 
-func (s *MockSinkClient) Close() {}
+func (s *MockSinkClient[K]) Close() {}

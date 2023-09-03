@@ -111,11 +111,11 @@ func (a *Account) PopEvents() []eventsourcing.Eventer {
 	return a.root.PopEvents()
 }
 
-func (a *Account) GetID() string {
+func (a *Account) GetID() ulid.ULID {
 	if a == nil {
-		return ""
+		return ulid.ULID{}
 	}
-	return a.id.String()
+	return a.id
 }
 
 func (a *Account) ID() ulid.ULID {
