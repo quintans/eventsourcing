@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/teris-io/shortid"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/eventid"
@@ -20,17 +21,17 @@ import (
 	snats "github.com/quintans/eventsourcing/sink/nats"
 )
 
-func NewSubscriberWithURL(
+func NewSubscriberWithURL[K eventsourcing.ID](
 	ctx context.Context,
 	logger *slog.Logger,
 	url string,
 	topic projection.ConsumerTopic,
-) (*Subscriber, error) {
+) (*Subscriber[K], error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
 		return nil, faults.Errorf("instantiating NATS connection: %w", err)
 	}
-	subscriber, err := NewSubscriberWithConn(
+	subscriber, err := NewSubscriberWithConn[K](
 		logger,
 		nc,
 		topic,
@@ -47,50 +48,50 @@ func NewSubscriberWithURL(
 	return subscriber, nil
 }
 
-func NewSubscriberWithConn(
+func NewSubscriberWithConn[K eventsourcing.ID](
 	logger *slog.Logger,
 	nc *nats.Conn,
 	topic projection.ConsumerTopic,
-) (*Subscriber, error) {
+) (*Subscriber[K], error) {
 	stream, err := nc.JetStream()
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
 
-	return NewSubscriber(logger, stream, topic), nil
+	return NewSubscriber[K](logger, stream, topic), nil
 }
 
-type SubOption func(*Subscriber)
+type SubOption[K eventsourcing.ID] func(*Subscriber[K])
 
-func WithMsgCodec(codec sink.Codec) SubOption {
-	return func(r *Subscriber) {
+func WithMsgCodec[K eventsourcing.ID](codec sink.Codec[K]) SubOption[K] {
+	return func(r *Subscriber[K]) {
 		r.codec = codec
 	}
 }
 
-var _ projection.Consumer = (*Subscriber)(nil)
+// var _ projection.Consumer = (*Subscriber)(nil)
 
-type Subscriber struct {
+type Subscriber[K eventsourcing.ID] struct {
 	logger *slog.Logger
 	js     nats.JetStreamContext
 	topic  projection.ConsumerTopic
-	codec  sink.Codec
+	codec  sink.Codec[K]
 
 	mu            sync.RWMutex
 	subscriptions []*nats.Subscription
 }
 
-func NewSubscriber(
+func NewSubscriber[K eventsourcing.ID](
 	logger *slog.Logger,
 	js nats.JetStreamContext,
 	topic projection.ConsumerTopic,
-	options ...SubOption,
-) *Subscriber {
-	s := &Subscriber{
+	options ...SubOption[K],
+) *Subscriber[K] {
+	s := &Subscriber[K]{
 		logger: logger,
 		js:     js,
 		topic:  topic,
-		codec:  sink.JSONCodec{},
+		codec:  sink.JSONCodec[K]{},
 	}
 	s.logger = logger.With(
 		"subscriber", "nats",
@@ -104,11 +105,11 @@ func NewSubscriber(
 	return s
 }
 
-func (s *Subscriber) TopicPartitions() (string, []uint32) {
+func (s *Subscriber[K]) TopicPartitions() (string, []uint32) {
 	return s.topic.Topic, s.topic.Partitions
 }
 
-func (s *Subscriber) Positions(ctx context.Context) (map[uint32]projection.SubscriberPosition, error) {
+func (s *Subscriber[K]) Positions(ctx context.Context) (map[uint32]projection.SubscriberPosition, error) {
 	bms := map[uint32]projection.SubscriberPosition{}
 	for _, p := range s.topic.Partitions {
 		seq, eventID, err := s.lastBUSMessage(ctx, p)
@@ -126,7 +127,7 @@ func (s *Subscriber) Positions(ctx context.Context) (map[uint32]projection.Subsc
 
 // lastBUSMessage gets the last message sent to NATS
 // It will return 0 if there is no last message
-func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint64, eventid.EventID, error) {
+func (s *Subscriber[K]) lastBUSMessage(ctx context.Context, partition uint32) (uint64, eventid.EventID, error) {
 	type message struct {
 		sequence uint64
 		data     []byte
@@ -167,9 +168,9 @@ func (s *Subscriber) lastBUSMessage(ctx context.Context, partition uint32) (uint
 	return msg.sequence, event.ID, nil
 }
 
-func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projection.SubscriberPosition, projName string, handler projection.ConsumerHandler, options ...projection.ConsumerOption) (er error) {
+func (s *Subscriber[K]) StartConsumer(ctx context.Context, subPos map[uint32]projection.SubscriberPosition, projName string, handler projection.ConsumerHandler[K], options ...projection.ConsumerOption[K]) (er error) {
 	logger := s.logger.With("topic", s.topic.Topic)
-	opts := projection.ConsumerOptions{
+	opts := projection.ConsumerOptions[K]{
 		AckWait: 30 * time.Second,
 	}
 	for _, v := range options {
@@ -246,7 +247,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 	return nil
 }
 
-func (s *Subscriber) stopConsumer() {
+func (s *Subscriber[K]) stopConsumer() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.subscriptions == nil {

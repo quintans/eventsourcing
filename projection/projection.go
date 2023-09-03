@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/eventid"
@@ -44,12 +45,12 @@ type resumeKV struct {
 // This can be used to migrate projections, where a completely new projection will be populated.
 //
 // The catch up function should replay all events from all event stores needed for this
-func Project(
+func Project[K eventsourcing.ID](
 	logger *slog.Logger,
 	lockerFactory LockerFactory,
 	esRepo EventsRepository,
-	subscriber Consumer,
-	projection Projection,
+	subscriber Consumer[K],
+	projection Projection[K],
 	splits int,
 	resumeStore store.KVStore,
 ) *worker.RunWorker {
@@ -133,7 +134,7 @@ func joinUints(p []uint32) string {
 
 // catchUp applies all events needed to catchup up to the subscription.
 // If we have multiple replicas for one subscription, we will have only one catch up running.
-func catchUp(
+func catchUp[K eventsourcing.ID](
 	ctx context.Context,
 	logger *slog.Logger,
 	lockerFactory LockerFactory,
@@ -141,8 +142,8 @@ func catchUp(
 	topic string,
 	splits int,
 	joinedParts string,
-	subscriber Consumer,
-	projection Projection,
+	subscriber Consumer[K],
+	projection Projection[K],
 	resumeStore store.KVStore,
 ) error {
 	if lockerFactory != nil {
@@ -187,7 +188,7 @@ func catchUp(
 			return faults.New("no subscriber positions were returned")
 		}
 
-		after, until, er := catchupAfterUntil(catchupCtx, topic, projection, resumeStore, subPos)
+		after, until, er := catchupAfterUntil[K](catchupCtx, topic, projection, resumeStore, subPos)
 		if er != nil {
 			return faults.Wrap(er)
 		}
@@ -217,7 +218,7 @@ func catchUp(
 			go func() {
 				defer wg.Done()
 
-				err := catching(catchupCtx, logger, esRepo, after, until, uint32(splits), uint32(split), projection, checkPointCh)
+				err := catching[K](catchupCtx, logger, esRepo, after, until, uint32(splits), uint32(split), projection, checkPointCh)
 				if err != nil {
 					if errors.Is(err, catchupCtx.Err()) {
 						return
@@ -253,7 +254,7 @@ func catchUp(
 	}
 }
 
-func startConsuming(ctx context.Context, logger *slog.Logger, subPos map[uint32]SubscriberPosition, topic string, subscriber Consumer, projection Projection, resumeStore store.KVStore) error {
+func startConsuming[K eventsourcing.ID](ctx context.Context, logger *slog.Logger, subPos map[uint32]SubscriberPosition, topic string, subscriber Consumer[K], projection Projection[K], resumeStore store.KVStore) error {
 	checkPointCh, _ := asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic)
 
 	handler := func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error {
@@ -276,12 +277,12 @@ func startConsuming(ctx context.Context, logger *slog.Logger, subPos map[uint32]
 	return nil
 }
 
-func catchupAfterUntil(ctx context.Context, topic string, projection Projection, resumeStore store.KVStore, subPos map[uint32]SubscriberPosition) (eventid.EventID, eventid.EventID, error) {
+func catchupAfterUntil[K eventsourcing.ID](ctx context.Context, topic string, projection Projection[K], resumeStore store.KVStore, subPos map[uint32]SubscriberPosition) (eventid.EventID, eventid.EventID, error) {
 	var after eventid.EventID
 	// only replay partitions are in the catchup phase
 	for part := range subPos {
 		// get the sequence for the part
-		token, err := getSavedToken(ctx, topic, part, projection, resumeStore)
+		token, err := getSavedToken[K](ctx, topic, part, projection, resumeStore)
 		if err != nil {
 			return eventid.Zero, eventid.Zero, faults.Wrap(err)
 		}
@@ -307,14 +308,14 @@ func catchupAfterUntil(ctx context.Context, topic string, projection Projection,
 	return after, until, nil
 }
 
-func catching(
+func catching[K eventsourcing.ID](
 	ctx context.Context,
 	logger *slog.Logger,
 	esRepo EventsRepository,
 	after eventid.EventID,
 	until eventid.EventID,
 	partitions, partition uint32,
-	projection Projection,
+	projection Projection[K],
 	checkPointCh chan resumeKV,
 ) error {
 	logger.Info("Catching up events", "startAt", after)
@@ -359,7 +360,7 @@ func catching(
 	return nil
 }
 
-func getSavedToken(ctx context.Context, topic string, partition uint32, prj Projection, resumeStore store.KVRStore) (Token, error) {
+func getSavedToken[K eventsourcing.ID](ctx context.Context, topic string, partition uint32, prj Projection[K], resumeStore store.KVRStore) (Token, error) {
 	resume, err := NewResumeKey(prj.Name(), topic, partition)
 	if err != nil {
 		return Token{}, faults.Wrap(err)

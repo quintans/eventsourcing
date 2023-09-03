@@ -16,19 +16,19 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-type GrpcRepository struct {
+type GrpcRepository[K eventsourcing.ID] struct {
 	address string
 }
 
-var _ EventsRepository = (*GrpcRepository)(nil)
+// var _ EventsRepository = (*GrpcRepository)(nil)
 
-func NewGrpcRepository(address string) GrpcRepository {
-	return GrpcRepository{
+func NewGrpcRepository[K eventsourcing.ID](address string) GrpcRepository[K] {
+	return GrpcRepository[K]{
 		address: address,
 	}
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, after, until eventid.EventID, limit int, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (c GrpcRepository[K]) GetEvents(ctx context.Context, after, until eventid.EventID, limit int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -49,7 +49,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, after, until eventid.Even
 		return nil, faults.Errorf("could not get events: %w", err)
 	}
 
-	events := make([]*eventsourcing.Event, len(r.Events))
+	events := make([]*eventsourcing.Event[K], len(r.Events))
 	for k, v := range r.Events {
 		createdAt, err := tsToTime(v.CreatedAt)
 		if err != nil {
@@ -59,7 +59,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, after, until eventid.Even
 		if err != nil {
 			return nil, faults.Errorf("unable to parse message ID '%s': %w", v.Id, err)
 		}
-		events[k] = &eventsourcing.Event{
+		events[k] = &eventsourcing.Event[K]{
 			ID:               eID,
 			AggregateID:      v.AggregateId,
 			AggregateVersion: v.AggregateVersion,

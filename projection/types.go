@@ -96,9 +96,9 @@ type SubscriberPosition struct {
 	Position uint64
 }
 
-type Event struct {
+type Event[K eventsourcing.ID] struct {
 	ID               eventid.EventID
-	AggregateID      string
+	AggregateID      K
 	AggregateVersion uint32
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
@@ -108,8 +108,8 @@ type Event struct {
 	CreatedAt        time.Time
 }
 
-func FromEvent(e *eventsourcing.Event) *Event {
-	return &Event{
+func FromEvent[K eventsourcing.ID](e *eventsourcing.Event[K]) *Event[K] {
+	return &Event[K]{
 		ID:               e.ID,
 		AggregateID:      e.AggregateID,
 		AggregateVersion: e.AggregateVersion,
@@ -122,8 +122,8 @@ func FromEvent(e *eventsourcing.Event) *Event {
 	}
 }
 
-func FromMessage(m *sink.Message) *Event {
-	return &Event{
+func FromMessage[K eventsourcing.ID](m *sink.Message) *Event[K] {
+	return &Event[K]{
 		ID:               m.ID,
 		AggregateID:      m.AggregateID,
 		AggregateVersion: m.AggregateVersion,
@@ -218,10 +218,10 @@ func (t Token) IsZero() bool {
 	return t == Token{}
 }
 
-type Projection interface {
+type Projection[K eventsourcing.ID] interface {
 	Name() string
 	CatchUpOptions() CatchUpOptions
-	Handle(ctx context.Context, e *sink.Message) error
+	Handle(ctx context.Context, e *sink.Message[K]) error
 }
 
 type (
