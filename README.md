@@ -30,6 +30,93 @@ Other than the event store and the event streaming I also implemented a simple o
 
 > Creating a projection may take hours or even days, depending on the amount of event history so it is a good idea to create a projection on the side and start using it after it has catch up.
 
+
+## Quick start
+
+an example demonstrating mysql event store store producing events to kafka and projecting them
+
+The codec registry:
+
+```go
+func NewJSONCodec() *jsoncodec.Codec {
+	c := jsoncodec.New()
+	c.RegisterFactory(KindAccount, func() eventsourcing.Kinder {
+		return account.Dehydrated()
+	})
+	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
+		return &AccountCreated{}
+	})
+	c.RegisterFactory(KindMoneyDeposited, func() eventsourcing.Kinder {
+		return &MoneyDeposited{}
+	})
+	c.RegisterFactory(KindMoneyWithdrawn, func() eventsourcing.Kinder {
+		return &MoneyWithdrawn{}
+	})
+	c.RegisterFactory(KindOwnerUpdated, func() eventsourcing.Kinder {
+		return &OwnerUpdated{}
+	})
+	return c
+}
+```
+
+The producer (forwarding events):
+
+```go
+dbConfig := ... // get configuration into your custom structure
+
+// store
+kvStore := mysql.NewKVStore(dbConfig.Url, "resumes")
+
+// sinker provider
+sinker, _ := kafka.NewSink(logger, kvStore, "my-topic", uris)
+
+dbConf := mysql.DBConfig{
+	Host:     dbConfig.Host,
+	Port:     dbConfig.Port,
+	Database: dbConfig.Database,
+	Username: dbConfig.Username,
+	Password: dbConfig.Password,
+}
+feed, _ := mysql.NewFeed(logger, dbConf, sinker)
+
+// setting nil for the locker factory means no lock will be used.
+// when we have multiple replicas/processes forwarding events to the message queue,
+// we need to use a distributed lock.
+forwarder := projection.EventForwarderWorker(logger, "forwarder-id", nil, feed.Run)
+worker.RunSingleBalancer(ctx, logger, forwarder, 5*time.Second)
+```
+
+The consumer (building projections):
+
+```go
+// create projection that implements projection.Projection
+proj := ...
+
+sub, _ := kafka.NewSubscriberWithBrokers(ctx, logger, uri, "my-topic", nil)
+
+// repository here could be remote, like GrpcRepository
+projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
+projector.Start(ctx)
+```
+
+Writing to aggregates:
+
+```go
+// codec registry
+reg := NewJSONCodec()
+store, _ := mysql.NewStoreWithURL(url)
+es := eventsourcing.NewEventStore[*account.Account](store, reg, &eventsourcing.EsOptions{})
+
+id := util.NewID()
+acc, _ := account.New("Paulo", id, 100)
+
+acc.Deposit(10)
+acc.Deposit(20)
+
+es.Create(ctx, acc)
+```
+
+
 **Components**:
 - utility to read/write to/from an event store
 - database change listeners to propagate changes into a message stream

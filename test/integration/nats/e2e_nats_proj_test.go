@@ -19,7 +19,6 @@ import (
 	"github.com/quintans/eventsourcing/test/integration"
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
-	"github.com/quintans/toolkit/latch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -44,13 +43,12 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
-	ltx := latch.NewCountDownLatch()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
 	sinker, err := nats.NewSink(&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
 	require.NoError(t, err)
-	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
 	proj := projectionFromNATS(t, ctx, uri, esRepo)
 
@@ -79,6 +77,7 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	// shutdown
 	cancel()
 	time.Sleep(time.Second)
+	sinker.Close()
 }
 
 func TestNATSProjectionAfterData(t *testing.T) {
@@ -92,13 +91,12 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
-	ltx := latch.NewCountDownLatch()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
 	sinker, err := nats.NewSink(&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
 	require.NoError(t, err)
-	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
 	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -144,6 +142,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	// shutdown
 	cancel()
 	time.Sleep(time.Second)
+	sinker.Close()
 }
 
 // natsContainer represents the nats container type used in the module

@@ -136,7 +136,7 @@ func TestPollListener(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.NewAccount()
+	acc2 := test.DehydratedAccount()
 	counter := 0
 	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.NewAccount()
+	acc2 := test.DehydratedAccount()
 	counter := 0
 	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.NewAccount()
+	acc2 := test.DehydratedAccount()
 	counter := 0
 
 	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
