@@ -301,7 +301,9 @@ func (c *Consumer) Setup(session sarama.ConsumerGroupSession) (er error) {
 			startOffset = int64(pos.Position + 1)
 		}
 
-		session.ResetOffset(c.topic, int32(part-1), startOffset, "")
+		// both instructions are needed to cover both scenarios
+		session.MarkOffset(c.topic, int32(part-1), startOffset, "")  // only moves to point AFTER the last consumed message of this group is
+		session.ResetOffset(c.topic, int32(part-1), startOffset, "") // only moves to point BEFORE the last consumed message of this group is
 	}
 
 	return nil
