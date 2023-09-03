@@ -63,7 +63,7 @@ func (e OwnerUpdated) GetKind() eventsourcing.Kind {
 func NewJSONCodec() *jsoncodec.Codec {
 	c := jsoncodec.New()
 	c.RegisterFactory(KindAccount, func() eventsourcing.Kinder {
-		return NewAccount()
+		return DehydratedAccount()
 	})
 	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
 		return &AccountCreated{}
@@ -81,7 +81,7 @@ func NewJSONCodec() *jsoncodec.Codec {
 }
 
 func CreateAccount(owner string, id ulid.ULID, money int64) (*Account, error) {
-	a := NewAccount()
+	a := DehydratedAccount()
 	if err := a.root.ApplyChange(&AccountCreated{
 		Id:    id,
 		Money: money,
@@ -92,7 +92,7 @@ func CreateAccount(owner string, id ulid.ULID, money int64) (*Account, error) {
 	return a, nil
 }
 
-func NewAccount() *Account {
+func DehydratedAccount() *Account {
 	a := &Account{}
 	a.root = eventsourcing.NewRootAggregate(a)
 	return a

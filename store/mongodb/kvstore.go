@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"time"
 
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
@@ -11,22 +12,33 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-var _ store.KVStore = (*ProjectionResume)(nil)
+var _ store.KVStore = (*KVStore)(nil)
 
-type projectionResumeRow struct {
-	ID    string `bson:"_id,omitempty"`
-	Token string `bson:"token,omitempty"`
+type kvStoreRow struct {
+	Token string `bson:"value,omitempty"`
 }
 
-type ProjectionResume struct {
+type KVStore struct {
 	Repository
 	collection *mongo.Collection
 }
 
-func NewProjectionResume(client *mongo.Client, dbName, collection string) ProjectionResume {
+func NewKVStoreWithURI(connString, database, collection string) (KVStore, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
+	if err != nil {
+		return KVStore{}, faults.Wrap(err)
+	}
+
+	return NewKVStore(client, database, collection), nil
+}
+
+func NewKVStore(client *mongo.Client, dbName, collection string) KVStore {
 	c := client.Database(dbName).Collection(collection)
 
-	return ProjectionResume{
+	return KVStore{
 		Repository: Repository{
 			client: client,
 		},
@@ -34,9 +46,9 @@ func NewProjectionResume(client *mongo.Client, dbName, collection string) Projec
 	}
 }
 
-func (m ProjectionResume) Get(ctx context.Context, key string) (string, error) {
+func (m KVStore) Get(ctx context.Context, key string) (string, error) {
 	opts := options.FindOne()
-	row := projectionResumeRow{}
+	row := kvStoreRow{}
 	if err := m.collection.FindOne(ctx, bson.D{{"_id", key}}, opts).Decode(&row); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return "", faults.Wrap(store.ErrResumeTokenNotFound)
@@ -47,19 +59,19 @@ func (m ProjectionResume) Get(ctx context.Context, key string) (string, error) {
 	return row.Token, nil
 }
 
-func (m ProjectionResume) Put(ctx context.Context, key string, token string) error {
+func (m KVStore) Put(ctx context.Context, key string, value string) error {
 	return m.WithTx(ctx, func(ctx context.Context) error {
 		opts := options.Update().SetUpsert(true)
 		_, err := m.collection.UpdateOne(
 			ctx,
 			bson.M{"_id": key},
 			bson.M{
-				"$set": bson.M{"token": token},
+				"$set": bson.M{"value": value},
 			},
 			opts,
 		)
 		if err != nil {
-			return faults.Errorf("Failed to set resume token for key '%s': %w", key, err)
+			return faults.Errorf("Failed to set value for key '%s': %w", key, err)
 		}
 
 		return nil

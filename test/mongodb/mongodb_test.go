@@ -196,7 +196,7 @@ func TestPollListener(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.NewAccount()
+	acc2 := test.DehydratedAccount()
 	counter := 0
 	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs)
@@ -258,7 +258,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.NewAccount()
+	acc2 := test.DehydratedAccount()
 	counter := 0
 	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs, poller.WithAggregateKinds(AggregateAccount))
@@ -325,7 +325,7 @@ func TestListenerWithLabels(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.NewAccount()
+	acc2 := test.DehydratedAccount()
 	counter := 0
 
 	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)

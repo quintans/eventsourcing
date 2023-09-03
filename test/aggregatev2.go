@@ -67,7 +67,7 @@ func (e OwnerUpdatedV2) GetKind() eventsourcing.Kind {
 func NewJSONCodecWithUpcaster() *jsoncodec.Codec {
 	c := jsoncodec.New()
 	c.RegisterFactory(KindAccount, func() eventsourcing.Kinder {
-		return NewAccount()
+		return DehydratedAccount()
 	})
 	c.RegisterUpcaster(KindAccount, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		acc := t.(*Account)

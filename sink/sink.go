@@ -37,6 +37,18 @@ type Decoder interface {
 }
 
 type Message struct {
+	ID               eventid.EventID
+	AggregateID      string
+	AggregateVersion uint32
+	AggregateKind    eventsourcing.Kind
+	Kind             eventsourcing.Kind
+	Body             encoding.Base64
+	IdempotencyKey   string
+	Metadata         *encoding.JSON
+	CreatedAt        time.Time
+}
+
+type messageJSON struct {
 	ID               eventid.EventID    `json:"id,omitempty"`
 	AggregateID      string             `json:"aggregate_id,omitempty"`
 	AggregateVersion uint32             `json:"aggregate_version,omitempty"`
@@ -51,8 +63,9 @@ type Message struct {
 type JSONCodec struct{}
 
 func (JSONCodec) Encode(e *eventsourcing.Event) ([]byte, error) {
-	event := ToMessage(e)
-	b, err := json.Marshal(event)
+	msg := ToMessage(e)
+	msgJ := messageJSON(*msg)
+	b, err := json.Marshal(msgJ)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
@@ -60,13 +73,13 @@ func (JSONCodec) Encode(e *eventsourcing.Event) ([]byte, error) {
 }
 
 func (JSONCodec) Decode(data []byte) (*Message, error) {
-	e := &Message{}
+	e := &messageJSON{}
 	err := json.Unmarshal(data, e)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-
-	return e, nil
+	m := Message(*e)
+	return &m, nil
 }
 
 func ToMessage(e *eventsourcing.Event) *Message {

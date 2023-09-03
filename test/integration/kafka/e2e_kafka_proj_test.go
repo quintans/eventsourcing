@@ -18,7 +18,6 @@ import (
 	"github.com/quintans/eventsourcing/test/integration"
 	shared "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util"
-	"github.com/quintans/toolkit/latch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -40,13 +39,12 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
-	ltx := latch.NewCountDownLatch()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
 	sinker, err := kafka.NewSink(logger, &integration.MockKVStore{}, topic, uris)
 	require.NoError(t, err)
-	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
 	// before data
 	proj := projectionFromKafka(t, ctx, uris, esRepo)
@@ -76,6 +74,7 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	// shutdown
 	cancel()
 	time.Sleep(time.Second)
+	sinker.Close()
 }
 
 func TestKafkaProjectionAfterData(t *testing.T) {
@@ -87,13 +86,12 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
-	ltx := latch.NewCountDownLatch()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
 	sinker, err := kafka.NewSink(logger, &integration.MockKVStore{}, topic, uris)
 	require.NoError(t, err)
-	integration.EventForwarderWorker(t, ctx, logger, ltx, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
 	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -139,6 +137,7 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	// shutdown
 	cancel()
 	time.Sleep(time.Second)
+	sinker.Close()
 }
 
 // kafkaContainer represents the Kafka container type used in the module

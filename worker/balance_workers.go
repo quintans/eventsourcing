@@ -336,6 +336,21 @@ type SingleBalancer struct {
 	done chan struct{}
 }
 
+func RunSingleBalancer(ctx context.Context, logger *slog.Logger, worker Worker, heartbeat time.Duration) *SingleBalancer {
+	balancer := &SingleBalancer{
+		logger:    logger,
+		name:      worker.Group(),
+		worker:    worker,
+		heartbeat: heartbeat,
+	}
+	go func() {
+		balancer.Start(ctx)
+		<-ctx.Done()
+	}()
+
+	return balancer
+}
+
 func NewSingleBalancer(logger *slog.Logger, worker Worker, heartbeat time.Duration) *SingleBalancer {
 	return &SingleBalancer{
 		logger:    logger,
