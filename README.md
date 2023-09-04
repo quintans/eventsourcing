@@ -44,16 +44,16 @@ func NewJSONCodec() *jsoncodec.Codec {
 		return account.Dehydrated()
 	})
 	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
-		return &AccountCreated{}
+		return &account.Created{}
 	})
 	c.RegisterFactory(KindMoneyDeposited, func() eventsourcing.Kinder {
-		return &MoneyDeposited{}
+		return &account.Deposited{}
 	})
 	c.RegisterFactory(KindMoneyWithdrawn, func() eventsourcing.Kinder {
-		return &MoneyWithdrawn{}
+		return &account.Withdrawn{}
 	})
 	c.RegisterFactory(KindOwnerUpdated, func() eventsourcing.Kinder {
-		return &OwnerUpdated{}
+		return &account.OwnerUpdated{}
 	})
 	return c
 }
@@ -62,20 +62,21 @@ func NewJSONCodec() *jsoncodec.Codec {
 The producer (forwarding events):
 
 ```go
-dbConfig := ... // get configuration into your custom structure
+logger := ... // slog
+config := ... // get configuration into your custom structure
 
 // store
-kvStore := mysql.NewKVStore(dbConfig.Url, "resumes")
+kvStore := mysql.NewKVStore(config.Url, "resumes")
 
 // sinker provider
-sinker, _ := kafka.NewSink(logger, kvStore, "my-topic", uris)
+sinker, _ := kafka.NewSink(logger, kvStore, "my-topic", config.KafkaUris)
 
 dbConf := mysql.DBConfig{
-	Host:     dbConfig.Host,
-	Port:     dbConfig.Port,
-	Database: dbConfig.Database,
-	Username: dbConfig.Username,
-	Password: dbConfig.Password,
+	Host:     config.Host,
+	Port:     config.Port,
+	Database: config.Database,
+	Username: config.Username,
+	Password: config.Password,
 }
 feed, _ := mysql.NewFeed(logger, dbConf, sinker)
 
@@ -89,10 +90,14 @@ worker.RunSingleBalancer(ctx, logger, forwarder, 5*time.Second)
 The consumer (building projections):
 
 ```go
+logger := ... // slog
 // create projection that implements projection.Projection
 proj := ...
 
-sub, _ := kafka.NewSubscriberWithBrokers(ctx, logger, uri, "my-topic", nil)
+esRepo, _ := mysql.NewStoreWithURL(dburl)
+sub, _ := kafka.NewSubscriberWithBrokers(ctx, logger, kafkaUris, "my-topic", nil)
+// store
+kvStore := mysql.NewKVStore(dbConfig.Url, "resumes")
 
 // repository here could be remote, like GrpcRepository
 projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
@@ -105,7 +110,7 @@ Writing to aggregates:
 // codec registry
 reg := NewJSONCodec()
 store, _ := mysql.NewStoreWithURL(url)
-es := eventsourcing.NewEventStore[*account.Account](store, reg, &eventsourcing.EsOptions{})
+es := eventsourcing.NewEventStore[*account.Account](store, reg, nil)
 
 id := util.NewID()
 acc, _ := account.New("Paulo", id, 100)
