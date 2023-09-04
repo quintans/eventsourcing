@@ -17,7 +17,7 @@ import (
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/eventsourcing/util/ids"
 )
 
 const retries = 3
@@ -41,7 +41,7 @@ type ProjectionMigrationStep[K eventsourcing.ID] struct {
 type getByIDFunc[K eventsourcing.ID] func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater[K], store.AggregateMetadata[K], error)
 
 // MigrateConsistentProjection migrates a consistent projection by creating a new one
-func (r *EsRepository[K]) MigrateConsistentProjection(
+func (r *EsRepository[K, PK]) MigrateConsistentProjection(
 	ctx context.Context,
 	logger *slog.Logger,
 	locker lock.WaitLocker,
@@ -62,7 +62,7 @@ func (r *EsRepository[K]) MigrateConsistentProjection(
 	return nil
 }
 
-func (r *EsRepository[K]) migrateProjection(
+func (r *EsRepository[K, PK]) migrateProjection(
 	ctx context.Context,
 	logger *slog.Logger,
 	locker lock.WaitLocker,
@@ -122,7 +122,7 @@ func (r *EsRepository[K]) migrateProjection(
 	return r.doneMigration(ctx, migrater.Name())
 }
 
-func (r *EsRepository[K]) processAggregate(
+func (r *EsRepository[K, PK]) processAggregate(
 	c context.Context,
 	migrater ProjectionMigrater[K],
 	aggregateID string,
@@ -148,7 +148,7 @@ func (r *EsRepository[K]) processAggregate(
 	})
 }
 
-func (r *EsRepository[K]) createMigrationTable(ctx context.Context) error {
+func (r *EsRepository[K, PK]) createMigrationTable(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS projection_migration (name VARCHAR (100) PRIMARY KEY)")
 	if err != nil {
 		return faults.Errorf("failed to create projection_migration table: %w", err)
@@ -157,7 +157,7 @@ func (r *EsRepository[K]) createMigrationTable(ctx context.Context) error {
 	return nil
 }
 
-func (r *EsRepository[K]) shouldMigrate(ctx context.Context) (bool, error) {
+func (r *EsRepository[K, PK]) shouldMigrate(ctx context.Context) (bool, error) {
 	var value int
 	if err := r.db.GetContext(ctx, &value, "SELECT 1 FROM projection_migration WHERE name=$1"); err != nil {
 		if err != sql.ErrNoRows {
@@ -168,7 +168,7 @@ func (r *EsRepository[K]) shouldMigrate(ctx context.Context) (bool, error) {
 	return value == 1, nil
 }
 
-func (r *EsRepository[K]) doneMigration(ctx context.Context, name string) error {
+func (r *EsRepository[K, PK]) doneMigration(ctx context.Context, name string) error {
 	_, err := r.db.ExecContext(ctx, `INSERT INTO projection_migration (name) VALUES ($1)`, name)
 	if err != nil {
 		return faults.Errorf("failed to mark projection migration '%s' as done: %w", name, err)
@@ -179,7 +179,7 @@ func (r *EsRepository[K]) doneMigration(ctx context.Context, name string) error 
 
 const distinctLimit = 100
 
-func (r *EsRepository[K]) distinctAggregates(
+func (r *EsRepository[K, PK]) distinctAggregates(
 	ctx context.Context,
 	aggregateKind eventsourcing.Kind,
 	handler func(c context.Context, aggregateID string) error,
@@ -219,7 +219,7 @@ func (r *EsRepository[K]) distinctAggregates(
 	return nil
 }
 
-func (r *EsRepository[K]) addNoOp(ctx context.Context, metadata store.AggregateMetadata[K]) error {
+func (r *EsRepository[K, PK]) addNoOp(ctx context.Context, metadata store.AggregateMetadata[K]) error {
 	ver := metadata.Version + 1
 	aggID := metadata.ID.String()
 	id := eventid.NewAfterTime(metadata.UpdatedAt)
@@ -227,7 +227,7 @@ func (r *EsRepository[K]) addNoOp(ctx context.Context, metadata store.AggregateM
 	err := r.saveEvent(ctx, tx, &Event{
 		ID:               id,
 		AggregateID:      aggID,
-		AggregateIDHash:  util.HashInt(aggID),
+		AggregateIDHash:  ids.HashInt(aggID),
 		AggregateVersion: ver,
 		AggregateKind:    metadata.Type,
 		Kind:             eventsourcing.KindNoOpEvent,

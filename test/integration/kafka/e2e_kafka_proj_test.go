@@ -17,7 +17,7 @@ import (
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/test/integration"
 	shared "github.com/quintans/eventsourcing/test/mysql"
-	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/eventsourcing/util/ids"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -49,8 +49,8 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	// before data
 	proj := projectionFromKafka(t, ctx, uris, esRepo)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	id := ids.New()
+	acc, err := test.NewAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -93,8 +93,8 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	id := ids.New()
+	acc, err := test.NewAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)

@@ -15,7 +15,7 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/eventsourcing/util/ids"
 )
 
 type slot struct {
@@ -91,8 +91,8 @@ func TestListener(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			errs := feeding(ctx, cfg, tt.partitionSlots, data)
 
-			id := util.NewID()
-			acc, err := test.CreateAccount("Paulo", id, 100)
+			id := ids.New()
+			acc, err := test.NewAccount("Paulo", id, 100)
 			require.NoError(t, err)
 			acc.Deposit(10)
 			acc.Deposit(20)
@@ -113,8 +113,8 @@ func TestListener(t *testing.T) {
 
 			ctx, cancel = context.WithCancel(context.Background())
 
-			id = util.NewID()
-			acc, err = test.CreateAccount("Quintans", id, 100)
+			id = ids.New()
+			acc, err = test.NewAccount("Quintans", id, 100)
 			require.NoError(t, err)
 			acc.Deposit(30)
 			err = es.Create(ctx, acc)

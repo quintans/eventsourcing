@@ -14,7 +14,7 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 )
 
-func (r *EsRepository[K]) MigrateInPlaceCopyReplace(
+func (r *EsRepository[K, PK]) MigrateInPlaceCopyReplace(
 	ctx context.Context,
 	revision int,
 	snapshotThreshold uint32,
@@ -56,7 +56,7 @@ func (r *EsRepository[K]) MigrateInPlaceCopyReplace(
 	}
 }
 
-func (r *EsRepository[K]) eventsForMigration(ctx context.Context, aggregateKind eventsourcing.Kind, eventTypeCriteria []eventsourcing.Kind) ([]*eventsourcing.Event[K], error) {
+func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateKind eventsourcing.Kind, eventTypeCriteria []eventsourcing.Kind) ([]*eventsourcing.Event[K], error) {
 	if aggregateKind == "" {
 		return nil, faults.New("aggregate type needs to be specified")
 	}
@@ -113,7 +113,7 @@ func (r *EsRepository[K]) eventsForMigration(ctx context.Context, aggregateKind 
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		evt, err := toEventsourcingEvent[K](v, id)
+		evt, err := toEventsourcingEvent[K, PK](v, id)
 		if err != nil {
 			return nil, err
 		}
@@ -122,7 +122,7 @@ func (r *EsRepository[K]) eventsForMigration(ctx context.Context, aggregateKind 
 	return evts, nil
 }
 
-func (r *EsRepository[K]) saveMigration(
+func (r *EsRepository[K, PK]) saveMigration(
 	ctx context.Context,
 	targetAggregateKind eventsourcing.Kind,
 	last *eventsourcing.Event[K],
@@ -215,7 +215,7 @@ func (r *EsRepository[K]) saveMigration(
 			if err != nil {
 				return err
 			}
-			evt, err := toEventsourcingEvent[K](event, lastID)
+			evt, err := toEventsourcingEvent[K, PK](event, lastID)
 			if err != nil {
 				return err
 			}

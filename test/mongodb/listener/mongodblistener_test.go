@@ -18,7 +18,7 @@ import (
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
 	tmg "github.com/quintans/eventsourcing/test/mongodb"
-	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/eventsourcing/util/ids"
 )
 
 var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -85,8 +85,8 @@ func TestMongoListenere(t *testing.T) {
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
-			id := util.NewID()
-			acc, _ := test.CreateAccount("Paulo", id, 100)
+			id := ids.New()
+			acc, _ := test.NewAccount("Paulo", id, 100)
 			acc.Deposit(10)
 			acc.Deposit(20)
 			err = es.Create(ctx, acc)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding/jsoncodec"
+	"github.com/quintans/eventsourcing/util/ids"
 )
 
 // This represent the new software version after a migration
@@ -71,7 +72,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec {
 	})
 	c.RegisterUpcaster(KindAccount, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		acc := t.(*Account)
-		acc2 := NewAccountV2()
+		acc2 := DehydratedAccountV2()
 		acc2.id = acc.id
 		acc2.status = acc.status
 		acc2.balance = acc.balance
@@ -83,7 +84,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec {
 		return acc2, nil
 	})
 	c.RegisterFactory(KindAccountV2, func() eventsourcing.Kinder {
-		return NewAccountV2()
+		return DehydratedAccountV2()
 	})
 
 	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
@@ -117,10 +118,10 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec {
 	return c
 }
 
-func CreateAccountV2(owner NameVO, id ulid.ULID, money int64) (*AccountV2, error) {
-	a := NewAccountV2()
+func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
+	a := DehydratedAccountV2()
 	if err := a.root.ApplyChange(&AccountCreatedV2{
-		Id:    id,
+		Id:    ids.New(),
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -129,7 +130,7 @@ func CreateAccountV2(owner NameVO, id ulid.ULID, money int64) (*AccountV2, error
 	return a, nil
 }
 
-func NewAccountV2() *AccountV2 {
+func DehydratedAccountV2() *AccountV2 {
 	a := &AccountV2{}
 	a.root = eventsourcing.NewRootAggregate(a)
 	return a

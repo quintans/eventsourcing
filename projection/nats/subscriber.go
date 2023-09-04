@@ -22,7 +22,7 @@ import (
 	snats "github.com/quintans/eventsourcing/sink/nats"
 )
 
-func NewSubscriberWithURL[K eventsourcing.ID](
+func NewSubscriberWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](
 	ctx context.Context,
 	logger *slog.Logger,
 	url string,
@@ -32,7 +32,7 @@ func NewSubscriberWithURL[K eventsourcing.ID](
 	if err != nil {
 		return nil, faults.Errorf("instantiating NATS connection: %w", err)
 	}
-	subscriber, err := NewSubscriberWithConn[K](
+	subscriber, err := NewSubscriberWithConn[K, PK](
 		logger,
 		nc,
 		topic,
@@ -49,7 +49,7 @@ func NewSubscriberWithURL[K eventsourcing.ID](
 	return subscriber, nil
 }
 
-func NewSubscriberWithConn[K eventsourcing.ID](
+func NewSubscriberWithConn[K eventsourcing.ID, PK eventsourcing.IDPt[K]](
 	logger *slog.Logger,
 	nc *nats.Conn,
 	topic projection.ConsumerTopic,
@@ -59,7 +59,7 @@ func NewSubscriberWithConn[K eventsourcing.ID](
 		return nil, faults.Wrap(err)
 	}
 
-	return NewSubscriber[K](logger, stream, topic), nil
+	return NewSubscriber[K, PK](logger, stream, topic), nil
 }
 
 type SubOption[K eventsourcing.ID] func(*Subscriber[K])
@@ -82,7 +82,7 @@ type Subscriber[K eventsourcing.ID] struct {
 	subscriptions []*nats.Subscription
 }
 
-func NewSubscriber[K eventsourcing.ID](
+func NewSubscriber[K eventsourcing.ID, PK eventsourcing.IDPt[K]](
 	logger *slog.Logger,
 	js nats.JetStreamContext,
 	topic projection.ConsumerTopic,
@@ -92,7 +92,7 @@ func NewSubscriber[K eventsourcing.ID](
 		logger: logger,
 		js:     js,
 		topic:  topic,
-		codec:  sink.JSONCodec[K]{},
+		codec:  sink.JSONCodec[K, PK]{},
 	}
 	s.logger = logger.With(
 		"subscriber", "nats",

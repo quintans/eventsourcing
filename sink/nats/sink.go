@@ -42,7 +42,7 @@ type resume struct {
 }
 
 // NewSink instantiate NATS sink
-func NewSink[K eventsourcing.ID](kvStore store.KVStore, logger *slog.Logger, topic string, totalPartitions uint32, partitions []uint32, url string, options ...nats.Option) (_ *Sink[K], err error) {
+func NewSink[K eventsourcing.ID, PK eventsourcing.IDPt[K]](kvStore store.KVStore, logger *slog.Logger, topic string, totalPartitions uint32, partitions []uint32, url string, options ...nats.Option) (_ *Sink[K], err error) {
 	defer faults.Catch(&err, "NewSink(topic=%s, totalPartitions=%d, partitions=%v)", topic, totalPartitions, partitions)
 
 	p := &Sink[K]{
@@ -51,7 +51,7 @@ func NewSink[K eventsourcing.ID](kvStore store.KVStore, logger *slog.Logger, top
 		topic:           topic,
 		totalPartitions: totalPartitions,
 		partitions:      partitions,
-		codec:           sink.JSONCodec[K]{},
+		codec:           sink.JSONCodec[K, PK]{},
 		checkPointCh:    make(chan resume, checkPointBuffer),
 	}
 

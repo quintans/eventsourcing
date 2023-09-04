@@ -23,7 +23,7 @@ import (
 	"github.com/quintans/eventsourcing/util"
 )
 
-func NewSubscriberWithBrokers[K eventsourcing.ID](
+func NewSubscriberWithBrokers[K eventsourcing.ID, PK eventsourcing.IDPt[K]](
 	ctx context.Context,
 	logger *slog.Logger,
 	brokers []string,
@@ -39,7 +39,7 @@ func NewSubscriberWithBrokers[K eventsourcing.ID](
 	if err != nil {
 		return nil, faults.Errorf("instantiating Kafka client: %w", err)
 	}
-	subscriber, err := NewSubscriberWithClient[K](
+	subscriber, err := NewSubscriberWithClient[K, PK](
 		logger,
 		client,
 		topic,
@@ -77,7 +77,7 @@ type Subscriber[K eventsourcing.ID] struct {
 	shutdownHooks []func()
 }
 
-func NewSubscriberWithClient[K eventsourcing.ID](
+func NewSubscriberWithClient[K eventsourcing.ID, PK eventsourcing.IDPt[K]](
 	logger *slog.Logger,
 	client sarama.Client,
 	topic string,
@@ -99,7 +99,7 @@ func NewSubscriberWithClient[K eventsourcing.ID](
 		client:     client,
 		topic:      topic,
 		partitions: util.NormalizePartitions(partitions),
-		codec:      sink.JSONCodec[K]{},
+		codec:      sink.JSONCodec[K, PK]{},
 	}
 
 	for _, o := range options {

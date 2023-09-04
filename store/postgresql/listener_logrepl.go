@@ -28,27 +28,27 @@ const (
 	defaultEventsTable = "events"
 )
 
-type FeedLogreplOption[K eventsourcing.ID] func(*FeedLogrepl[K])
+type FeedLogreplOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*FeedLogrepl[K, PK])
 
-func WithPublication[K eventsourcing.ID](publicationName string) FeedLogreplOption[K] {
-	return func(p *FeedLogrepl[K]) {
+func WithPublication[K eventsourcing.ID, PK eventsourcing.IDPt[K]](publicationName string) FeedLogreplOption[K, PK] {
+	return func(p *FeedLogrepl[K, PK]) {
 		p.publicationName = publicationName
 	}
 }
 
-func WithBackoffMaxElapsedTime[K eventsourcing.ID](duration time.Duration) FeedLogreplOption[K] {
-	return func(p *FeedLogrepl[K]) {
+func WithBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedLogreplOption[K, PK] {
+	return func(p *FeedLogrepl[K, PK]) {
 		p.backoffMaxElapsedTime = duration
 	}
 }
 
-func WithEventsTable[K eventsourcing.ID](col string) FeedLogreplOption[K] {
-	return func(p *FeedLogrepl[K]) {
+func WithEventsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](col string) FeedLogreplOption[K, PK] {
+	return func(p *FeedLogrepl[K, PK]) {
 		p.eventsTable = col
 	}
 }
 
-type FeedLogrepl[K eventsourcing.ID] struct {
+type FeedLogrepl[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	dburl                 string
 	publicationName       string
 	slotIndex             int
@@ -61,11 +61,11 @@ type FeedLogrepl[K eventsourcing.ID] struct {
 // NewFeed creates a new Postgresql 10+ logic replication feed.
 // slotIndex is the index of this feed in a group of feeds. Its value should be between 1 and totalSlots.
 // slotIndex=1 has a special maintenance behaviour of dropping any slot above totalSlots.
-func NewFeed[K eventsourcing.ID](connString string, slotIndex, totalSlots int, sinker sink.Sinker[K], options ...FeedLogreplOption[K]) (FeedLogrepl[K], error) {
+func NewFeed[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, slotIndex, totalSlots int, sinker sink.Sinker[K], options ...FeedLogreplOption[K, PK]) (FeedLogrepl[K, PK], error) {
 	if slotIndex < 1 || slotIndex > totalSlots {
-		return FeedLogrepl[K]{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
+		return FeedLogrepl[K, PK]{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
 	}
-	f := FeedLogrepl[K]{
+	f := FeedLogrepl[K, PK]{
 		dburl:                 connString,
 		publicationName:       defaultSlotName,
 		slotIndex:             slotIndex,
@@ -84,7 +84,7 @@ func NewFeed[K eventsourcing.ID](connString string, slotIndex, totalSlots int, s
 
 // Run listens to replication logs and pushes them to sinker
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
-func (f *FeedLogrepl[K]) Run(ctx context.Context) error {
+func (f *FeedLogrepl[K, PK]) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
 	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
 		xLogPos, err := pglogrepl.ParseLSN(resumeToken.AsString())
@@ -205,7 +205,7 @@ func (f *FeedLogrepl[K]) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f FeedLogrepl[K]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool) (*eventsourcing.Event[K], error) {
+func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool) (*eventsourcing.Event[K], error) {
 	m, err := pgoutput.Parse(WALData)
 	if err != nil {
 		return nil, faults.Errorf("error parsing %s: %w", string(WALData), err)
@@ -269,14 +269,14 @@ func (f FeedLogrepl[K]) parse(set *pgoutput.RelationSet, WALData []byte, skip bo
 		}
 		// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
 		// They will be populate with the values returned by the sink.
-		var aggID K
+		aggID := PK(new(K))
 		err = aggID.UnmarshalText([]byte(aggregateID))
 		if err != nil {
 			return nil, faults.Errorf("unmarshaling id '%s': %w", aggregateID, err)
 		}
 		e := eventsourcing.Event[K]{
 			ID:               eid,
-			AggregateID:      aggID,
+			AggregateID:      *aggID,
 			AggregateIDHash:  uint32(aggregateIDHash),
 			AggregateVersion: uint32(aggregateVersion),
 			AggregateKind:    eventsourcing.Kind(aggregateKind),
@@ -307,7 +307,7 @@ func extract(values map[string]pgtype.Value, targets map[string]interface{}) err
 	return nil
 }
 
-func (f *FeedLogrepl[K]) listReplicationSlot(ctx context.Context, conn *pgconn.PgConn) (map[string]bool, error) {
+func (f *FeedLogrepl[K, PK]) listReplicationSlot(ctx context.Context, conn *pgconn.PgConn) (map[string]bool, error) {
 	sql := fmt.Sprintf("SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE '%s%%'", f.publicationName)
 	mrr := conn.Exec(ctx, sql)
 	results, err := mrr.ReadAll()
@@ -332,7 +332,7 @@ func (f *FeedLogrepl[K]) listReplicationSlot(ctx context.Context, conn *pgconn.P
 	return slots, nil
 }
 
-func (f *FeedLogrepl[K]) dropSlotsInExcess(ctx context.Context, conn *pgconn.PgConn, slots map[string]bool) error {
+func (f *FeedLogrepl[K, PK]) dropSlotsInExcess(ctx context.Context, conn *pgconn.PgConn, slots map[string]bool) error {
 	// we only do the clean up when the listener has index 0
 	if f.slotIndex != 1 {
 		return nil

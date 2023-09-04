@@ -41,7 +41,7 @@ type resume struct {
 }
 
 // NewSink instantiate a Kafka sink
-func NewSink[K eventsourcing.ID](logger *slog.Logger, kvStore store.KVStore, topic string, brokers []string) (*Sink[K], error) {
+func NewSink[K eventsourcing.ID, PK eventsourcing.IDPt[K]](logger *slog.Logger, kvStore store.KVStore, topic string, brokers []string) (*Sink[K], error) {
 	// producer config
 	config := sarama.NewConfig()
 	config.Producer.Retry.Max = 5
@@ -67,7 +67,7 @@ func NewSink[K eventsourcing.ID](logger *slog.Logger, kvStore store.KVStore, top
 		kvStore:      kvStore,
 		logger:       logger.With("sink", "kafka"),
 		topic:        topic,
-		codec:        sink.JSONCodec[K]{},
+		codec:        sink.JSONCodec[K, PK]{},
 		producer:     prd,
 		partitions:   util.NormalizePartitions(partitions),
 		brokers:      brokers,

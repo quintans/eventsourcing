@@ -28,7 +28,7 @@ import (
 
 const resumeTokenSep = ":"
 
-type Feed[K eventsourcing.ID] struct {
+type Feed[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	logger                *slog.Logger
 	config                DBConfig
 	eventsTable           string
@@ -37,22 +37,22 @@ type Feed[K eventsourcing.ID] struct {
 	sinker                sink.Sinker[K]
 }
 
-type FeedOption[K eventsourcing.ID] func(*Feed[K])
+type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
 
-func WithFeedEventsCollection[K eventsourcing.ID](eventsCollection string) FeedOption[K] {
-	return func(p *Feed[K]) {
+func WithFeedEventsCollection[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsCollection string) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
 		p.eventsTable = eventsCollection
 	}
 }
 
-func WithFlavour[K eventsourcing.ID](flavour string) FeedOption[K] {
-	return func(p *Feed[K]) {
+func WithFlavour[K eventsourcing.ID, PK eventsourcing.IDPt[K]](flavour string) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
 		p.flavour = flavour
 	}
 }
 
-func WithBackoffMaxElapsedTime[K eventsourcing.ID](duration time.Duration) FeedOption[K] {
-	return func(p *Feed[K]) {
+func WithBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
 		p.backoffMaxElapsedTime = duration
 	}
 }
@@ -65,8 +65,8 @@ type DBConfig struct {
 	Password string
 }
 
-func NewFeed[K eventsourcing.ID](logger *slog.Logger, config DBConfig, sinker sink.Sinker[K], opts ...FeedOption[K]) (*Feed[K], error) {
-	feed := &Feed[K]{
+func NewFeed[K eventsourcing.ID, PK eventsourcing.IDPt[K]](logger *slog.Logger, config DBConfig, sinker sink.Sinker[K], opts ...FeedOption[K, PK]) (*Feed[K, PK], error) {
+	feed := &Feed[K, PK]{
 		logger:                logger.With("feed", "mysql"),
 		config:                config,
 		eventsTable:           "events",
@@ -81,7 +81,7 @@ func NewFeed[K eventsourcing.ID](logger *slog.Logger, config DBConfig, sinker si
 	return feed, nil
 }
 
-func (f *Feed[K]) Run(ctx context.Context) error {
+func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	f.logger.Info("Starting Feed", "eventsTable", f.eventsTable)
 	var lastResumePosition mysql.Position
 	var lastResumeToken []byte
@@ -120,7 +120,7 @@ func (f *Feed[K]) Run(ctx context.Context) error {
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = f.backoffMaxElapsedTime
 
-	blh := &binlogHandler[K]{
+	blh := &binlogHandler[K, PK]{
 		logger:          f.logger,
 		sinker:          f.sinker,
 		lastResumeToken: lastResumeToken,
@@ -157,7 +157,7 @@ func (f *Feed[K]) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f *Feed[K]) newCanal() (*canal.Canal, error) {
+func (f *Feed[K, PK]) newCanal() (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	buf := make([]byte, 4)
 	rand.Read(buf) // Always succeeds, no need to check error
@@ -201,7 +201,7 @@ func format(xid mysql.Position) []byte {
 	return []byte(xid.Name + resumeTokenSep + strconv.FormatInt(int64(xid.Pos), 10))
 }
 
-type binlogHandler[K eventsourcing.ID] struct {
+type binlogHandler[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	canal.DummyEventHandler // Dummy handler from external lib
 	logger                  *slog.Logger
 	events                  []*eventsourcing.Event[K]
@@ -212,7 +212,7 @@ type binlogHandler[K eventsourcing.ID] struct {
 	eventsTable             string
 }
 
-func (h *binlogHandler[K]) OnRow(e *canal.RowsEvent) error {
+func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 	if e.Action != canal.InsertAction {
 		return nil
 	}
@@ -244,7 +244,7 @@ func (h *binlogHandler[K]) OnRow(e *canal.RowsEvent) error {
 			return faults.Wrap(err)
 		}
 
-		var aggID K
+		aggID := PK(new(K))
 		aggIDStr := r.getAsString("aggregate_id")
 		err = aggID.UnmarshalText([]byte(aggIDStr))
 		if err != nil {
@@ -254,7 +254,7 @@ func (h *binlogHandler[K]) OnRow(e *canal.RowsEvent) error {
 		// They will be populate with the values returned by the sink.
 		h.events = append(h.events, &eventsourcing.Event[K]{
 			ID:               id,
-			AggregateID:      aggID,
+			AggregateID:      *aggID,
 			AggregateIDHash:  hash,
 			AggregateVersion: r.getAsUint32("aggregate_version"),
 			AggregateKind:    eventsourcing.Kind(r.getAsString("aggregate_kind")),
@@ -330,9 +330,9 @@ func (r *rec) find(colName string) interface{} {
 	return nil
 }
 
-func (h *binlogHandler[K]) String() string { return "binlogHandler" }
+func (h *binlogHandler[K, PK]) String() string { return "binlogHandler" }
 
-func (h *binlogHandler[K]) OnXID(header *replication.EventHeader, xid mysql.Position) error {
+func (h *binlogHandler[K, PK]) OnXID(header *replication.EventHeader, xid mysql.Position) error {
 	if len(h.events) == 0 {
 		return nil
 	}

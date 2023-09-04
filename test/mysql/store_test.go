@@ -20,7 +20,7 @@ import (
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/eventsourcing/util/ids"
 )
 
 var (
@@ -53,8 +53,8 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	id := ids.New()
+	acc, err := test.NewAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -133,8 +133,8 @@ func TestPollListener(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	id := ids.New()
+	acc, err := test.NewAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -197,8 +197,8 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	id := ids.New()
+	acc, err := test.NewAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -260,8 +260,8 @@ func TestListenerWithLabels(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	id := ids.New()
+	acc, err := test.NewAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -329,8 +329,8 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	id := ids.New()
+	acc, err := test.NewAccount("Paulo", id, 100)
 	require.NoError(t, err)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
@@ -428,7 +428,7 @@ func TestMigration(t *testing.T) {
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
-	acc, err := test.CreateAccount("Paulo Pereira", id, 100)
+	acc, err := test.NewAccount("Paulo Pereira", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(20)
 	acc.Withdraw(15)

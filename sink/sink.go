@@ -62,7 +62,7 @@ type messageJSON struct {
 
 type JSONCodec[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct{}
 
-func (JSONCodec[K]) Encode(e *eventsourcing.Event[K]) ([]byte, error) {
+func (JSONCodec[K, PK]) Encode(e *eventsourcing.Event[K]) ([]byte, error) {
 	msgJ := messageJSON{
 		ID:               e.ID,
 		AggregateID:      e.AggregateID.String(),
@@ -81,20 +81,20 @@ func (JSONCodec[K]) Encode(e *eventsourcing.Event[K]) ([]byte, error) {
 	return b, nil
 }
 
-func (JSONCodec[K]) Decode(data []byte) (*Message[K], error) {
+func (JSONCodec[K, PK]) Decode(data []byte) (*Message[K], error) {
 	e := &messageJSON{}
 	err := json.Unmarshal(data, e)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
-	var id K
+	id := PK(new(K))
 	err = id.UnmarshalText([]byte(e.AggregateID))
 	if err != nil {
 		return nil, faults.Errorf("unmarshaling id '%s': %w", e.AggregateID, err)
 	}
 	m := Message[K]{
 		ID:               e.ID,
-		AggregateID:      id,
+		AggregateID:      *id,
 		AggregateVersion: e.AggregateVersion,
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,

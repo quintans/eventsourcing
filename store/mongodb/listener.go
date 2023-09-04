@@ -21,7 +21,7 @@ import (
 	"github.com/quintans/eventsourcing/sink"
 )
 
-type Feed[K eventsourcing.ID] struct {
+type Feed[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	logger           *slog.Logger
 	connString       string
 	dbName           string
@@ -29,16 +29,16 @@ type Feed[K eventsourcing.ID] struct {
 	sinker           sink.Sinker[K]
 }
 
-type FeedOption[K eventsourcing.ID] func(*Feed[K])
+type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
 
-func WithFeedEventsCollection[K eventsourcing.ID](eventsCollection string) FeedOption[K] {
-	return func(p *Feed[K]) {
+func WithFeedEventsCollection[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsCollection string) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
 		p.eventsCollection = eventsCollection
 	}
 }
 
-func NewFeed[K eventsourcing.ID](logger *slog.Logger, connString, database string, sinker sink.Sinker[K], opts ...FeedOption[K]) (Feed[K], error) {
-	feed := Feed[K]{
+func NewFeed[K eventsourcing.ID, PK eventsourcing.IDPt[K]](logger *slog.Logger, connString, database string, sinker sink.Sinker[K], opts ...FeedOption[K, PK]) (Feed[K, PK], error) {
+	feed := Feed[K, PK]{
 		logger:           logger.With("feed", "mongo"),
 		dbName:           database,
 		connString:       connString,
@@ -57,7 +57,7 @@ type ChangeEvent struct {
 	FullDocument Event `bson:"fullDocument,omitempty"`
 }
 
-func (f *Feed[K]) Run(ctx context.Context) error {
+func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	f.logger.Info("Starting Feed", "dbName", f.dbName, "eventsCollection", f.eventsCollection)
 	var lastResumeToken []byte
 	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
@@ -127,14 +127,14 @@ func (f *Feed[K]) Run(ctx context.Context) error {
 			}
 			// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
 			// They will be populate with the values returned by the sink.
-			var aggID K
+			aggID := PK(new(K))
 			err = aggID.UnmarshalText([]byte(eventDoc.AggregateID))
 			if err != nil {
 				return faults.Errorf("unmarshaling id '%s': %w", eventDoc.AggregateID, err)
 			}
 			event := &eventsourcing.Event[K]{
 				ID:               id,
-				AggregateID:      aggID,
+				AggregateID:      *aggID,
 				AggregateIDHash:  eventDoc.AggregateIDHash,
 				AggregateVersion: eventDoc.AggregateVersion,
 				AggregateKind:    eventDoc.AggregateKind,
@@ -161,7 +161,7 @@ func (f *Feed[K]) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f *Feed[K]) feedPartitionFilter(maxPartition uint32, partitions []uint32) bson.E {
+func (f *Feed[K, PK]) feedPartitionFilter(maxPartition uint32, partitions []uint32) bson.E {
 	parts := make([]uint32, len(partitions))
 	for k, v := range partitions {
 		parts[k] = v - 1

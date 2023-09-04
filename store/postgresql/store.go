@@ -20,7 +20,7 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util"
+	"github.com/quintans/eventsourcing/util/ids"
 )
 
 const (
@@ -78,10 +78,10 @@ type Snapshot struct {
 	CreatedAt        time.Time          `db:"created_at,omitempty"`
 }
 
-type Option[K eventsourcing.ID] func(*EsRepository[K])
+type Option[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*EsRepository[K, PK])
 
-func WithTxHandler[K eventsourcing.ID](txHandler store.InTxHandler[K]) Option[K] {
-	return func(r *EsRepository[K]) {
+func WithTxHandler[K eventsourcing.ID, PK eventsourcing.IDPt[K]](txHandler store.InTxHandler[K]) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
 		r.txHandlers = append(r.txHandlers, txHandler)
 	}
 }
@@ -127,8 +127,8 @@ func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, *s
 }
 
 var (
-	_ eventsourcing.EsRepository[ulid.ULID, *ulid.ULID] = (*EsRepository[ulid.ULID, *ulid.ULID])(nil)
-	_ projection.EventsRepository[ulid.ULID]            = (*EsRepository[ulid.ULID, *ulid.ULID])(nil)
+	_ eventsourcing.EsRepository[ulid.ULID]  = (*EsRepository[ulid.ULID, *ulid.ULID])(nil)
+	_ projection.EventsRepository[ulid.ULID] = (*EsRepository[ulid.ULID, *ulid.ULID])(nil)
 )
 
 type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
@@ -136,7 +136,7 @@ type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	txHandlers []store.InTxHandler[K]
 }
 
-func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, options ...Option[K]) (*EsRepository[K, PK], error) {
+func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, options ...Option[K, PK]) (*EsRepository[K, PK], error) {
 	db, err := sql.Open(driverName, connString)
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -145,7 +145,7 @@ func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString st
 	return NewStore[K, PK](db, options...), nil
 }
 
-func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](db *sql.DB, options ...Option[K]) *EsRepository[K, PK] {
+func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](db *sql.DB, options ...Option[K, PK]) *EsRepository[K, PK] {
 	dbx := sqlx.NewDb(db, driverName)
 	r := &EsRepository[K, PK]{
 		Repository: Repository{
@@ -173,7 +173,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			err := r.saveEvent(c, tx, &Event{
 				ID:               id,
 				AggregateID:      aggIDStr,
-				AggregateIDHash:  util.HashInt(aggIDStr),
+				AggregateIDHash:  ids.HashInt(aggIDStr),
 				AggregateVersion: version,
 				AggregateKind:    eRec.AggregateKind,
 				Kind:             e.Kind,
@@ -306,7 +306,7 @@ func TxFromContext(ctx context.Context) *sql.Tx {
 	return tx
 }
 
-func (r *EsRepository[K]) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
+func (r *EsRepository[K, PK]) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
 	var exists bool
 	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=$1 AND migration = 0) AS "EXISTS"`, idempotencyKey)
 	if err != nil {
@@ -315,7 +315,7 @@ func (r *EsRepository[K]) HasIdempotencyKey(ctx context.Context, idempotencyKey 
 	return exists, nil
 }
 
-func (r *EsRepository[K]) Forget(ctx context.Context, request eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte, snapshot bool) ([]byte, error)) error {
+func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte, snapshot bool) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
@@ -358,7 +358,7 @@ func (r *EsRepository[K]) Forget(ctx context.Context, request eventsourcing.Forg
 	return nil
 }
 
-func (r *EsRepository[K]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
+func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > $1 AND id <= $2 AND migration = 0")
 	args := []interface{}{after, until}
@@ -430,8 +430,8 @@ func escape(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
-func (r *EsRepository[K]) queryEvents(ctx context.Context, query string, args ...interface{}) ([]*eventsourcing.Event[K], error) {
-	return queryEvents[K](ctx, r.db, query, args...)
+func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, query string, args ...interface{}) ([]*eventsourcing.Event[K], error) {
+	return queryEvents[K, PK](ctx, r.db, query, args...)
 }
 
 func queryEvents[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.Context, db *sqlx.DB, query string, args ...interface{}) ([]*eventsourcing.Event[K], error) {
@@ -480,12 +480,12 @@ func toEventSourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 	}, nil
 }
 
-func (r *EsRepository[K]) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
+func (r *EsRepository[K, PK]) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
 	qry, args, err := sqlx.In("SELECT * FROM events WHERE id IN (?) ORDER BY id ASC", ids) // the query must use the '?' bind var
 	if err != nil {
 		return nil, faults.Errorf("getting pending events (IDs=%v): %w", ids, err)
 	}
 	qry = r.db.Rebind(qry) // sqlx.In returns queries with the `?` bindvar, we can rebind it for our backend
 
-	return queryEvents[K](ctx, r.db, qry, args...)
+	return queryEvents[K, PK](ctx, r.db, qry, args...)
 }

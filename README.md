@@ -122,7 +122,7 @@ reg := NewJSONCodec()
 store, _ := mysql.NewStoreWithURL(url)
 es := eventsourcing.NewEventStore[*account.Account](store, reg, nil)
 
-id := util.NewID()
+id := ids.New()
 acc, _ := account.New("Paulo", id, 100)
 
 acc.Deposit(10)

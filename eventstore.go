@@ -81,7 +81,7 @@ type Snapshot[K ID] struct {
 	CreatedAt        time.Time
 }
 
-type EsRepository[K ID, PK IDPt[K]] interface {
+type EsRepository[K ID] interface {
 	SaveEvent(ctx context.Context, eRec *EventRecord[K]) (id eventid.EventID, version uint32, err error)
 	GetSnapshot(ctx context.Context, aggregateID K) (Snapshot[K], error)
 	SaveSnapshot(ctx context.Context, snapshot *Snapshot[K]) error
@@ -183,13 +183,13 @@ type EsOptions struct {
 
 // EventStore represents the event store
 type EventStore[T Aggregater[K], K ID, PK IDPt[K]] struct {
-	store             EsRepository[K, PK]
+	store             EsRepository[K]
 	snapshotThreshold uint32
 	codec             Codec
 }
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore[T Aggregater[K], K ID, PK IDPt[K]](repo EsRepository[K, PK], codec Codec, options *EsOptions) EventStore[T, K, PK] {
+func NewEventStore[T Aggregater[K], K ID, PK IDPt[K]](repo EsRepository[K], codec Codec, options *EsOptions) EventStore[T, K, PK] {
 	es := EventStore[T, K, PK]{
 		store:             repo,
 		snapshotThreshold: 100,
