@@ -1,7 +1,5 @@
 # Event Sourcing
-a simple implementation of event sourcing using a database as an event store
-
-This is an exercise on how I could implement event sourcing and how this could be used with CQRS.
+an implementation of event sourcing library using a database as an event store
 
 ## Introduction
 
@@ -10,6 +8,11 @@ The goal of this project is to implement an event store and how this event store
 This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS and eventually be consumed by a projector.
 
 This project offers implementation for the following:
+
+
+Other than the event store and the event streaming I also implemented a simple orchestration layer for the event consumer on the read side to create projections.
+
+> Creating a projection may take hours or even days, depending on the amount of event history so it is a good idea to create a projection on the side and start using it after it has catch up.
 
 **Event Stores**
 * MySQL
@@ -22,14 +25,21 @@ and
 * NATS
 * Kafka
 
+## Features
 
-To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
-We can write the read model into the same database in the same transaction as the write model (dual write).
-
-Other than the event store and the event streaming I also implemented a simple orchestration layer for the event consumer on the read side to create projections.
-
-> Creating a projection may take hours or even days, depending on the amount of event history so it is a good idea to create a projection on the side and start using it after it has catch up.
-
+* Event store database
+* Snapshots
+* Event Idempotency
+* Forget (GDPR)
+* Metadata associated to an event
+* Reactive streaming from the database into an Event BUS
+* Polling from the database with the Outbox table into an Event BUS
+* Transaction hooks
+* Projections
+* Replay of events into a projection since the beginning of time
+* Partitioning for Event BUS that does not support key partitioning
+* Event migration
+* Upcast
 
 ## Quick start
 
@@ -133,12 +143,13 @@ es.Create(ctx, acc)
 
 ## Eventually consistent projection
 
-
 A service **writes** to a **database** (the event store), a **forwarder** component (can be on the write service or it can be an external service) listens to inserts into the database (change stream) and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary read models.
 
 ![Design](eventstore-design.png)
 
 > we still can still use consistent projections to build the current state of an aggregate
+> To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
+We can write the read model into the same database in the same transaction as the write model (dual write).
 
 ## How to
 
@@ -255,8 +266,8 @@ The process for creating a new projection at boot time, is described as follow:
 
 Boot Partitioned Projection
 - Wait for lock release (if any)
-- Replay all events from the last recorded position for its partition.
-- Start consuming the stream from the last event position
+- Replay all events from the last recorded position from the event store.
+- Switch to the event bus and start consuming from the last event position
 
 > NB: a projection should be idempotent.
 
@@ -297,11 +308,11 @@ There is also the issue that records might not become available in the same orde
 
 Consider two concurrent transactions relying on database sequence. One acquires the ID 100 and the other the ID 101. If the one with ID 101 is faster to finish the transaction, it will show up first in a query than the one with ID 100. The same applies to time based IDs.
 
-If we have a polling process that relies on this number to determine from where to start polling, it could miss the last added record, and this could lead to events not being tracked.
+If we have a polling process that relies on this number to determine from where to start polling, it could miss the last added record, and this could lead to events not being tracked. Luckily this can be addressed by using the outbox pattern.
 
-Considering all the above, we could end up with missing events when replay events on a restart. Therefore, I opted for a more simple and precise solution. I will just record the sequence and partition returned when publishing an event. Systems like Apache Kafka, Apache Pulsar and NATS JetStream return a sequence when publishing.
+Considering all the above, we could end up with missing events when replay events on a restart. To avoid that, when replaying, we need to make sure that we start from a sufficient large of time before the last recorded sent event to eliminate any clock skews. Usually servers have their clock time very close to each other, so I guess 1 minute is more than enough. I defined the default as 15 minute.
 
-Projection idempotency for a specific aggregate can be achieved by just looking into the sequence on the event for a particular topic and partition. We can safely ignore events that have lower sequence than the last one received.
+Projection idempotency for a specific aggregate can be achieved by just looking into the version. We can safely ignore events that have lower version than the last one recorded.
 
 ### IDs
 
@@ -341,19 +352,18 @@ Pushing solutions are implemented for:
 - PotgreSQL
 - MySQL
 
-#### Polling
+#### Polling and the Outbox pattern
 
 Another the way to achieve insert CDC is by polling.
-This solution is a solution that works for all kinds of databases.
+This solution is a solution that works for all kinds of databases with transactions.
 This can be used when the database does not have an easy way to provide change streams, or you have to pay expensive licenses.
 
 Although polling is straight forward to implement and easy to understand, there are something that we need to be aware.
 
-Events should be stored with an incremental sortable key (partition+sequence discussed above). With this we can then replay events after from a specific event.
+Events should be stored with an incremental sortable key (partition+sequence discussed above) and it must be monotonic regarding the same aggregate.
 
-A poller process then polls the database for new events (the ones without a sequence value). The events are then published to a event bus and updated with the returned sequence. 
-
-> It is assumed that the a monotonic sequence is returned.
+When writing to the event store we also write into the outbox table.
+A poller process then polls the outbox table for new events. The events are then published to a event bus and deleted from the outbox. 
 
 > Consuming events is discuss in more detail below, in CQRS section. 
 
@@ -365,23 +375,7 @@ Advantages:
 Disadvantages
 * Network costs. If the data is updated infrequently we will be polling with no results. On the other hand, if the data change frequency is hight then there will be no difference.
 
-A polling solution is implemented.
-
-
-### NoSQL
-
-When we interact with an aggregate, several events may be created. 
-
-If a SQL database is used, like PostgreSQL, we create a record per event and used a transaction to guarantee consistency.
-
-For document NoSQL databases that don't support transactions, the solution is to use one document with the array of events inside, as a sub-collection.
-The only requirement is that the database needs to provide unique constraints on multiple fields (aggregate_id, version).
-
-The record would be something like:
-
-`{ _id = 1, aggregate_id = 1, version = 1, events = [ { … }, { … }, { … }, { … } ] }`
-
-The recommended approach is to use transactions. This makes it easy to do `In Place Copy-Replace` migrations, to be added in the future.
+A polling solution  with the outbox pattern is implemented.
 
 ### Snapshots
 
@@ -393,21 +387,6 @@ Snapshots is a technique used to improve the performance of the event store, whe
 
 When saving an aggregate, we have the option to supply an idempotent key. This idempotency key needs to be unique in the whole event store. The event store needs to guarantee the uniqueness constraint.
 Later, we can check the presence of the idempotency key, to see if we are repeating an action. This can be useful when used in process manager reactors.
-
-In the following example I exemplify a money transfer with rollback actions, leveraging idempotent keys.
-
-Here, Withdraw and Deposit need to be idempotent, but setting the transfer state to complete does not. The former is idempotent action while the latter is not.
-
-Another interesting thing that the idempotency key allows us is to relate two different aggregates.
-In the pseudo code bellow, when we handle the `TransactionCreated` event, if the withdraw fails we set the transaction as failed.
-If the same event is delivered a second time and the withdraw is successful, we end up in an inconsistent state between the `Account` and the `Transaction` aggregates.
-
-Since only one of the operations must be successful, using the same idempotent key we guarantee consistency,
-because internally we check the presence of the key.
-If the events are delivered concurrently, we just have a concurrent error. 
-
-The goal of an idempotency key is not to fail an operation but to allow us to skip an operation (if the data is still the same). 
-
 
 ## Event Sourcing + Command Query Responsibility Segregation (CQRS)
 
@@ -549,7 +528,7 @@ workers := return projection.EventForwarderWorkers(ctx, logger, "forwarder", loc
 
 ```
 
-### Client Balancing for Event Bus without consumer groups
+### Client Balancing for an Event Bus without consumer groups
 
 Since events can be partitioned when forwarding database changes we provide a client balancer to spread the partitions over a set of workers in different service instances.
 
