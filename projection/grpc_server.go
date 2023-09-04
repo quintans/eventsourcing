@@ -16,11 +16,11 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-type GrpcServer struct {
-	store EventsRepository
+type GrpcServer[K eventsourcing.ID] struct {
+	store EventsRepository[K]
 }
 
-func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb.GetEventsReply, error) {
+func (s *GrpcServer[K]) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb.GetEventsReply, error) {
 	filter := pbFilterToFilter(r.GetFilter())
 	after, err := eventid.Parse(r.GetAfterEventId())
 	if err != nil {
@@ -47,7 +47,7 @@ func (s *GrpcServer) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (*pb
 		}
 		pbEvents[k] = &pb.Event{
 			Id:               v.ID.String(),
-			AggregateId:      v.AggregateID,
+			AggregateId:      v.AggregateID.String(),
 			AggregateVersion: v.AggregateVersion,
 			AggregateKind:    v.AggregateKind.String(),
 			Kind:             v.Kind.String(),
@@ -83,13 +83,13 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	}
 }
 
-func StartGrpcServer(ctx context.Context, address string, repo EventsRepository) error {
+func StartGrpcServer[K eventsourcing.ID](ctx context.Context, address string, repo EventsRepository[K]) error {
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
 		return faults.Errorf("failed to listen: %w", err)
 	}
 	s := grpc.NewServer()
-	pb.RegisterStoreServer(s, &GrpcServer{store: repo})
+	pb.RegisterStoreServer(s, &GrpcServer[K]{store: repo})
 
 	go func() {
 		<-ctx.Done()

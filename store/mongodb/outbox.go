@@ -3,6 +3,7 @@ package mongodb
 import (
 	"context"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink/poller"
@@ -13,10 +14,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var _ poller.Repository = (*OutboxRepository)(nil)
+var _ poller.Repository[*ulid.ULID] = (*OutboxRepository[*ulid.ULID])(nil)
 
-type EventsRepository interface {
-	GetEventsByIDs(context.Context, []string) ([]*eventsourcing.Event, error)
+type EventsRepository[K eventsourcing.ID] interface {
+	GetEventsByIDs(context.Context, []string) ([]*eventsourcing.Event[K], error)
 }
 
 type pending struct {
@@ -32,16 +33,16 @@ type Outbox struct {
 	Metadata        bson.M             `bson:"metadata,omitempty"`
 }
 
-type OutboxRepository struct {
+type OutboxRepository[K eventsourcing.ID] struct {
 	Repository
 
 	dbName         string
 	collectionName string
-	eventsRepo     EventsRepository
+	eventsRepo     EventsRepository[K]
 }
 
-func NewOutboxStore(client *mongo.Client, database, collectionName string, eventsRepo EventsRepository) *OutboxRepository {
-	r := &OutboxRepository{
+func NewOutboxStore[K eventsourcing.ID](client *mongo.Client, database, collectionName string, eventsRepo EventsRepository[K]) *OutboxRepository[K] {
+	r := &OutboxRepository[K]{
 		Repository: Repository{
 			client: client,
 		},
@@ -53,7 +54,7 @@ func NewOutboxStore(client *mongo.Client, database, collectionName string, event
 	return r
 }
 
-func (r *OutboxRepository) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
 	if batchSize > 0 {
 		opts.SetBatchSize(int32(batchSize))
@@ -95,19 +96,19 @@ func (r *OutboxRepository) PendingEvents(ctx context.Context, batchSize int, fil
 	return rows, nil
 }
 
-func (r *OutboxRepository) AfterSink(ctx context.Context, evtID eventid.EventID) error {
+func (r *OutboxRepository[K]) AfterSink(ctx context.Context, evtID eventid.EventID) error {
 	filter := bson.D{{"_id", bson.D{{"$eq", evtID.String()}}}}
 
 	_, err := r.collection().DeleteOne(ctx, filter)
 	return faults.Wrapf(err, "deleting from '%s' where id='%s'", r.collectionName, evtID)
 }
 
-func (r *OutboxRepository) collection() *mongo.Collection {
+func (r *OutboxRepository[K]) collection() *mongo.Collection {
 	return r.client.Database(r.dbName).Collection(r.collectionName)
 }
 
-func OutboxInsertHandler(database, collName string) store.InTxHandler {
-	return func(ctx context.Context, event *eventsourcing.Event) error {
+func OutboxInsertHandler[K eventsourcing.ID](database, collName string) store.InTxHandler[K] {
+	return func(ctx context.Context, event *eventsourcing.Event[K]) error {
 		sess := mongo.SessionFromContext(ctx)
 		if sess == nil {
 			return faults.Errorf("no session in context")
@@ -119,7 +120,7 @@ func OutboxInsertHandler(database, collName string) store.InTxHandler {
 		coll := sess.Client().Database(database).Collection(collName)
 		_, err = coll.InsertOne(ctx, Outbox{
 			ID:              event.ID.String(),
-			AggregateID:     event.AggregateID,
+			AggregateID:     event.AggregateID.String(),
 			AggregateIDHash: event.AggregateIDHash,
 			AggregateKind:   event.AggregateKind,
 			Kind:            event.Kind,

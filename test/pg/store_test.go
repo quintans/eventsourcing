@@ -38,9 +38,9 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL(dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es := eventsourcing.NewEventStore[*test.Account, ulid.ULID](r, test.NewJSONCodec(), esOptions)
 
 	id := util.NewID()
 	acc, err := test.CreateAccount("Paulo", id, 100)
@@ -147,7 +147,7 @@ func TestPollListener(t *testing.T) {
 	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[K]) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -209,7 +209,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[K]) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -277,7 +277,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[K]) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -428,7 +428,7 @@ func TestMigration(t *testing.T) {
 	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
-		func(events []*eventsourcing.Event) ([]*eventsourcing.EventMigration, error) {
+		func(events []*eventsourcing.Event[K]) ([]*eventsourcing.EventMigration, error) {
 			var migration []*eventsourcing.EventMigration
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store

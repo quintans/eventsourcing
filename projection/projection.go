@@ -48,7 +48,7 @@ type resumeKV struct {
 func Project[K eventsourcing.ID](
 	logger *slog.Logger,
 	lockerFactory LockerFactory,
-	esRepo EventsRepository,
+	esRepo EventsRepository[K],
 	subscriber Consumer[K],
 	projection Projection[K],
 	splits int,
@@ -138,7 +138,7 @@ func catchUp[K eventsourcing.ID](
 	ctx context.Context,
 	logger *slog.Logger,
 	lockerFactory LockerFactory,
-	esRepo EventsRepository,
+	esRepo EventsRepository[K],
 	topic string,
 	splits int,
 	joinedParts string,
@@ -257,7 +257,7 @@ func catchUp[K eventsourcing.ID](
 func startConsuming[K eventsourcing.ID](ctx context.Context, logger *slog.Logger, subPos map[uint32]SubscriberPosition, topic string, subscriber Consumer[K], projection Projection[K], resumeStore store.KVStore) error {
 	checkPointCh, _ := asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic)
 
-	handler := func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error {
+	handler := func(ctx context.Context, e *sink.Message[K], partition uint32, seq uint64) error {
 		er := projection.Handle(ctx, e)
 		if er != nil {
 			return faults.Wrap(er)
@@ -311,7 +311,7 @@ func catchupAfterUntil[K eventsourcing.ID](ctx context.Context, topic string, pr
 func catching[K eventsourcing.ID](
 	ctx context.Context,
 	logger *slog.Logger,
-	esRepo EventsRepository,
+	esRepo EventsRepository[K],
 	after eventid.EventID,
 	until eventid.EventID,
 	partitions, partition uint32,
@@ -338,7 +338,7 @@ func catching[K eventsourcing.ID](
 		Split:          partition,
 	})
 
-	handle := func(ctx context.Context, msg *sink.Message) error {
+	handle := func(ctx context.Context, msg *sink.Message[K]) error {
 		err := projection.Handle(ctx, msg)
 		if err != nil {
 			return faults.Wrap(err)

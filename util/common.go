@@ -13,6 +13,10 @@ func Hash(s string) uint32 {
 	return h.Sum32()
 }
 
+func HashInt(s string) int32 {
+	return Int32ring(Hash(s))
+}
+
 func Int32ring(x uint32) int32 {
 	h := int32(x)
 	// we want a positive value so that partitioning (mod) results in a positive value.

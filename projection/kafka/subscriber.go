@@ -10,6 +10,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/cenkalti/backoff"
+	"github.com/oklog/ulid/v2"
 	"github.com/teris-io/shortid"
 
 	"github.com/quintans/eventsourcing"
@@ -63,7 +64,7 @@ func WithMsgCodec[K eventsourcing.ID](codec sink.Codec[K]) SubOption[K] {
 	}
 }
 
-// var _ projection.Consumer = (*Subscriber)(nil)
+var _ projection.Consumer[*ulid.ULID] = (*Subscriber[*ulid.ULID])(nil)
 
 type Subscriber[K eventsourcing.ID] struct {
 	logger     *slog.Logger

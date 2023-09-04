@@ -15,13 +15,13 @@ import (
 	"github.com/quintans/eventsourcing/util"
 )
 
-func (r *EsRepository) MigrateInPlaceCopyReplace(
+func (r *EsRepository[K]) MigrateInPlaceCopyReplace(
 	ctx context.Context,
 	revision int,
 	snapshotThreshold uint32,
-	rehydrateFunc func(eventsourcing.Aggregater, *eventsourcing.Event) error, // called only if snapshot threshold is reached
+	rehydrateFunc func(eventsourcing.Aggregater[K], *eventsourcing.Event[K]) error, // called only if snapshot threshold is reached
 	codec eventsourcing.Codec,
-	handler eventsourcing.MigrationHandler,
+	handler eventsourcing.MigrationHandler[K],
 	targetAggregateKind eventsourcing.Kind,
 	originalAggregateKind eventsourcing.Kind,
 	originalEventTypeCriteria ...eventsourcing.Kind,
@@ -58,7 +58,7 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	}
 }
 
-func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eventsourcing.Kind, eventTypeCriteria []eventsourcing.Kind) ([]*eventsourcing.Event, error) {
+func (r *EsRepository[K]) eventsForMigration(ctx context.Context, aggregateKind eventsourcing.Kind, eventTypeCriteria []eventsourcing.Kind) ([]*eventsourcing.Event[K], error) {
 	if aggregateKind == "" {
 		return nil, faults.New("aggregate type needs to be specified")
 	}
@@ -90,20 +90,23 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 		return nil, faults.Errorf("unable to query events: %w\n%s", err, query)
 	}
 
-	evts := make([]*eventsourcing.Event, len(events))
+	evts := make([]*eventsourcing.Event[K], len(events))
 	for k, v := range events {
-		evts[k] = toEventsourcingEvent(v)
+		evts[k], err = toEventSourcingEvent[K](v)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return evts, nil
 }
 
-func (r *EsRepository) saveMigration(
+func (r *EsRepository[K]) saveMigration(
 	ctx context.Context,
 	targetAggregateKind eventsourcing.Kind,
-	last *eventsourcing.Event,
+	last *eventsourcing.Event[K],
 	migration []*eventsourcing.EventMigration,
 	snapshotThreshold uint32,
-	rehydrateFunc func(eventsourcing.Aggregater, *eventsourcing.Event) error,
+	rehydrateFunc func(eventsourcing.Aggregater[K], *eventsourcing.Event[K]) error,
 	codec eventsourcing.Codec,
 	revision int,
 ) error {
@@ -116,7 +119,7 @@ func (r *EsRepository) saveMigration(
 		id := gen.NewID()
 		err := r.saveEvent(c, tx, &Event{
 			ID:               id,
-			AggregateID:      last.AggregateID,
+			AggregateID:      last.AggregateID.String(),
 			AggregateIDHash:  util.Int32ring(last.AggregateIDHash),
 			AggregateVersion: version,
 			AggregateKind:    last.AggregateKind,
@@ -139,14 +142,14 @@ func (r *EsRepository) saveMigration(
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
 		}
 
-		var aggregate eventsourcing.Aggregater
+		var aggregate eventsourcing.Aggregater[K]
 		// is over snapshot threshold?
 		if snapshotThreshold > 0 && len(migration) >= int(snapshotThreshold) {
 			t, er := codec.Decode(nil, targetAggregateKind)
 			if er != nil {
 				return faults.Wrap(er)
 			}
-			aggregate = t.(eventsourcing.Aggregater)
+			aggregate = t.(eventsourcing.Aggregater[K])
 		}
 
 		// insert new events
@@ -157,7 +160,7 @@ func (r *EsRepository) saveMigration(
 			lastID = gen.NewID()
 			event := &Event{
 				ID:               lastID,
-				AggregateID:      last.AggregateID,
+				AggregateID:      last.AggregateID.String(),
 				AggregateIDHash:  util.Int32ring(last.AggregateIDHash),
 				AggregateVersion: version,
 				AggregateKind:    last.AggregateKind,
@@ -174,7 +177,11 @@ func (r *EsRepository) saveMigration(
 			}
 			if aggregate != nil {
 				event.ID = lastID
-				err = rehydrateFunc(aggregate, toEventsourcingEvent(event))
+				evt, err := toEventSourcingEvent[K](event)
+				if err != nil {
+					return err
+				}
+				err = rehydrateFunc(aggregate, evt)
 				if err != nil {
 					return err
 				}
@@ -189,7 +196,7 @@ func (r *EsRepository) saveMigration(
 
 			err = saveSnapshot(c, tx, &Snapshot{
 				ID:               lastID,
-				AggregateID:      last.AggregateID,
+				AggregateID:      last.AggregateID.String(),
 				AggregateVersion: version,
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,

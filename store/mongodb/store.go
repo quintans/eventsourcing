@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -50,24 +51,24 @@ type Snapshot struct {
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
 }
 
-var _ eventsourcing.EsRepository = (*EsRepository)(nil)
+var _ eventsourcing.EsRepository[*ulid.ULID] = (*EsRepository[*ulid.ULID])(nil)
 
-type Option func(f *EsRepository)
+type Option[K eventsourcing.ID] func(f *EsRepository[K])
 
-func WithEventsCollection(eventsCollection string) Option {
-	return func(r *EsRepository) {
+func WithEventsCollection[K eventsourcing.ID](eventsCollection string) Option[K] {
+	return func(r *EsRepository[K]) {
 		r.eventsCollectionName = eventsCollection
 	}
 }
 
-func WithSnapshotsCollection(snapshotsCollection string) Option {
-	return func(r *EsRepository) {
+func WithSnapshotsCollection[K eventsourcing.ID](snapshotsCollection string) Option[K] {
+	return func(r *EsRepository[K]) {
 		r.snapshotsCollectionName = snapshotsCollection
 	}
 }
 
-func WithTxHandler(txHandler store.InTxHandler) Option {
-	return func(r *EsRepository) {
+func WithTxHandler[K eventsourcing.ID](txHandler store.InTxHandler[K]) Option[K] {
+	return func(r *EsRepository[K]) {
 		r.txHandlers = append(r.txHandlers, txHandler)
 	}
 }
@@ -107,21 +108,21 @@ func (r Repository) wrapWithTx(ctx context.Context, callback func(context.Contex
 }
 
 var (
-	_ eventsourcing.EsRepository  = (*EsRepository)(nil)
-	_ projection.EventsRepository = (*EsRepository)(nil)
+	_ eventsourcing.EsRepository[*ulid.ULID]  = (*EsRepository[*ulid.ULID])(nil)
+	_ projection.EventsRepository[*ulid.ULID] = (*EsRepository[*ulid.ULID])(nil)
 )
 
-type EsRepository struct {
+type EsRepository[K eventsourcing.ID] struct {
 	Repository
 
 	dbName                  string
-	txHandlers              []store.InTxHandler
+	txHandlers              []store.InTxHandler[K]
 	eventsCollectionName    string
 	snapshotsCollectionName string
 }
 
 // NewStoreWithURI creates a new instance of MongoEsRepository
-func NewStoreWithURI(connString, database string, opts ...Option) (*EsRepository, error) {
+func NewStoreWithURI[K eventsourcing.ID](connString, database string, opts ...Option[K]) (*EsRepository[K], error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -130,12 +131,12 @@ func NewStoreWithURI(connString, database string, opts ...Option) (*EsRepository
 		return nil, faults.Wrap(err)
 	}
 
-	return NewStore(client, database, opts...), nil
+	return NewStore[K](client, database, opts...), nil
 }
 
 // NewStore creates a new instance of MongoEsRepository
-func NewStore(client *mongo.Client, database string, opts ...Option) *EsRepository {
-	r := &EsRepository{
+func NewStore[K eventsourcing.ID](client *mongo.Client, database string, opts ...Option[K]) *EsRepository[K] {
+	r := &EsRepository[K]{
 		Repository: Repository{
 			client: client,
 		},
@@ -151,27 +152,27 @@ func NewStore(client *mongo.Client, database string, opts ...Option) *EsReposito
 	return r
 }
 
-func (r *EsRepository) Client() *mongo.Client {
+func (r *EsRepository[K]) Client() *mongo.Client {
 	return r.client
 }
 
-func (r *EsRepository) Close(ctx context.Context) {
+func (r *EsRepository[K]) Close(ctx context.Context) {
 	_ = r.client.Disconnect(ctx)
 }
 
-func (r *EsRepository) collection(coll string) *mongo.Collection {
+func (r *EsRepository[K]) collection(coll string) *mongo.Collection {
 	return r.client.Database(r.dbName).Collection(coll)
 }
 
-func (r *EsRepository) eventsCollection() *mongo.Collection {
+func (r *EsRepository[K]) eventsCollection() *mongo.Collection {
 	return r.collection(r.eventsCollectionName)
 }
 
-func (r *EsRepository) snapshotCollection() *mongo.Collection {
+func (r *EsRepository[K]) snapshotCollection() *mongo.Collection {
 	return r.collection(r.snapshotsCollectionName)
 }
 
-func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord) (eventid.EventID, uint32, error) {
+func (r *EsRepository[K]) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord[K]) (eventid.EventID, uint32, error) {
 	if len(eRec.Details) == 0 {
 		return eventid.Zero, 0, faults.New("No events to be saved")
 	}
@@ -183,12 +184,13 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventR
 		for _, e := range eRec.Details {
 			version++
 			id = e.ID
+			aggIDStr := eRec.AggregateID.String()
 			err := r.saveEvent(
 				ctx,
 				&Event{
 					ID:               id.String(),
-					AggregateID:      eRec.AggregateID,
-					AggregateIDHash:  util.Hash(eRec.AggregateID),
+					AggregateID:      aggIDStr,
+					AggregateIDHash:  util.Hash(aggIDStr),
 					AggregateKind:    eRec.AggregateKind,
 					Kind:             e.Kind,
 					Body:             e.Body,
@@ -218,7 +220,7 @@ func (r *EsRepository) SaveEvent(ctx context.Context, eRec *eventsourcing.EventR
 	return id, version, nil
 }
 
-func (r *EsRepository) saveEvent(ctx context.Context, doc *Event, id eventid.EventID) error {
+func (r *EsRepository[K]) saveEvent(ctx context.Context, doc *Event, id eventid.EventID) error {
 	doc.ID = id.String()
 	_, err := r.eventsCollection().InsertOne(ctx, doc)
 	if err != nil {
@@ -228,12 +230,15 @@ func (r *EsRepository) saveEvent(ctx context.Context, doc *Event, id eventid.Eve
 	return r.applyTxHandlers(ctx, doc, id)
 }
 
-func (r *EsRepository) applyTxHandlers(ctx context.Context, doc *Event, id eventid.EventID) error {
+func (r *EsRepository[K]) applyTxHandlers(ctx context.Context, doc *Event, id eventid.EventID) error {
 	if len(r.txHandlers) == 0 {
 		return nil
 	}
 
-	e := toEventsourcingEvent(doc, id)
+	e, err := toEventsourcingEvent[K](doc, id)
+	if err != nil {
+		return err
+	}
 	for _, handler := range r.txHandlers {
 		err := handler(ctx, e)
 		if err != nil {
@@ -256,21 +261,22 @@ func isMongoDup(err error) bool {
 	return false
 }
 
-func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eventsourcing.Snapshot, error) {
+func (r *EsRepository[K]) GetSnapshot(ctx context.Context, aggregateID K) (eventsourcing.Snapshot[K], error) {
 	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
-	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID}}, opts).Decode(&snap); err != nil {
+	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID.String()}}, opts).Decode(&snap); err != nil {
 		if err == mongo.ErrNoDocuments {
-			return eventsourcing.Snapshot{}, nil
+			return eventsourcing.Snapshot[K]{}, nil
 		}
-		return eventsourcing.Snapshot{}, faults.Errorf("unable to get snapshot for aggregate '%s': %w", aggregateID, err)
+		return eventsourcing.Snapshot[K]{}, faults.Errorf("unable to get snapshot for aggregate '%s': %w", aggregateID, err)
 	}
 	id, err := eventid.Parse(snap.ID)
 	if err != nil {
-		return eventsourcing.Snapshot{}, faults.Errorf("unable to parse snapshot ID '%s': %w", snap.ID, err)
+		return eventsourcing.Snapshot[K]{}, faults.Errorf("unable to parse snapshot ID '%s': %w", snap.ID, err)
 	}
-	return eventsourcing.Snapshot{
+
+	return eventsourcing.Snapshot[K]{
 		ID:               id,
 		AggregateID:      aggregateID,
 		AggregateVersion: snap.AggregateVersion,
@@ -280,10 +286,10 @@ func (r *EsRepository) GetSnapshot(ctx context.Context, aggregateID string) (eve
 	}, nil
 }
 
-func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot) error {
+func (r *EsRepository[K]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
 	return r.saveSnapshot(ctx, &Snapshot{
 		ID:               snapshot.ID.String(),
-		AggregateID:      snapshot.AggregateID,
+		AggregateID:      snapshot.AggregateID.String(),
 		AggregateVersion: snapshot.AggregateVersion,
 		AggregateKind:    snapshot.AggregateKind,
 		Body:             snapshot.Body,
@@ -291,16 +297,16 @@ func (r *EsRepository) SaveSnapshot(ctx context.Context, snapshot *eventsourcing
 	})
 }
 
-func (r *EsRepository) saveSnapshot(ctx context.Context, snapshot *Snapshot) error {
+func (r *EsRepository[K]) saveSnapshot(ctx context.Context, snapshot *Snapshot) error {
 	// TODO instead of adding we could replace UPDATE/INSERT
 	_, err := r.snapshotCollection().InsertOne(ctx, snapshot)
 
 	return faults.Wrap(err)
 }
 
-func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID string, snapVersion int) ([]*eventsourcing.Event, error) {
+func (r *EsRepository[K]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
 	filter := bson.D{
-		{"aggregate_id", bson.D{{"$eq", aggregateID}}},
+		{"aggregate_id", bson.D{{"$eq", aggregateID.String()}}},
 		{"migration", bson.D{{"$eq", 0}}},
 	}
 	if snapVersion > -1 {
@@ -318,7 +324,7 @@ func (r *EsRepository) GetAggregateEvents(ctx context.Context, aggregateID strin
 	return events, nil
 }
 
-func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
+func (r *EsRepository[K]) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
 	filter := bson.D{
 		{"idempotency_key", idempotencyKey},
 		{"migration", bson.D{{"$eq", 0}}},
@@ -335,7 +341,7 @@ func (r *EsRepository) HasIdempotencyKey(ctx context.Context, idempotencyKey str
 	return true, nil
 }
 
-func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetRequest, forget func(kind eventsourcing.Kind, body []byte, snapshot bool) ([]byte, error)) error {
+func (r *EsRepository[K]) Forget(ctx context.Context, request eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte, snapshot bool) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// for events
@@ -404,7 +410,7 @@ func (r *EsRepository) Forget(ctx context.Context, request eventsourcing.ForgetR
 	return nil
 }
 
-func (r *EsRepository) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (r *EsRepository[K]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	flt := bson.D{
 		{"_id", bson.D{{"$gt", after}}},
 		{"_id", bson.D{{"$lte", until}}},
@@ -464,11 +470,11 @@ func partitionFilter(field string, splits, split uint32) bson.E {
 	}
 }
 
-func (r *EsRepository) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event, error) {
-	return queryEvents(ctx, r.eventsCollection(), filter, opts)
+func (r *EsRepository[K]) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event[K], error) {
+	return queryEvents[K](ctx, r.eventsCollection(), filter, opts)
 }
 
-func queryEvents(ctx context.Context, coll *mongo.Collection, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event, error) {
+func queryEvents[K eventsourcing.ID](ctx context.Context, coll *mongo.Collection, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event[K], error) {
 	cursor, err := coll.Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -482,22 +488,31 @@ func queryEvents(ctx context.Context, coll *mongo.Collection, filter bson.D, opt
 		return nil, faults.Wrap(err)
 	}
 
-	events := []*eventsourcing.Event{}
+	events := []*eventsourcing.Event[K]{}
 	for _, evt := range evts {
 		lastEventID, err := eventid.Parse(evt.ID)
 		if err != nil {
 			return nil, faults.Errorf("unable to parse message ID '%s': %w", evt.ID, err)
 		}
-		events = append(events, toEventsourcingEvent(evt, lastEventID))
+		evt, err := toEventsourcingEvent[K](evt, lastEventID)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, evt)
 	}
 
 	return events, nil
 }
 
-func toEventsourcingEvent(e *Event, id eventid.EventID) *eventsourcing.Event {
-	return &eventsourcing.Event{
+func toEventsourcingEvent[K eventsourcing.ID](e *Event, id eventid.EventID) (*eventsourcing.Event[K], error) {
+	var aggID K
+	err := aggID.UnmarshalText([]byte(e.AggregateID))
+	if err != nil {
+		return nil, faults.Errorf("unmarshaling id '%s': %w", e.AggregateID, err)
+	}
+	return &eventsourcing.Event[K]{
 		ID:               id,
-		AggregateID:      e.AggregateID,
+		AggregateID:      aggID,
 		AggregateIDHash:  e.AggregateIDHash,
 		AggregateVersion: e.AggregateVersion,
 		AggregateKind:    e.AggregateKind,
@@ -507,10 +522,10 @@ func toEventsourcingEvent(e *Event, id eventid.EventID) *eventsourcing.Event {
 		Metadata:         encoding.JSONOfMap(e.Metadata),
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
-	}
+	}, nil
 }
 
-func (r *EsRepository) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event, error) {
+func (r *EsRepository[K]) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	return queryEvents(ctx, r.eventsCollection(), bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
+	return queryEvents[K](ctx, r.eventsCollection(), bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
 }

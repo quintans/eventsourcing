@@ -205,7 +205,7 @@ func TestPollListener(t *testing.T) {
 
 	var mu sync.Mutex
 	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[K]) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -267,7 +267,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[K]) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -335,7 +335,7 @@ func TestListenerWithLabels(t *testing.T) {
 	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[K]) error {
 		if e.AggregateID == id.String() {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -524,7 +524,7 @@ func TestMigration(t *testing.T) {
 	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
-		func(events []*eventsourcing.Event) ([]*eventsourcing.EventMigration, error) {
+		func(events []*eventsourcing.Event[K]) ([]*eventsourcing.EventMigration, error) {
 			var migration []*eventsourcing.EventMigration
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store

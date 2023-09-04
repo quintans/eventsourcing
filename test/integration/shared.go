@@ -16,7 +16,7 @@ import (
 
 // EventForwarderWorker creates workers that listen to database changes,
 // transform them to events and publish them into the message bus.
-func EventForwarderWorker(t *testing.T, ctx context.Context, logger *slog.Logger, dbConfig shared.DBConfig, sinker sink.Sinker) {
+func EventForwarderWorker(t *testing.T, ctx context.Context, logger *slog.Logger, dbConfig shared.DBConfig, sinker sink.Sinker[K]) {
 	dbConf := mysql.DBConfig{
 		Host:     dbConfig.Host,
 		Port:     dbConfig.Port,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -18,17 +19,17 @@ import (
 	"github.com/IBM/sarama"
 )
 
-var _ sink.Sinker = (*Sink)(nil)
+var _ sink.Sinker[*ulid.ULID] = (*Sink[*ulid.ULID])(nil)
 
 const checkPointBuffer = 1_000
 
-type Sink struct {
+type Sink[K eventsourcing.ID] struct {
 	kvStore    store.KVStore
 	logger     *slog.Logger
 	producer   sarama.SyncProducer
 	topic      string
 	partitions []uint32
-	codec      sink.Codec
+	codec      sink.Codec[K]
 	brokers    []string
 
 	checkPointCh chan resume
@@ -40,7 +41,7 @@ type resume struct {
 }
 
 // NewSink instantiate a Kafka sink
-func NewSink(logger *slog.Logger, kvStore store.KVStore, topic string, brokers []string) (*Sink, error) {
+func NewSink[K eventsourcing.ID](logger *slog.Logger, kvStore store.KVStore, topic string, brokers []string) (*Sink[K], error) {
 	// producer config
 	config := sarama.NewConfig()
 	config.Producer.Retry.Max = 5
@@ -62,11 +63,11 @@ func NewSink(logger *slog.Logger, kvStore store.KVStore, topic string, brokers [
 		return nil, faults.Errorf("getting partitions: %w", err)
 	}
 
-	s := &Sink{
+	s := &Sink[K]{
 		kvStore:      kvStore,
 		logger:       logger.With("sink", "kafka"),
 		topic:        topic,
-		codec:        sink.JSONCodec{},
+		codec:        sink.JSONCodec[K]{},
 		producer:     prd,
 		partitions:   util.NormalizePartitions(partitions),
 		brokers:      brokers,
@@ -96,24 +97,24 @@ func NewSink(logger *slog.Logger, kvStore store.KVStore, topic string, brokers [
 	return s, nil
 }
 
-func (s *Sink) SetCodec(codec sink.Codec) {
+func (s *Sink[K]) SetCodec(codec sink.Codec[K]) {
 	s.codec = codec
 }
 
-func (s *Sink) Close() {
+func (s *Sink[K]) Close() {
 	if s.producer != nil {
 		s.producer.Close()
 	}
 	s.checkPointCh <- resume{} // signal quit
 }
 
-func (s *Sink) Partitions() (total uint32, partitions []uint32) {
+func (s *Sink[K]) Partitions() (total uint32, partitions []uint32) {
 	return uint32(len(s.partitions)), s.partitions
 }
 
 // ResumeTokens iterates over all the last saved resumed token per partition
 // It will return 0 if there is no last message
-func (s *Sink) ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) (e error) {
+func (s *Sink[K]) ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) (e error) {
 	defer faults.Catch(&e, "ResumeTokens(...)")
 
 	for _, partition := range s.partitions {
@@ -153,12 +154,12 @@ func resumeTokenKey(topic string, partitionID uint32) (_ string, e error) {
 	return fmt.Sprintf("%s#%d", topic, partitionID), nil
 }
 
-func (s *Sink) Accepts(_ uint32) bool {
+func (s *Sink[K]) Accepts(_ uint32) bool {
 	return true
 }
 
 // Sink sends the event to the message queue
-func (s *Sink) Sink(_ context.Context, e *eventsourcing.Event, m sink.Meta) (er error) {
+func (s *Sink[K]) Sink(_ context.Context, e *eventsourcing.Event[K], m sink.Meta) (er error) {
 	defer faults.Catch(&er, "Sink(...)")
 
 	body, err := s.codec.Encode(e)
@@ -168,7 +169,7 @@ func (s *Sink) Sink(_ context.Context, e *eventsourcing.Event, m sink.Meta) (er 
 
 	msg := &sarama.ProducerMessage{
 		Topic: s.topic,
-		Key:   sarama.StringEncoder(e.AggregateID),
+		Key:   sarama.StringEncoder(e.AggregateID.String()),
 		Value: sarama.ByteEncoder(body),
 	}
 	partition, _, err := s.producer.SendMessage(msg)

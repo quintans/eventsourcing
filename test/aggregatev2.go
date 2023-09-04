@@ -226,7 +226,7 @@ func (a *AccountV2) HandleOwnerUpdatedV2(event OwnerUpdatedV2) {
 	a.owner = event.Owner
 }
 
-func MigrateAccountCreated(e *eventsourcing.Event, codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
+func MigrateAccountCreated[K eventsourcing.ID](e *eventsourcing.Event[K], codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
 	// will upcast
 	event, err := codec.Decode(e.Body, e.Kind)
 	if err != nil {
@@ -244,7 +244,7 @@ func MigrateAccountCreated(e *eventsourcing.Event, codec eventsourcing.Codec) (*
 	return m, nil
 }
 
-func MigrateOwnerUpdated(e *eventsourcing.Event, codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
+func MigrateOwnerUpdated[K eventsourcing.ID](e *eventsourcing.Event[K], codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
 	// will upcast
 	event, err := codec.Decode(e.Body, e.Kind)
 	if err != nil {

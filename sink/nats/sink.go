@@ -8,6 +8,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/nats-io/nats.go"
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -18,11 +19,11 @@ import (
 	"github.com/quintans/eventsourcing/util"
 )
 
-var _ sink.Sinker = (*Sink)(nil)
+var _ sink.Sinker[*ulid.ULID] = (*Sink[*ulid.ULID])(nil)
 
 const checkPointBuffer = 1_000
 
-type Sink struct {
+type Sink[K eventsourcing.ID] struct {
 	kvStore         store.KVStore
 	logger          *slog.Logger
 	topic           string
@@ -30,7 +31,7 @@ type Sink struct {
 	js              nats.JetStreamContext
 	totalPartitions uint32
 	partitions      []uint32
-	codec           sink.Codec
+	codec           sink.Codec[K]
 
 	checkPointCh chan resume
 }
@@ -41,16 +42,16 @@ type resume struct {
 }
 
 // NewSink instantiate NATS sink
-func NewSink(kvStore store.KVStore, logger *slog.Logger, topic string, totalPartitions uint32, partitions []uint32, url string, options ...nats.Option) (_ *Sink, err error) {
+func NewSink[K eventsourcing.ID](kvStore store.KVStore, logger *slog.Logger, topic string, totalPartitions uint32, partitions []uint32, url string, options ...nats.Option) (_ *Sink[K], err error) {
 	defer faults.Catch(&err, "NewSink(topic=%s, totalPartitions=%d, partitions=%v)", topic, totalPartitions, partitions)
 
-	p := &Sink{
+	p := &Sink[K]{
 		kvStore:         kvStore,
 		logger:          logger.With("sink", "nats"),
 		topic:           topic,
 		totalPartitions: totalPartitions,
 		partitions:      partitions,
-		codec:           sink.JSONCodec{},
+		codec:           sink.JSONCodec[K]{},
 		checkPointCh:    make(chan resume, checkPointBuffer),
 	}
 
@@ -97,24 +98,24 @@ func NewSink(kvStore store.KVStore, logger *slog.Logger, topic string, totalPart
 	return p, nil
 }
 
-func (s *Sink) SetCodec(codec sink.Codec) {
+func (s *Sink[K]) SetCodec(codec sink.Codec[K]) {
 	s.codec = codec
 }
 
-func (s *Sink) Close() {
+func (s *Sink[K]) Close() {
 	if s.nc != nil {
 		s.nc.Close()
 	}
 	s.checkPointCh <- resume{}
 }
 
-func (s *Sink) Partitions() (total uint32, partitions []uint32) {
+func (s *Sink[K]) Partitions() (total uint32, partitions []uint32) {
 	return s.totalPartitions, s.partitions
 }
 
 // ResumeTokens iterates over all the last saved resumed token per partition
 // It will return 0 if there is no last message
-func (s *Sink) ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) error {
+func (s *Sink[K]) ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) error {
 	for _, partition := range s.partitions {
 		topic, err := ComposeTopic(s.topic, partition)
 		if err != nil {
@@ -141,13 +142,13 @@ func (s *Sink) ResumeTokens(ctx context.Context, forEach func(resumeToken encodi
 	return nil
 }
 
-func (s *Sink) Accepts(hash uint32) bool {
+func (s *Sink[K]) Accepts(hash uint32) bool {
 	partition := util.CalcPartition(hash, s.totalPartitions)
 	return util.In(partition, s.partitions...)
 }
 
 // Sink sends the event to the message queue
-func (s *Sink) Sink(ctx context.Context, e *eventsourcing.Event, m sink.Meta) error {
+func (s *Sink[K]) Sink(ctx context.Context, e *eventsourcing.Event[K], m sink.Meta) error {
 	b, err := s.codec.Encode(e)
 	if err != nil {
 		return err

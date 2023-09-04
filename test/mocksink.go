@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/sink"
@@ -11,24 +12,24 @@ import (
 	"github.com/quintans/faults"
 )
 
-var _ sink.Sinker = (*MockSinkClient)(nil)
+var _ sink.Sinker[*ulid.ULID] = (*MockSinkClient[*ulid.ULID])(nil)
 
-type MockSinkData struct {
+type MockSinkData[K eventsourcing.ID] struct {
 	mu          sync.Mutex
-	events      map[uint32][]*sink.Message
+	events      map[uint32][]*sink.Message[K]
 	lastResumes map[uint32]encoding.Base64
 }
 
-func NewMockSinkData() *MockSinkData {
-	return &MockSinkData{
-		events:      map[uint32][]*sink.Message{},
+func NewMockSinkData[K eventsourcing.ID]() *MockSinkData[K] {
+	return &MockSinkData[K]{
+		events:      map[uint32][]*sink.Message[K]{},
 		lastResumes: map[uint32]encoding.Base64{},
 	}
 }
 
-func (s *MockSinkData) GetEvents() []*sink.Message {
+func (s *MockSinkData[K]) GetEvents() []*sink.Message[K] {
 	s.mu.Lock()
-	events := []*sink.Message{}
+	events := []*sink.Message[K]{}
 	for _, v := range s.events {
 		events = append(events, v...)
 	}
@@ -36,7 +37,7 @@ func (s *MockSinkData) GetEvents() []*sink.Message {
 	return events
 }
 
-func (s *MockSinkData) LastResumes() map[uint32]encoding.Base64 {
+func (s *MockSinkData[K]) LastResumes() map[uint32]encoding.Base64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -48,7 +49,7 @@ func (s *MockSinkData) LastResumes() map[uint32]encoding.Base64 {
 	return msgs
 }
 
-func (s *MockSinkData) SetLastResumes(lastEvents map[uint32]encoding.Base64) {
+func (s *MockSinkData[K]) SetLastResumes(lastEvents map[uint32]encoding.Base64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -59,10 +60,10 @@ type MockSinkClient[K eventsourcing.ID] struct {
 	totalPartitions uint32
 	partitions      []uint32
 	onSink          func(ctx context.Context, e *eventsourcing.Event[K]) error
-	data            *MockSinkData
+	data            *MockSinkData[K]
 }
 
-func NewMockSink[K eventsourcing.ID](data *MockSinkData, partitions, partitionsLow, partitionHi uint32) *MockSinkClient[K] {
+func NewMockSink[K eventsourcing.ID](data *MockSinkData[K], partitions, partitionsLow, partitionHi uint32) *MockSinkClient[K] {
 	parts := []uint32{}
 	for i := partitionsLow; i <= partitionHi; i++ {
 		parts = append(parts, i)

@@ -13,7 +13,7 @@ import (
 	"github.com/quintans/faults"
 )
 
-var _ projection.Projection = (*ProjectionMock)(nil)
+var _ projection.Projection[*ulid.ULID] = (*ProjectionMock[*ulid.ULID])(nil)
 
 type Balance struct {
 	Name   string
@@ -27,7 +27,7 @@ type ProjectionMock struct {
 	mu               sync.Mutex
 	balances         map[string]Balance
 	aggregateVersion map[string]uint32
-	events           []*sink.Message
+	events           []*sink.Message[K]
 }
 
 func NewProjectionMock(name string) *ProjectionMock {
@@ -47,7 +47,7 @@ func (*ProjectionMock) CatchUpOptions() projection.CatchUpOptions {
 	return projection.CatchUpOptions{}
 }
 
-func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message) error {
+func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message[K]) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -101,7 +101,7 @@ func (p *ProjectionMock) BalanceByID(id ulid.ULID) (Balance, bool) {
 	return b, ok
 }
 
-func (p *ProjectionMock) Events() []*sink.Message {
+func (p *ProjectionMock) Events() []*sink.Message[K] {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

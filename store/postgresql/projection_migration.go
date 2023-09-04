@@ -23,30 +23,30 @@ import (
 const retries = 3
 
 // ProjectionMigrater represents the structure implementation that a projection must return when asked how to rebuild itself
-type ProjectionMigrater interface {
+type ProjectionMigrater[K eventsourcing.ID] interface {
 	// Name returns the name of the new projection. It is used to track if the projection was fully processed
 	Name() string
 	// Steps returns the order of the aggregate types to process to recreate the projection
-	Steps() []ProjectionMigrationStep
+	Steps() []ProjectionMigrationStep[K]
 	// Flush is called for each aggregate with the current state
-	Flush(context.Context, store.AggregateMetadata, eventsourcing.Aggregater) error
+	Flush(context.Context, store.AggregateMetadata[K], eventsourcing.Aggregater[K]) error
 }
 
-type ProjectionMigrationStep struct {
+type ProjectionMigrationStep[K eventsourcing.ID] struct {
 	AggregateKind eventsourcing.Kind
 	// Factory creates a new aggregate instance
-	Factory func() eventsourcing.Aggregater
+	Factory func() eventsourcing.Aggregater[K]
 }
 
-type getByIDFunc func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater, store.AggregateMetadata, error)
+type getByIDFunc[K eventsourcing.ID] func(ctx context.Context, aggregateID string) (eventsourcing.Aggregater[K], store.AggregateMetadata[K], error)
 
 // MigrateConsistentProjection migrates a consistent projection by creating a new one
-func (r *EsRepository) MigrateConsistentProjection(
+func (r *EsRepository[K]) MigrateConsistentProjection(
 	ctx context.Context,
 	logger *slog.Logger,
 	locker lock.WaitLocker,
-	migrater ProjectionMigrater,
-	getByID getByIDFunc,
+	migrater ProjectionMigrater[K],
+	getByID getByIDFunc[K],
 ) error {
 	if err := r.createMigrationTable(ctx); err != nil {
 		return err
@@ -62,12 +62,12 @@ func (r *EsRepository) MigrateConsistentProjection(
 	return nil
 }
 
-func (r *EsRepository) migrateProjection(
+func (r *EsRepository[K]) migrateProjection(
 	ctx context.Context,
 	logger *slog.Logger,
 	locker lock.WaitLocker,
-	migrater ProjectionMigrater,
-	getByID getByIDFunc,
+	migrater ProjectionMigrater[K],
+	getByID getByIDFunc[K],
 ) error {
 	// check
 	ok, err := r.shouldMigrate(ctx)
@@ -122,11 +122,11 @@ func (r *EsRepository) migrateProjection(
 	return r.doneMigration(ctx, migrater.Name())
 }
 
-func (r *EsRepository) processAggregate(
+func (r *EsRepository[K]) processAggregate(
 	c context.Context,
-	migrater ProjectionMigrater,
+	migrater ProjectionMigrater[K],
 	aggregateID string,
-	getByID getByIDFunc,
+	getByID getByIDFunc[K],
 ) error {
 	agg, metadata, err := getByID(c, aggregateID)
 	if err != nil {
@@ -148,7 +148,7 @@ func (r *EsRepository) processAggregate(
 	})
 }
 
-func (r *EsRepository) createMigrationTable(ctx context.Context) error {
+func (r *EsRepository[K]) createMigrationTable(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS projection_migration (name VARCHAR (100) PRIMARY KEY)")
 	if err != nil {
 		return faults.Errorf("failed to create projection_migration table: %w", err)
@@ -157,7 +157,7 @@ func (r *EsRepository) createMigrationTable(ctx context.Context) error {
 	return nil
 }
 
-func (r *EsRepository) shouldMigrate(ctx context.Context) (bool, error) {
+func (r *EsRepository[K]) shouldMigrate(ctx context.Context) (bool, error) {
 	var value int
 	if err := r.db.GetContext(ctx, &value, "SELECT 1 FROM projection_migration WHERE name=$1"); err != nil {
 		if err != sql.ErrNoRows {
@@ -168,7 +168,7 @@ func (r *EsRepository) shouldMigrate(ctx context.Context) (bool, error) {
 	return value == 1, nil
 }
 
-func (r *EsRepository) doneMigration(ctx context.Context, name string) error {
+func (r *EsRepository[K]) doneMigration(ctx context.Context, name string) error {
 	_, err := r.db.ExecContext(ctx, `INSERT INTO projection_migration (name) VALUES ($1)`, name)
 	if err != nil {
 		return faults.Errorf("failed to mark projection migration '%s' as done: %w", name, err)
@@ -179,7 +179,7 @@ func (r *EsRepository) doneMigration(ctx context.Context, name string) error {
 
 const distinctLimit = 100
 
-func (r *EsRepository) distinctAggregates(
+func (r *EsRepository[K]) distinctAggregates(
 	ctx context.Context,
 	aggregateKind eventsourcing.Kind,
 	handler func(c context.Context, aggregateID string) error,
@@ -219,16 +219,15 @@ func (r *EsRepository) distinctAggregates(
 	return nil
 }
 
-func (r *EsRepository) addNoOp(ctx context.Context, metadata store.AggregateMetadata) error {
+func (r *EsRepository[K]) addNoOp(ctx context.Context, metadata store.AggregateMetadata[K]) error {
 	ver := metadata.Version + 1
-	aggID := metadata.ID
-	hash := util.Hash(aggID)
+	aggID := metadata.ID.String()
 	id := eventid.NewAfterTime(metadata.UpdatedAt)
 	tx := TxFromContext(ctx)
 	err := r.saveEvent(ctx, tx, &Event{
 		ID:               id,
 		AggregateID:      aggID,
-		AggregateIDHash:  util.Int32ring(hash),
+		AggregateIDHash:  util.HashInt(aggID),
 		AggregateVersion: ver,
 		AggregateKind:    metadata.Type,
 		Kind:             eventsourcing.KindNoOpEvent,
