@@ -60,7 +60,7 @@ type messageJSON struct {
 	CreatedAt        time.Time          `json:"created_at,omitempty"`
 }
 
-type JSONCodec[K eventsourcing.ID] struct{}
+type JSONCodec[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct{}
 
 func (JSONCodec[K]) Encode(e *eventsourcing.Event[K]) ([]byte, error) {
 	msgJ := messageJSON{
