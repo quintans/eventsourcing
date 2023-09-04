@@ -127,27 +127,27 @@ func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, *s
 }
 
 var (
-	_ eventsourcing.EsRepository[*ulid.ULID]  = (*EsRepository[*ulid.ULID])(nil)
-	_ projection.EventsRepository[*ulid.ULID] = (*EsRepository[*ulid.ULID])(nil)
+	_ eventsourcing.EsRepository[ulid.ULID, *ulid.ULID] = (*EsRepository[ulid.ULID, *ulid.ULID])(nil)
+	_ projection.EventsRepository[ulid.ULID]            = (*EsRepository[ulid.ULID, *ulid.ULID])(nil)
 )
 
-type EsRepository[K eventsourcing.ID] struct {
+type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	Repository
 	txHandlers []store.InTxHandler[K]
 }
 
-func NewStoreWithURL[K eventsourcing.ID](connString string, options ...Option[K]) (*EsRepository[K], error) {
+func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, options ...Option[K]) (*EsRepository[K, PK], error) {
 	db, err := sql.Open(driverName, connString)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
 
-	return NewStore[K](db, options...), nil
+	return NewStore[K, PK](db, options...), nil
 }
 
-func NewStore[K eventsourcing.ID](db *sql.DB, options ...Option[K]) *EsRepository[K] {
+func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](db *sql.DB, options ...Option[K]) *EsRepository[K, PK] {
 	dbx := sqlx.NewDb(db, driverName)
-	r := &EsRepository[K]{
+	r := &EsRepository[K, PK]{
 		Repository: Repository{
 			db: dbx,
 		},
@@ -160,7 +160,7 @@ func NewStore[K eventsourcing.ID](db *sql.DB, options ...Option[K]) *EsRepositor
 	return r
 }
 
-func (r *EsRepository[K]) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord[K]) (eventid.EventID, uint32, error) {
+func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord[K]) (eventid.EventID, uint32, error) {
 	idempotencyKey := eRec.IdempotencyKey
 
 	version := eRec.Version
@@ -198,7 +198,7 @@ func (r *EsRepository[K]) SaveEvent(ctx context.Context, eRec *eventsourcing.Eve
 	return id, version, nil
 }
 
-func (r *EsRepository[K]) saveEvent(ctx context.Context, tx *sql.Tx, event *Event) error {
+func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *Event) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO events (id, aggregate_id, aggregate_version, aggregate_kind, kind, body, idempotency_key, metadata, created_at, aggregate_id_hash, migrated)
 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -213,12 +213,12 @@ func (r *EsRepository[K]) saveEvent(ctx context.Context, tx *sql.Tx, event *Even
 	return r.applyTxHandlers(ctx, event)
 }
 
-func (r *EsRepository[K]) applyTxHandlers(ctx context.Context, event *Event) error {
+func (r *EsRepository[K, PK]) applyTxHandlers(ctx context.Context, event *Event) error {
 	if len(r.txHandlers) == 0 {
 		return nil
 	}
 
-	e, err := toEventSourcingEvent[K](event)
+	e, err := toEventSourcingEvent[K, PK](event)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func isDup(err error) bool {
 	return ok && pgerr.Code == pgUniqueViolation
 }
 
-func (r *EsRepository[K]) GetSnapshot(ctx context.Context, aggregateID K) (eventsourcing.Snapshot[K], error) {
+func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (eventsourcing.Snapshot[K], error) {
 	snap := Snapshot{}
 	if err := r.db.GetContext(ctx, &snap, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER BY id DESC LIMIT 1", aggregateID.String()); err != nil {
 		if err == sql.ErrNoRows {
@@ -256,7 +256,7 @@ func (r *EsRepository[K]) GetSnapshot(ctx context.Context, aggregateID K) (event
 	}, nil
 }
 
-func (r *EsRepository[K]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
+func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
 	return saveSnapshot(ctx, r.db, &Snapshot{
 		ID:               snapshot.ID,
 		AggregateID:      snapshot.AggregateID.String(),
@@ -281,7 +281,7 @@ func saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
 	return faults.Wrap(err)
 }
 
-func (r *EsRepository[K]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
+func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = $1 AND migration = 0")
 	args := []interface{}{aggregateID.String()}
@@ -434,7 +434,7 @@ func (r *EsRepository[K]) queryEvents(ctx context.Context, query string, args ..
 	return queryEvents[K](ctx, r.db, query, args...)
 }
 
-func queryEvents[K eventsourcing.ID](ctx context.Context, db *sqlx.DB, query string, args ...interface{}) ([]*eventsourcing.Event[K], error) {
+func queryEvents[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.Context, db *sqlx.DB, query string, args ...interface{}) ([]*eventsourcing.Event[K], error) {
 	rows, err := db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -450,7 +450,7 @@ func queryEvents[K eventsourcing.ID](ctx context.Context, db *sqlx.DB, query str
 			return nil, faults.Errorf("Unable to scan to struct: %w", err)
 		}
 
-		event, err := toEventSourcingEvent[K](pgEvent)
+		event, err := toEventSourcingEvent[K, PK](pgEvent)
 		if err != nil {
 			return nil, err
 		}
@@ -460,15 +460,15 @@ func queryEvents[K eventsourcing.ID](ctx context.Context, db *sqlx.DB, query str
 	return events, nil
 }
 
-func toEventSourcingEvent[K eventsourcing.ID](e *Event) (*eventsourcing.Event[K], error) {
-	id := new(K)
+func toEventSourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event) (*eventsourcing.Event[K], error) {
+	id := PK(new(K))
 	err := id.UnmarshalText([]byte(e.AggregateID))
 	if err != nil {
 		return nil, faults.Errorf("unmarshaling id '%s': %w", e.AggregateID, err)
 	}
 	return &eventsourcing.Event[K]{
 		ID:               e.ID,
-		AggregateID:      id,
+		AggregateID:      *id,
 		AggregateIDHash:  uint32(e.AggregateIDHash),
 		AggregateVersion: e.AggregateVersion,
 		AggregateKind:    e.AggregateKind,

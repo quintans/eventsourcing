@@ -21,10 +21,10 @@ type GrpcRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	address string
 }
 
-var _ EventsRepository[ulid.ULID] = (*GrpcRepository[ulid.ULID])(nil)
+var _ EventsRepository[ulid.ULID] = (*GrpcRepository[ulid.ULID, *ulid.ULID])(nil)
 
-func NewGrpcRepository[K eventsourcing.ID](address string) GrpcRepository[K] {
-	return GrpcRepository[K]{
+func NewGrpcRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]](address string) GrpcRepository[K, PK] {
+	return GrpcRepository[K, PK]{
 		address: address,
 	}
 }
@@ -100,7 +100,7 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 	}
 }
 
-func (c GrpcRepository[K]) dial() (pb.StoreClient, *grpc.ClientConn, error) {
+func (c GrpcRepository[K, PK]) dial() (pb.StoreClient, *grpc.ClientConn, error) {
 	conn, err := grpc.Dial(c.address, grpc.WithInsecure())
 	if err != nil {
 		return nil, nil, faults.Errorf("did not connect: %w", err)

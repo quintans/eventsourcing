@@ -51,7 +51,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	err = es.Update(
 		ctx,
-		id.String(),
+		id,
 		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			acc.Deposit(1)
@@ -87,7 +87,7 @@ func TestSaveAndGet(t *testing.T) {
 		assert.Equal(t, uint32(i+1), evts[i].AggregateVersion)
 	}
 
-	acc2, err := es.Retrieve(ctx, id.String())
+	acc2, err := es.Retrieve(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(136), acc2.Balance())
@@ -99,7 +99,7 @@ func TestSaveAndGet(t *testing.T) {
 
 	err = es.Update(
 		ctx,
-		id.String(),
+		id,
 		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
