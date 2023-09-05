@@ -83,9 +83,9 @@ func (f *Feed) Run(ctx context.Context) error {
 	match := bson.D{
 		{"operationType", "insert"},
 	}
-	total, partitions := f.sinker.Partitions()
-	if len(partitions) > 1 {
-		match = append(match, f.feedPartitionFilter(total, partitions))
+	total, partitionIDs := f.sinker.Partitions()
+	if len(partitionIDs) > 1 {
+		match = append(match, f.feedPartitionFilter(total, partitionIDs))
 	}
 
 	matchPipeline := bson.D{{Key: "$match", Value: match}}
@@ -94,13 +94,13 @@ func (f *Feed) Run(ctx context.Context) error {
 	eventsCollection := client.Database(f.dbName).Collection(f.eventsCollection)
 	var eventsStream *mongo.ChangeStream
 	if len(lastResumeToken) != 0 {
-		f.logger.Info("Starting feeding", "partitions", partitions, "lastResumeToken", hex.EncodeToString(lastResumeToken))
+		f.logger.Info("Starting feeding", "partitions", partitionIDs, "lastResumeToken", hex.EncodeToString(lastResumeToken))
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
 		if err != nil {
 			return faults.Wrap(err)
 		}
 	} else {
-		f.logger.Info("Starting feeding from the beginning", "partitions", partitions)
+		f.logger.Info("Starting feeding from the beginning", "partitions", partitionIDs)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
 		if err != nil {
 			return faults.Wrap(err)
@@ -125,8 +125,6 @@ func (f *Feed) Run(ctx context.Context) error {
 			if err != nil {
 				return faults.Wrap(backoff.Permanent(err))
 			}
-			// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
-			// They will be populate with the values returned by the sink.
 			event := &eventsourcing.Event{
 				ID:               id,
 				AggregateID:      eventDoc.AggregateID,
@@ -156,9 +154,9 @@ func (f *Feed) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f *Feed) feedPartitionFilter(maxPartition uint32, partitions []uint32) bson.E {
-	parts := make([]uint32, len(partitions))
-	for k, v := range partitions {
+func (f *Feed) feedPartitionFilter(partitions uint32, partitionIDs []uint32) bson.E {
+	parts := make([]uint32, len(partitionIDs))
+	for k, v := range partitionIDs {
 		parts[k] = v - 1
 	}
 
@@ -169,7 +167,7 @@ func (f *Feed) feedPartitionFilter(maxPartition uint32, partitions []uint32) bso
 		bson.D{
 			{"$in", bson.A{
 				bson.D{
-					{"$mod", bson.A{field, maxPartition}},
+					{"$mod", bson.A{field, partitions}},
 				},
 				parts,
 			}},

@@ -157,6 +157,16 @@ type Generator struct {
 	after   time.Time
 }
 
+func NewGeneratorNow() *Generator {
+	now := time.Now()
+	entropy := rand.New(rand.NewSource(now.UnixNano()))
+	return &Generator{
+		// beware that entropy isn't safe for concurrent use.
+		entropy: ulid.Monotonic(entropy, 0),
+		after:   now,
+	}
+}
+
 // NewGenerator generates EventIDs with time.Now().
 // If due to clock skews, time.Now() <= t + 1ms, then the time used will be t + 1ms.
 func NewGenerator(t time.Time) *Generator {

@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/quintans/eventsourcing/encoding/jsoncodec"
@@ -103,5 +104,5 @@ func (p *ProjectionMock) Events() []*sink.Message {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.events[:]
+	return slices.Clone(p.events)
 }

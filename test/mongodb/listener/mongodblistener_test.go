@@ -7,9 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -80,9 +78,6 @@ func TestMongoListenere(t *testing.T) {
 			require.NoError(t, err)
 			defer repository.Close(context.Background())
 
-			quit := make(chan os.Signal, 1)
-			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
 			data := test.NewMockSinkData()
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -97,7 +92,7 @@ func TestMongoListenere(t *testing.T) {
 			err = es.Create(ctx, acc)
 			require.NoError(t, err)
 
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(2 * time.Second)
 
 			// cancel current listeners
 			cancel()
