@@ -136,7 +136,8 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 			f.logger.Info("Starting feeding from the beginning")
 			err = c.Run()
 		} else {
-			f.logger.Info("Starting feeding", "from", lastResumePosition)
+			f.logger.Info("Starting feeding",
+				"from", lastResumePosition)
 			err = c.RunFrom(lastResumePosition)
 		}
 		if err != nil {

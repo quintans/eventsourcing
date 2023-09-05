@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/mysql"
@@ -16,7 +17,7 @@ import (
 
 // EventForwarderWorker creates workers that listen to database changes,
 // transform them to events and publish them into the message bus.
-func EventForwarderWorker(t *testing.T, ctx context.Context, logger *slog.Logger, dbConfig shared.DBConfig, sinker sink.Sinker[K]) {
+func EventForwarderWorker(t *testing.T, ctx context.Context, logger *slog.Logger, dbConfig shared.DBConfig, sinker sink.Sinker[ulid.ULID]) {
 	dbConf := mysql.DBConfig{
 		Host:     dbConfig.Host,
 		Port:     dbConfig.Port,

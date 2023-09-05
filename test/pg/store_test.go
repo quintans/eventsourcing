@@ -19,7 +19,6 @@ import (
 	"github.com/quintans/eventsourcing/sink/poller"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/quintans/eventsourcing/util/ids"
 )
 
 const (
@@ -40,10 +39,10 @@ func TestSaveAndGet(t *testing.T) {
 	ctx := context.Background()
 	r, err := postgresql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account, ulid.ULID](r, test.NewJSONCodec(), esOptions)
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := ids.New()
 	acc, err := test.NewAccount("Paulo", 100)
+	id := acc.ID()
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -124,11 +123,12 @@ func TestPollListener(t *testing.T) {
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	acc, _ := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, acc.GetID(), func(acc *test.Account) (*test.Account, error) {
+	err = es.Update(ctx, id, func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		return acc, nil
 	})
@@ -147,7 +147,7 @@ func TestPollListener(t *testing.T) {
 
 	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
-		if e.AggregateID == acc.GetID() {
+		if e.AggregateID == id {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
@@ -167,7 +167,7 @@ func TestPollListener(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 4, counter)
 	mu.Unlock()
-	assert.Equal(t, acc.GetID(), acc2.ID())
+	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -186,11 +186,12 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	acc, _ := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, acc.GetID(), func(a *test.Account) (*test.Account, error) {
+	err = es.Update(ctx, id, func(a *test.Account) (*test.Account, error) {
 		a.Deposit(5)
 		return a, nil
 	})
@@ -208,7 +209,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
-		if e.AggregateID == acc.ID() {
+		if e.AggregateID == id {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
@@ -228,7 +229,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 4, counter)
 	mu.Unlock()
-	assert.Equal(t, acc.GetID(), acc2.ID())
+	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -247,13 +248,14 @@ func TestListenerWithMetadata(t *testing.T) {
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	acc, _ := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
 	require.NoError(t, err)
 	err = es.Update(
 		ctx,
-		acc.GetID(),
+		id,
 		func(a *test.Account) (*test.Account, error) {
 			a.Deposit(5)
 			return a, nil
@@ -275,7 +277,7 @@ func TestListenerWithMetadata(t *testing.T) {
 
 	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
-		if e.AggregateID == acc.GetID() {
+		if e.AggregateID == id {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
@@ -295,7 +297,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 3, counter)
 	mu.Unlock()
-	assert.Equal(t, acc.GetID(), acc2.ID())
+	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(130), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -311,12 +313,13 @@ func TestForget(t *testing.T) {
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	acc, _ := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, acc.GetID(), func(a *test.Account) (*test.Account, error) {
+	err = es.Update(ctx, id, func(a *test.Account) (*test.Account, error) {
 		a.Deposit(5)
 		a.Withdraw(15)
 		a.UpdateOwner("Paulo Quintans Pereira")
@@ -332,7 +335,7 @@ func TestForget(t *testing.T) {
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
 	evts := [][]byte{}
-	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", acc.GetID().String())
+	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -343,7 +346,7 @@ func TestForget(t *testing.T) {
 	}
 
 	bodies := [][]byte{}
-	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", acc.GetID().String())
+	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
@@ -355,7 +358,7 @@ func TestForget(t *testing.T) {
 
 	err = es.Forget(ctx,
 		eventsourcing.ForgetRequest[ulid.ULID]{
-			AggregateID: acc.GetID(),
+			AggregateID: id,
 			EventKind:   "OwnerUpdated",
 		},
 		func(i eventsourcing.Kinder) (eventsourcing.Kinder, error) {
@@ -373,7 +376,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 
 	evts = [][]byte{}
-	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", acc.GetID().String())
+	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -384,7 +387,7 @@ func TestForget(t *testing.T) {
 	}
 
 	bodies = [][]byte{}
-	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", acc.GetID().String())
+	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = $1", id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {

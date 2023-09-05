@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/encoding/jsoncodec"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
@@ -13,41 +14,41 @@ import (
 	"github.com/quintans/faults"
 )
 
-var _ projection.Projection[*ulid.ULID] = (*ProjectionMock[*ulid.ULID])(nil)
+var _ projection.Projection[ulid.ULID] = (*ProjectionMock[ulid.ULID])(nil)
 
 type Balance struct {
 	Name   string
 	Amount int64
 }
 
-type ProjectionMock struct {
+type ProjectionMock[K eventsourcing.ID] struct {
 	name  string
 	codec *jsoncodec.Codec
 
 	mu               sync.Mutex
-	balances         map[string]Balance
-	aggregateVersion map[string]uint32
+	balances         map[K]Balance
+	aggregateVersion map[K]uint32
 	events           []*sink.Message[K]
 }
 
-func NewProjectionMock(name string) *ProjectionMock {
-	return &ProjectionMock{
+func NewProjectionMock[K eventsourcing.ID](name string) *ProjectionMock[K] {
+	return &ProjectionMock[K]{
 		name:             name,
-		balances:         map[string]Balance{},
+		balances:         map[K]Balance{},
 		codec:            test.NewJSONCodec(),
-		aggregateVersion: map[string]uint32{},
+		aggregateVersion: map[K]uint32{},
 	}
 }
 
-func (p *ProjectionMock) Name() string {
+func (p *ProjectionMock[K]) Name() string {
 	return p.name
 }
 
-func (*ProjectionMock) CatchUpOptions() projection.CatchUpOptions {
+func (*ProjectionMock[K]) CatchUpOptions() projection.CatchUpOptions {
 	return projection.CatchUpOptions{}
 }
 
-func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message[K]) error {
+func (p *ProjectionMock[K]) Handle(ctx context.Context, e *sink.Message[K]) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -65,7 +66,7 @@ func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message[K]) error {
 
 	switch t := k.(type) {
 	case *test.AccountCreated:
-		p.balances[t.Id.String()] = Balance{
+		p.balances[e.AggregateID] = Balance{
 			Name:   t.Owner,
 			Amount: t.Money,
 		}
@@ -93,15 +94,15 @@ func (p *ProjectionMock) Handle(ctx context.Context, e *sink.Message[K]) error {
 	return nil
 }
 
-func (p *ProjectionMock) BalanceByID(id ulid.ULID) (Balance, bool) {
+func (p *ProjectionMock[K]) BalanceByID(id K) (Balance, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	b, ok := p.balances[id.String()]
+	b, ok := p.balances[id]
 	return b, ok
 }
 
-func (p *ProjectionMock) Events() []*sink.Message[K] {
+func (p *ProjectionMock[K]) Events() []*sink.Message[K] {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
