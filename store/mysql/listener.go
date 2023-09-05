@@ -251,8 +251,6 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 		if err != nil {
 			return faults.Errorf("unmarshaling id '%s': %w", aggIDStr, err)
 		}
-		// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
-		// They will be populate with the values returned by the sink.
 		h.events = append(h.events, &eventsourcing.Event[K]{
 			ID:               id,
 			AggregateID:      *aggID,

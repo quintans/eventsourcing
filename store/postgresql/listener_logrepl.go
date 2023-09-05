@@ -23,9 +23,8 @@ import (
 )
 
 const (
-	defaultSlotName    = "events_pub"
-	outputPlugin       = "pgoutput"
-	defaultEventsTable = "events"
+	defaultSlotName = "events_pub"
+	outputPlugin    = "pgoutput"
 )
 
 type FeedLogreplOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*FeedLogrepl[K, PK])
@@ -42,12 +41,6 @@ func WithBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](dur
 	}
 }
 
-func WithEventsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](col string) FeedLogreplOption[K, PK] {
-	return func(p *FeedLogrepl[K, PK]) {
-		p.eventsTable = col
-	}
-}
-
 type FeedLogrepl[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	dburl                 string
 	publicationName       string
@@ -55,7 +48,6 @@ type FeedLogrepl[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	totalSlots            int
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker[K]
-	eventsTable           string
 }
 
 // NewFeed creates a new Postgresql 10+ logic replication feed.
@@ -72,7 +64,6 @@ func NewFeed[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, sl
 		totalSlots:            totalSlots,
 		backoffMaxElapsedTime: 10 * time.Second,
 		sinker:                sinker,
-		eventsTable:           defaultEventsTable,
 	}
 
 	for _, o := range options {
@@ -267,8 +258,6 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
-		// They will be populate with the values returned by the sink.
 		aggID := PK(new(K))
 		err = aggID.UnmarshalText([]byte(aggregateID))
 		if err != nil {

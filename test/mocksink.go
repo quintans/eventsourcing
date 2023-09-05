@@ -81,7 +81,7 @@ func (s *MockSinkClient[K]) Partitions() (uint32, []uint32) {
 }
 
 func (s *MockSinkClient[K]) Accepts(hash uint32) bool {
-	partition := util.CalcPartition(hash, uint32(len(s.partitions)))
+	partition := util.CalcPartition(hash, s.totalPartitions)
 	return util.In(partition, s.partitions...)
 }
 
@@ -90,7 +90,7 @@ func (s *MockSinkClient[K]) OnSink(handler func(ctx context.Context, e *eventsou
 }
 
 func (s *MockSinkClient[K]) Sink(ctx context.Context, e *eventsourcing.Event[K], m sink.Meta) error {
-	partition := util.CalcPartition(e.AggregateIDHash, uint32(len(s.partitions)))
+	partition := util.CalcPartition(e.AggregateIDHash, s.totalPartitions)
 	if !util.In(partition, s.partitions...) {
 		return nil
 	}

@@ -30,7 +30,7 @@ func (r *EsRepository[K, PK]) MigrateInPlaceCopyReplace(
 		return faults.New("revision must be greater than zero")
 	}
 	if snapshotThreshold > 0 && (rehydrateFunc == nil || codec == nil) {
-		return faults.New("if snapshot threshold is greather than zero then aggregate factory, rehydrate function and codec must be defined.")
+		return faults.New("if snapshot threshold is greater than zero then aggregate factory, rehydrate function and codec must be defined.")
 	}
 
 	// loops until it exhausts all streams (aggregates) with the event that we want to migrate
@@ -131,13 +131,13 @@ func (r *EsRepository[K, PK]) saveMigration(
 		}
 
 		// invalidate all active events
-		_, err = tx.ExecContext(c, "UPDATE events SET migration = $1 WHERE aggregate_id = $2 AND migration = 0", revision, last.AggregateID)
+		_, err = tx.ExecContext(c, "UPDATE events SET migration = $1 WHERE aggregate_id = $2 AND migration = 0", revision, last.AggregateID.String())
 		if err != nil {
 			return faults.Errorf("failed to invalidate events: %w", err)
 		}
 
 		// delete snapshots
-		_, err = tx.ExecContext(c, "DELETE FROM snapshots WHERE aggregate_id = $1", last.AggregateID)
+		_, err = tx.ExecContext(c, "DELETE FROM snapshots WHERE aggregate_id = $1", last.AggregateID.String())
 		if err != nil {
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
 		}

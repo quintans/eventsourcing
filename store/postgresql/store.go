@@ -173,7 +173,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			err := r.saveEvent(c, tx, &Event{
 				ID:               id,
 				AggregateID:      aggIDStr,
-				AggregateIDHash:  ids.HashInt(aggIDStr),
+				AggregateIDHash:  ids.HashToInt(aggIDStr),
 				AggregateVersion: version,
 				AggregateKind:    eRec.AggregateKind,
 				Kind:             e.Kind,
@@ -319,7 +319,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	// Forget events
-	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", request.AggregateID, request.EventKind)
+	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = $1 AND kind = $2", request.AggregateID.String(), request.EventKind)
 	if err != nil {
 		return faults.Errorf("Unable to get events for Aggregate '%s' and event kind '%s': %w", request.AggregateID, request.EventKind, err)
 	}
@@ -337,7 +337,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 	// forget snapshots
 	snaps := []Snapshot{}
-	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1", request.AggregateID); err != nil {
+	if err := r.db.SelectContext(ctx, &snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1", request.AggregateID.String()); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
 		}
@@ -349,7 +349,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, "UPDATE snapshots SET body = $1 WHERE ID = $2", body, snap.ID)
+		_, err = r.db.ExecContext(ctx, "UPDATE snapshots SET body = $1 WHERE ID = $2", body, snap.ID.String())
 		if err != nil {
 			return faults.Errorf("Unable to forget snapshot ID %s: %w", snap.ID, err)
 		}
@@ -361,7 +361,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > $1 AND id <= $2 AND migration = 0")
-	args := []interface{}{after, until}
+	args := []interface{}{after.String(), until.String()}
 	args = buildFilter(&query, " AND ", filter, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
@@ -480,7 +480,7 @@ func toEventSourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 	}, nil
 }
 
-func (r *EsRepository[K, PK]) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
+func (r *EsRepository[K, PK]) GetEventsByRawIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
 	qry, args, err := sqlx.In("SELECT * FROM events WHERE id IN (?) ORDER BY id ASC", ids) // the query must use the '?' bind var
 	if err != nil {
 		return nil, faults.Errorf("getting pending events (IDs=%v): %w", ids, err)

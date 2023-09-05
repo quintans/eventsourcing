@@ -19,7 +19,7 @@ import (
 var _ poller.Repository[*ulid.ULID] = (*OutboxRepository[*ulid.ULID])(nil)
 
 type EventsRepository[K eventsourcing.ID] interface {
-	GetEventsByIDs(context.Context, []string) ([]*eventsourcing.Event[K], error)
+	GetEventsByRawIDs(context.Context, []string) ([]*eventsourcing.Event[K], error)
 }
 
 type OutboxRepository[K eventsourcing.ID] struct {
@@ -61,7 +61,7 @@ func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, 
 		return nil, nil
 	}
 
-	rows, err := r.eventsRepo.GetEventsByIDs(ctx, ids)
+	rows, err := r.eventsRepo.GetEventsByRawIDs(ctx, ids)
 	if err != nil {
 		return nil, faults.Errorf("getting pending events: %w", err)
 	}
@@ -86,7 +86,7 @@ func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler
 		_, err := tx.ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO %s (id, aggregate_id, aggregate_kind, kind, metadata, aggregate_id_hash)
 		VALUES ($1, $2, $3, $4, $5, $6)`, tableName),
-			event.ID.String(), event.AggregateID, event.AggregateKind, event.Kind, event.Metadata, event.AggregateIDHash)
+			event.ID.String(), event.AggregateID.String(), event.AggregateKind, event.Kind, event.Metadata, event.AggregateIDHash)
 		return faults.Wrap(err)
 	}
 }

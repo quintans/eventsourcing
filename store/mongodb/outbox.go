@@ -17,7 +17,7 @@ import (
 var _ poller.Repository[*ulid.ULID] = (*OutboxRepository[*ulid.ULID])(nil)
 
 type EventsRepository[K eventsourcing.ID] interface {
-	GetEventsByIDs(context.Context, []string) ([]*eventsourcing.Event[K], error)
+	GetEventsByRawIDs(context.Context, []string) ([]*eventsourcing.Event[K], error)
 }
 
 type pending struct {
@@ -85,7 +85,7 @@ func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, 
 		return nil, nil
 	}
 
-	rows, err := r.eventsRepo.GetEventsByIDs(ctx, ids)
+	rows, err := r.eventsRepo.GetEventsByRawIDs(ctx, ids)
 	if err != nil {
 		return nil, faults.Errorf("Unable to get pending events for filter %+v: %w", filter, err)
 	}

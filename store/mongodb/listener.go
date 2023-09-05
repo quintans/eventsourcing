@@ -84,7 +84,7 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 		{"operationType", "insert"},
 	}
 	total, partitionIDs := f.sinker.Partitions()
-	if len(partitionIDs) > 1 {
+	if int(total) != len(partitionIDs) {
 		match = append(match, f.feedPartitionFilter(total, partitionIDs))
 	}
 
@@ -94,13 +94,20 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	eventsCollection := client.Database(f.dbName).Collection(f.eventsCollection)
 	var eventsStream *mongo.ChangeStream
 	if len(lastResumeToken) != 0 {
-		f.logger.Info("Starting feeding", "partitions", partitionIDs, "lastResumeToken", hex.EncodeToString(lastResumeToken))
+		f.logger.Info("Starting feeding",
+			"partitions", total,
+			"partitionIDs", partitionIDs,
+			"lastResumeToken", hex.EncodeToString(lastResumeToken),
+		)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
 		if err != nil {
 			return faults.Wrap(err)
 		}
 	} else {
-		f.logger.Info("Starting feeding from the beginning", "partitions", partitionIDs)
+		f.logger.Info("Starting feeding from the beginning",
+			"partitions", total,
+			"partitionIDs", partitionIDs,
+		)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
 		if err != nil {
 			return faults.Wrap(err)
@@ -125,8 +132,6 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 			if err != nil {
 				return faults.Wrap(backoff.Permanent(err))
 			}
-			// Partition and Sequence don't need to be assigned because at this moment they have a zero value.
-			// They will be populate with the values returned by the sink.
 			aggID := PK(new(K))
 			err = aggID.UnmarshalText([]byte(eventDoc.AggregateID))
 			if err != nil {
@@ -135,7 +140,7 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 			event := &eventsourcing.Event[K]{
 				ID:               id,
 				AggregateID:      *aggID,
-				AggregateIDHash:  eventDoc.AggregateIDHash,
+				AggregateIDHash:  uint32(eventDoc.AggregateIDHash),
 				AggregateVersion: eventDoc.AggregateVersion,
 				AggregateKind:    eventDoc.AggregateKind,
 				Kind:             eventDoc.Kind,
@@ -153,6 +158,8 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 			b.Reset()
 		}
 
+		f.logger.Info("Shutting down feed", "dbName", f.dbName, "eventsCollection", f.eventsCollection)
+
 		err := eventsStream.Err()
 		if errors.Is(err, context.Canceled) {
 			return backoff.Permanent(err)
@@ -161,9 +168,9 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f *Feed[K, PK]) feedPartitionFilter(maxPartition uint32, partitions []uint32) bson.E {
-	parts := make([]uint32, len(partitions))
-	for k, v := range partitions {
+func (f *Feed[K, PK]) feedPartitionFilter(partitions uint32, partitionIDs []uint32) bson.E {
+	parts := make([]uint32, len(partitionIDs))
+	for k, v := range partitionIDs {
 		parts[k] = v - 1
 	}
 

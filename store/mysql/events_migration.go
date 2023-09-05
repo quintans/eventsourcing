@@ -133,13 +133,13 @@ func (r *EsRepository[K, PK]) saveMigration(
 		}
 
 		// invalidate all active events
-		_, err = tx.ExecContext(c, "UPDATE events SET migration = ? WHERE aggregate_id = ? AND migration = 0", revision, last.AggregateID)
+		_, err = tx.ExecContext(c, "UPDATE events SET migration = ? WHERE aggregate_id = ? AND migration = 0", revision, last.AggregateID.String())
 		if err != nil {
 			return faults.Errorf("failed to invalidate events: %w", err)
 		}
 
 		// delete snapshots
-		_, err = tx.ExecContext(c, "DELETE FROM snapshots WHERE aggregate_id = ?", last.AggregateID)
+		_, err = tx.ExecContext(c, "DELETE FROM snapshots WHERE aggregate_id = ?", last.AggregateID.String())
 		if err != nil {
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
 		}

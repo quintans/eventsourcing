@@ -11,14 +11,11 @@ func New() ulid.ULID {
 }
 
 // Hash returns the hash code for s
-func Hash(s string) uint32 {
+func HashToInt(s string) int32 {
 	h := fnv.New32a()
 	h.Write([]byte(s))
-	return h.Sum32()
-}
-
-func HashInt(s string) int32 {
-	return Int32ring(Hash(s))
+	v := h.Sum32()
+	return Int32ring(v)
 }
 
 func Int32ring(x uint32) int32 {

@@ -145,7 +145,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			&Event{
 				ID:               id.String(),
 				AggregateID:      last.AggregateID.String(),
-				AggregateIDHash:  last.AggregateIDHash,
+				AggregateIDHash:  int32(last.AggregateIDHash),
 				AggregateVersion: version,
 				AggregateKind:    last.AggregateKind,
 				Kind:             eventsourcing.InvalidatedKind,
@@ -159,7 +159,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 
 		// invalidate all active events
 		filter := bson.D{
-			{"aggregate_id", last.AggregateID},
+			{"aggregate_id", last.AggregateID.String()},
 			{"migration", 0},
 		}
 		update := bson.M{
@@ -173,7 +173,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 
 		// delete snapshots
 		_, err = r.snapshotCollection().DeleteMany(ctx, bson.D{
-			{"aggregate_id", last.AggregateID},
+			{"aggregate_id", last.AggregateID.String()},
 		})
 		if err != nil {
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
@@ -201,7 +201,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			event := &Event{
 				ID:               lastID.String(),
 				AggregateID:      last.AggregateID.String(),
-				AggregateIDHash:  last.AggregateIDHash,
+				AggregateIDHash:  int32(last.AggregateIDHash),
 				AggregateVersion: version,
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,

@@ -30,7 +30,7 @@ const (
 type Event struct {
 	ID               string             `bson:"_id,omitempty"`
 	AggregateID      string             `bson:"aggregate_id,omitempty"`
-	AggregateIDHash  uint32             `bson:"aggregate_id_hash,omitempty"`
+	AggregateIDHash  int32              `bson:"aggregate_id_hash,omitempty"`
 	AggregateVersion uint32             `bson:"aggregate_version,omitempty"`
 	AggregateKind    eventsourcing.Kind `bson:"aggregate_kind,omitempty"`
 	Kind             eventsourcing.Kind `bson:"kind,omitempty"`
@@ -190,7 +190,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 				&Event{
 					ID:               id.String(),
 					AggregateID:      aggIDStr,
-					AggregateIDHash:  ids.Hash(aggIDStr),
+					AggregateIDHash:  ids.HashToInt(aggIDStr),
 					AggregateKind:    eRec.AggregateKind,
 					Kind:             e.Kind,
 					Body:             e.Body,
@@ -346,7 +346,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 	// for events
 	filter := bson.D{
-		{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
+		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
 		{"kind", bson.D{{"$eq", request.EventKind}}},
 	}
 	cursor, err := r.eventsCollection().Find(ctx, filter)
@@ -378,7 +378,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 	// for snapshots
 	filter = bson.D{
-		{"aggregate_id", bson.D{{"$eq", request.AggregateID}}},
+		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
 	}
 	cursor, err = r.snapshotCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
@@ -412,8 +412,8 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	flt := bson.D{
-		{"_id", bson.D{{"$gt", after}}},
-		{"_id", bson.D{{"$lte", until}}},
+		{"_id", bson.D{{"$gt", after.String()}}},
+		{"_id", bson.D{{"$lte", until.String()}}},
 		{"migration", bson.D{{"$eq", 0}}},
 	}
 
@@ -513,7 +513,7 @@ func toEventsourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 	return &eventsourcing.Event[K]{
 		ID:               id,
 		AggregateID:      *aggID,
-		AggregateIDHash:  e.AggregateIDHash,
+		AggregateIDHash:  uint32(e.AggregateIDHash),
 		AggregateVersion: e.AggregateVersion,
 		AggregateKind:    e.AggregateKind,
 		IdempotencyKey:   e.IdempotencyKey,
@@ -525,7 +525,7 @@ func toEventsourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 	}, nil
 }
 
-func (r *EsRepository[K, PK]) GetEventsByIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
+func (r *EsRepository[K, PK]) GetEventsByRawIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
 	return queryEvents[K, PK](ctx, r.eventsCollection(), bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
 }
