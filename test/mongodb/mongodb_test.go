@@ -22,7 +22,6 @@ import (
 	"github.com/quintans/eventsourcing/sink/poller"
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/quintans/eventsourcing/util"
 )
 
 var (
@@ -56,14 +55,14 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI[ulid.ULID](dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Withdraw(5)
@@ -71,7 +70,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	err = es.Update(
 		ctx,
-		id.String(),
+		id,
 		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			acc.Deposit(1)
@@ -99,7 +98,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, EventMoneyWithdrawn, evts[2].Kind)
 	assert.Equal(t, "idempotency-key", evts[3].IdempotencyKey)
 
-	acc2, err := es.Retrieve(ctx, id.String())
+	acc2, err := es.Retrieve(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, id, acc2.ID())
 	assert.Equal(t, int64(111), acc2.Balance())
@@ -111,7 +110,7 @@ func TestSaveAndGet(t *testing.T) {
 
 	err = es.Update(
 		ctx,
-		id.String(),
+		id,
 		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
@@ -176,20 +175,20 @@ func TestPollListener(t *testing.T) {
 	r, err := mongodb.NewStoreWithURI(
 		dbConfig.URL(),
 		dbConfig.Database,
-		mongodb.WithTxHandler(mongodb.OutboxInsertHandler(dbConfig.Database, "outbox")),
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ulid.ULID](dbConfig.Database, "outbox")),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Withdraw(5)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
+	err = es.Update(ctx, id, func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		return acc, nil
 	})
@@ -204,9 +203,9 @@ func TestPollListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var mu sync.Mutex
-	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
-		if e.AggregateID == id.String() {
+	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
+		if e.AggregateID == id {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
@@ -238,20 +237,20 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	r, err := mongodb.NewStoreWithURI(
 		dbConfig.URL(),
 		dbConfig.Database,
-		mongodb.WithTxHandler(mongodb.OutboxInsertHandler(dbConfig.Database, "outbox")),
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ulid.ULID](dbConfig.Database, "outbox")),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
+	err = es.Update(ctx, id, func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		return acc, nil
 	})
@@ -261,14 +260,14 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	acc2 := test.DehydratedAccount()
 	counter := 0
 	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
-	p := poller.New(logger, obs, poller.WithAggregateKinds(AggregateAccount))
+	p := poller.New(logger, obs, poller.WithAggregateKinds[ulid.ULID](AggregateAccount))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 
-	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
-		if e.AggregateID == id.String() {
+	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
+		if e.AggregateID == id {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
@@ -300,14 +299,14 @@ func TestListenerWithLabels(t *testing.T) {
 	r, err := mongodb.NewStoreWithURI(
 		dbConfig.URL(),
 		dbConfig.Database,
-		mongodb.WithTxHandler(mongodb.OutboxInsertHandler(dbConfig.Database, "outbox")),
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ulid.ULID](dbConfig.Database, "outbox")),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -315,7 +314,7 @@ func TestListenerWithLabels(t *testing.T) {
 	require.NoError(t, err)
 	err = es.Update(
 		ctx,
-		id.String(),
+		id,
 		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
@@ -329,14 +328,14 @@ func TestListenerWithLabels(t *testing.T) {
 	counter := 0
 
 	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
-	p := poller.New(logger, obs, poller.WithMetadataKV("geo", "EU"))
+	p := poller.New(logger, obs, poller.WithMetadataKV[ulid.ULID]("geo", "EU"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 
-	mockSink := test.NewMockSink(test.NewMockSinkData(), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event) error {
-		if e.AggregateID == id.String() {
+	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
+		if e.AggregateID == id {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
@@ -365,20 +364,20 @@ func TestForget(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI[ulid.ULID](dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.NewAccount("Paulo", 100)
+	id := acc.GetID()
 	require.NoError(t, err)
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
+	err = es.Update(ctx, id, func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
 		acc.Withdraw(15)
 		acc.UpdateOwner("Paulo Quintans Pereira")
@@ -434,8 +433,8 @@ func TestForget(t *testing.T) {
 	}
 
 	err = es.Forget(ctx,
-		eventsourcing.ForgetRequest{
-			AggregateID: id.String(),
+		eventsourcing.ForgetRequest[ulid.ULID]{
+			AggregateID: id,
 			EventKind:   "OwnerUpdated",
 		},
 		func(i eventsourcing.Kinder) (eventsourcing.Kinder, error) {
@@ -501,13 +500,13 @@ func TestMigration(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI[ulid.ULID](dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
-	acc, err := test.CreateAccount("Paulo Pereira", id, 100)
+	acc, err := test.NewAccountWithID("Paulo Pereira", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(20)
 	acc.Withdraw(15)
@@ -524,7 +523,7 @@ func TestMigration(t *testing.T) {
 	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
-		func(events []*eventsourcing.Event) ([]*eventsourcing.EventMigration, error) {
+		func(events []*eventsourcing.Event[ulid.ULID]) ([]*eventsourcing.EventMigration, error) {
 			var migration []*eventsourcing.EventMigration
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store
@@ -627,7 +626,7 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, 0, evt.Migration)
 	assert.True(t, evt.Migrated)
 
-	acc2, err := es2.Retrieve(ctx, id.String())
+	acc2, err := es2.Retrieve(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "Paulo", acc2.Owner().FirstName())
 	assert.Equal(t, "Quintans Pereira", acc2.Owner().LastName())

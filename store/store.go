@@ -64,9 +64,9 @@ func WithPartitions(partitions, partition uint32) FilterOption {
 	}
 }
 
-type AggregateMetadata struct {
+type AggregateMetadata[K eventsourcing.ID] struct {
 	Type      eventsourcing.Kind
-	ID        string
+	ID        K
 	Version   uint32
 	UpdatedAt time.Time
 }

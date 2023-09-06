@@ -6,6 +6,7 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/encoding/jsoncodec"
+	"github.com/quintans/eventsourcing/util/ids"
 
 	"github.com/quintans/eventsourcing"
 )
@@ -80,7 +81,11 @@ func NewJSONCodec() *jsoncodec.Codec {
 	return c
 }
 
-func CreateAccount(owner string, id ulid.ULID, money int64) (*Account, error) {
+func NewAccount(owner string, money int64) (*Account, error) {
+	return NewAccountWithID(owner, ids.New(), money)
+}
+
+func NewAccountWithID(owner string, id ulid.ULID, money int64) (*Account, error) {
 	a := DehydratedAccount()
 	if err := a.root.ApplyChange(&AccountCreated{
 		Id:    id,
@@ -111,11 +116,11 @@ func (a *Account) PopEvents() []eventsourcing.Eventer {
 	return a.root.PopEvents()
 }
 
-func (a *Account) GetID() string {
+func (a *Account) GetID() ulid.ULID {
 	if a == nil {
-		return ""
+		return ulid.ULID{}
 	}
-	return a.id.String()
+	return a.id
 }
 
 func (a *Account) ID() ulid.ULID {

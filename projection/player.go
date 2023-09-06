@@ -12,11 +12,11 @@ import (
 )
 
 type (
-	MessageHandlerFunc func(ctx context.Context, e *sink.Message) error
+	MessageHandlerFunc[K eventsourcing.ID] func(ctx context.Context, e *sink.Message[K]) error
 )
 
-type EventsRepository interface {
-	GetEvents(ctx context.Context, afterEventID eventid.EventID, untilEventID eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error)
+type EventsRepository[K eventsourcing.ID] interface {
+	GetEvents(ctx context.Context, afterEventID eventid.EventID, untilEventID eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error)
 }
 
 type Start int
@@ -31,31 +31,31 @@ const defEventsBatchSize = 1000
 
 type Cancel func()
 
-type Option func(*Player)
+type Option[K eventsourcing.ID] func(*Player[K])
 
-type Player struct {
-	store        EventsRepository
+type Player[K eventsourcing.ID] struct {
+	store        EventsRepository[K]
 	batchSize    int
-	customFilter func(*eventsourcing.Event) bool
+	customFilter func(*eventsourcing.Event[K]) bool
 }
 
-func WithBatchSize(batchSize int) Option {
-	return func(p *Player) {
+func WithBatchSize[K eventsourcing.ID](batchSize int) Option[K] {
+	return func(p *Player[K]) {
 		if batchSize > 0 {
 			p.batchSize = batchSize
 		}
 	}
 }
 
-func WithCustomFilter(fn func(events *eventsourcing.Event) bool) Option {
-	return func(p *Player) {
+func WithCustomFilter[K eventsourcing.ID](fn func(events *eventsourcing.Event[K]) bool) Option[K] {
+	return func(p *Player[K]) {
 		p.customFilter = fn
 	}
 }
 
 // NewPlayer instantiates a new Player.
-func NewPlayer(repository EventsRepository, options ...Option) Player {
-	p := Player{
+func NewPlayer[K eventsourcing.ID](repository EventsRepository[K], options ...Option[K]) Player[K] {
+	p := Player[K]{
 		store:     repository,
 		batchSize: defEventsBatchSize,
 	}
@@ -99,7 +99,7 @@ func StartAt(sequence uint64) StartOption {
 	}
 }
 
-func (p Player) Replay(ctx context.Context, handler MessageHandlerFunc, afterEventID, untilEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
+func (p Player[K]) Replay(ctx context.Context, handler MessageHandlerFunc[K], afterEventID, untilEventID eventid.EventID, filters ...store.FilterOption) (eventid.EventID, error) {
 	filter := store.Filter{}
 	for _, f := range filters {
 		f(&filter)

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -18,7 +19,6 @@ import (
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
 	tmg "github.com/quintans/eventsourcing/test/mongodb"
-	"github.com/quintans/eventsourcing/util"
 )
 
 var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -74,19 +74,19 @@ func TestMongoListenere(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dbConfig := tmg.Setup(t, "../docker-compose.yaml")
 
-			repository, err := mongodb.NewStoreWithURI(dbConfig.URL(), dbConfig.Database)
+			repository, err := mongodb.NewStoreWithURI[ulid.ULID](dbConfig.URL(), dbConfig.Database)
 			require.NoError(t, err)
 			defer repository.Close(context.Background())
 
-			data := test.NewMockSinkData()
+			data := test.NewMockSinkData[ulid.ULID]()
 
 			ctx, cancel := context.WithCancel(context.Background())
 			errs := feeding(ctx, dbConfig, tt.partitionSlots, data)
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
-			id := util.NewID()
-			acc, _ := test.CreateAccount("Paulo", id, 100)
+			acc, _ := test.NewAccount("Paulo", 100)
+			id := acc.GetID()
 			acc.Deposit(10)
 			acc.Deposit(20)
 			err = es.Create(ctx, acc)
@@ -116,7 +116,7 @@ func TestMongoListenere(t *testing.T) {
 
 			assert.Equal(t, 3, len(events), "event size")
 
-			err = es.Update(ctx, id.String(), func(acc *test.Account) (*test.Account, error) {
+			err = es.Update(ctx, id, func(acc *test.Account) (*test.Account, error) {
 				acc.Withdraw(5)
 				acc.Withdraw(10)
 				return acc, nil
@@ -135,7 +135,7 @@ func TestMongoListenere(t *testing.T) {
 			}
 
 			// listening ALL from the beginning
-			data = test.NewMockSinkData()
+			data = test.NewMockSinkData[ulid.ULID]()
 
 			// connecting
 			ctx, cancel = context.WithCancel(context.Background())
@@ -153,7 +153,7 @@ func TestMongoListenere(t *testing.T) {
 
 			lastMessages := data.LastResumes()
 			// listening messages from a specific message
-			data = test.NewMockSinkData()
+			data = test.NewMockSinkData[ulid.ULID]()
 			data.SetLastResumes(lastMessages)
 
 			// reconnecting
@@ -184,14 +184,14 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tmg.DBConfig, slots []slot, data *test.MockSinkData) chan error {
+func feeding(ctx context.Context, dbConfig tmg.DBConfig, slots []slot, data *test.MockSinkData[ulid.ULID]) chan error {
 	partitions := partitionSize(slots)
 
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		mockSink := test.NewMockSink(data, partitions, v.low, v.high)
-		listener, err := mongodb.NewFeed(logger, dbConfig.URL(), dbConfig.Database, mockSink)
+		listener, err := mongodb.NewFeed[ulid.ULID](logger, dbConfig.URL(), dbConfig.Database, mockSink)
 		if err != nil {
 			panic(err)
 		}

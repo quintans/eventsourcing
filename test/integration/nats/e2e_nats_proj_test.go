@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/projection"
 	pnats "github.com/quintans/eventsourcing/projection/nats"
@@ -18,7 +19,6 @@ import (
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/test/integration"
 	shared "github.com/quintans/eventsourcing/test/mysql"
-	"github.com/quintans/eventsourcing/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -39,21 +39,20 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 
 	uri := runNatsContainer(t)
 
-	esRepo, err := mysql.NewStoreWithURL(dbConfig.URL())
+	esRepo, err := mysql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink(&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
+	sinker, err := nats.NewSink[ulid.ULID](&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
 	proj := projectionFromNATS(t, ctx, uri, esRepo)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.NewAccount("Paulo", 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -87,19 +86,18 @@ func TestNATSProjectionAfterData(t *testing.T) {
 
 	uri := runNatsContainer(t)
 
-	esRepo, err := mysql.NewStoreWithURL(dbConfig.URL())
+	esRepo, err := mysql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink(&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
+	sinker, err := nats.NewSink[ulid.ULID](&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
-	id := util.NewID()
-	acc, err := test.CreateAccount("Paulo", id, 100)
+	acc, err := test.NewAccount("Paulo", 100)
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -181,9 +179,9 @@ func runNatsContainer(t *testing.T) string {
 	return fmt.Sprintf("nats://%s:%s", hostIP, mappedPort.Port())
 }
 
-func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository) *integration.ProjectionMock {
+func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository[ulid.ULID, *ulid.ULID]) *integration.ProjectionMock[ulid.ULID] {
 	// create projection
-	proj := integration.NewProjectionMock("balances")
+	proj := integration.NewProjectionMock[ulid.ULID]("balances")
 
 	topic := projection.ConsumerTopic{
 		Topic:      "accounts",
@@ -191,11 +189,11 @@ func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *m
 	}
 	kvStore := &integration.MockKVStore{}
 
-	sub, err := pnats.NewSubscriberWithURL(ctx, logger, uri, topic)
+	sub, err := pnats.NewSubscriberWithURL[ulid.ULID](ctx, logger, uri, topic)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
-	projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
+	projector := projection.Project[ulid.ULID](logger, nil, esRepo, sub, proj, 1, kvStore)
 	ok, err := projector.Start(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 	"google.golang.org/grpc"
 
@@ -16,19 +17,19 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-type GrpcRepository struct {
+type GrpcRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	address string
 }
 
-var _ EventsRepository = (*GrpcRepository)(nil)
+var _ EventsRepository[ulid.ULID] = (*GrpcRepository[ulid.ULID, *ulid.ULID])(nil)
 
-func NewGrpcRepository(address string) GrpcRepository {
-	return GrpcRepository{
+func NewGrpcRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]](address string) GrpcRepository[K, PK] {
+	return GrpcRepository[K, PK]{
 		address: address,
 	}
 }
 
-func (c GrpcRepository) GetEvents(ctx context.Context, after, until eventid.EventID, limit int, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (c GrpcRepository[K, PK]) GetEvents(ctx context.Context, after, until eventid.EventID, limit int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	cli, conn, err := c.dial()
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -49,7 +50,7 @@ func (c GrpcRepository) GetEvents(ctx context.Context, after, until eventid.Even
 		return nil, faults.Errorf("could not get events: %w", err)
 	}
 
-	events := make([]*eventsourcing.Event, len(r.Events))
+	events := make([]*eventsourcing.Event[K], len(r.Events))
 	for k, v := range r.Events {
 		createdAt, err := tsToTime(v.CreatedAt)
 		if err != nil {
@@ -59,9 +60,15 @@ func (c GrpcRepository) GetEvents(ctx context.Context, after, until eventid.Even
 		if err != nil {
 			return nil, faults.Errorf("unable to parse message ID '%s': %w", v.Id, err)
 		}
-		events[k] = &eventsourcing.Event{
+
+		idPtr := PK(new(K))
+		err = idPtr.UnmarshalText([]byte(v.AggregateId))
+		if err != nil {
+			return nil, faults.Errorf("unmarshaling id '%s': %w", v.AggregateId, err)
+		}
+		events[k] = &eventsourcing.Event[K]{
 			ID:               eID,
-			AggregateID:      v.AggregateId,
+			AggregateID:      *idPtr,
 			AggregateVersion: v.AggregateVersion,
 			AggregateKind:    eventsourcing.Kind(v.AggregateKind),
 			Kind:             eventsourcing.Kind(v.Kind),
@@ -93,7 +100,7 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 	}
 }
 
-func (c GrpcRepository) dial() (pb.StoreClient, *grpc.ClientConn, error) {
+func (c GrpcRepository[K, PK]) dial() (pb.StoreClient, *grpc.ClientConn, error) {
 	conn, err := grpc.Dial(c.address, grpc.WithInsecure())
 	if err != nil {
 		return nil, nil, faults.Errorf("did not connect: %w", err)

@@ -10,8 +10,10 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/cenkalti/backoff"
+	"github.com/oklog/ulid/v2"
 	"github.com/teris-io/shortid"
 
+	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/eventid"
@@ -21,13 +23,13 @@ import (
 	"github.com/quintans/eventsourcing/util"
 )
 
-func NewSubscriberWithBrokers(
+func NewSubscriberWithBrokers[K eventsourcing.ID, PK eventsourcing.IDPt[K]](
 	ctx context.Context,
 	logger *slog.Logger,
 	brokers []string,
 	topic string,
 	config *sarama.Config,
-) (*Subscriber, error) {
+) (*Subscriber[K], error) {
 	if config == nil {
 		config = sarama.NewConfig()
 	}
@@ -37,7 +39,7 @@ func NewSubscriberWithBrokers(
 	if err != nil {
 		return nil, faults.Errorf("instantiating Kafka client: %w", err)
 	}
-	subscriber, err := NewSubscriberWithClient(
+	subscriber, err := NewSubscriberWithClient[K, PK](
 		logger,
 		client,
 		topic,
@@ -54,33 +56,33 @@ func NewSubscriberWithBrokers(
 	return subscriber, nil
 }
 
-type SubOption func(*Subscriber)
+type SubOption[K eventsourcing.ID] func(*Subscriber[K])
 
-func WithMsgCodec(codec sink.Codec) SubOption {
-	return func(r *Subscriber) {
+func WithMsgCodec[K eventsourcing.ID](codec sink.Codec[K]) SubOption[K] {
+	return func(r *Subscriber[K]) {
 		r.codec = codec
 	}
 }
 
-var _ projection.Consumer = (*Subscriber)(nil)
+var _ projection.Consumer[*ulid.ULID] = (*Subscriber[*ulid.ULID])(nil)
 
-type Subscriber struct {
+type Subscriber[K eventsourcing.ID] struct {
 	logger     *slog.Logger
 	client     sarama.Client
 	topic      string
 	partitions []uint32
-	codec      sink.Codec
+	codec      sink.Codec[K]
 
 	mu            sync.Mutex
 	shutdownHooks []func()
 }
 
-func NewSubscriberWithClient(
+func NewSubscriberWithClient[K eventsourcing.ID, PK eventsourcing.IDPt[K]](
 	logger *slog.Logger,
 	client sarama.Client,
 	topic string,
-	options ...SubOption,
-) (*Subscriber, error) {
+	options ...SubOption[K],
+) (*Subscriber[K], error) {
 	if topic == "" {
 		return nil, faults.New("empty topic provided")
 	}
@@ -89,7 +91,7 @@ func NewSubscriberWithClient(
 	if err != nil {
 		return nil, faults.Errorf("getting partitions: %w", err)
 	}
-	s := &Subscriber{
+	s := &Subscriber[K]{
 		logger: logger.With(
 			"subscriber", "kafka",
 			"id", "subscriber-"+shortid.MustGenerate(),
@@ -97,7 +99,7 @@ func NewSubscriberWithClient(
 		client:     client,
 		topic:      topic,
 		partitions: util.NormalizePartitions(partitions),
-		codec:      sink.JSONCodec{},
+		codec:      sink.JSONCodec[K, PK]{},
 	}
 
 	for _, o := range options {
@@ -107,7 +109,7 @@ func NewSubscriberWithClient(
 	return s, nil
 }
 
-func (s *Subscriber) Shutdown() {
+func (s *Subscriber[K]) Shutdown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -117,18 +119,18 @@ func (s *Subscriber) Shutdown() {
 	s.shutdownHooks = nil
 }
 
-func (s *Subscriber) AddShutdownHook(hook func()) {
+func (s *Subscriber[K]) AddShutdownHook(hook func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.shutdownHooks = append(s.shutdownHooks, hook)
 }
 
-func (s *Subscriber) TopicPartitions() (topic string, partitions []uint32) {
+func (s *Subscriber[K]) TopicPartitions() (topic string, partitions []uint32) {
 	return s.topic, s.partitions
 }
 
-func (s *Subscriber) Positions(ctx context.Context) (map[uint32]projection.SubscriberPosition, error) {
+func (s *Subscriber[K]) Positions(ctx context.Context) (map[uint32]projection.SubscriberPosition, error) {
 	bms := map[uint32]projection.SubscriberPosition{}
 	for _, p := range s.partitions {
 		seq, eventID, err := s.lastBUSMessage(ctx, int32(p-1))
@@ -144,7 +146,7 @@ func (s *Subscriber) Positions(ctx context.Context) (map[uint32]projection.Subsc
 	return bms, nil
 }
 
-func (s *Subscriber) lastBUSMessage(_ context.Context, partition int32) (_ uint64, _ eventid.EventID, e error) {
+func (s *Subscriber[K]) lastBUSMessage(_ context.Context, partition int32) (_ uint64, _ eventid.EventID, e error) {
 	defer faults.Catch(&e, "lastBUSMessage(partition=%d)", partition)
 
 	// get last nextOffset
@@ -187,8 +189,8 @@ func groupID(projName, topic string) string {
 	return fmt.Sprintf("%s_%s", projName, topic)
 }
 
-func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projection.SubscriberPosition, projName string, handler projection.ConsumerHandler, options ...projection.ConsumerOption) error {
-	opts := projection.ConsumerOptions{}
+func (s *Subscriber[K]) StartConsumer(ctx context.Context, subPos map[uint32]projection.SubscriberPosition, projName string, handler projection.ConsumerHandler[K], options ...projection.ConsumerOption[K]) error {
+	opts := projection.ConsumerOptions[K]{}
 	for _, v := range options {
 		v(&opts)
 	}
@@ -208,7 +210,7 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 		"consumer_group", gID,
 	)
 
-	consumer := Consumer{
+	consumer := Consumer[K]{
 		logger:   logger,
 		sub:      s,
 		opts:     opts,
@@ -264,19 +266,19 @@ func (s *Subscriber) StartConsumer(ctx context.Context, subPos map[uint32]projec
 }
 
 // Consumer represents a Sarama consumer group consumer
-type Consumer struct {
+type Consumer[K eventsourcing.ID] struct {
 	logger   *slog.Logger
-	sub      *Subscriber
-	opts     projection.ConsumerOptions
+	sub      *Subscriber[K]
+	opts     projection.ConsumerOptions[K]
 	projName string
 	topic    string
-	handler  projection.ConsumerHandler
+	handler  projection.ConsumerHandler[K]
 	subPos   map[uint32]projection.SubscriberPosition
 	ready    chan bool
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
-func (c *Consumer) Setup(session sarama.ConsumerGroupSession) (er error) {
+func (c *Consumer[K]) Setup(session sarama.ConsumerGroupSession) (er error) {
 	// Mark the consumer as ready
 	defer close(c.ready)
 
@@ -310,14 +312,14 @@ func (c *Consumer) Setup(session sarama.ConsumerGroupSession) (er error) {
 }
 
 // Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
-func (c *Consumer) Cleanup(sarama.ConsumerGroupSession) error {
+func (c *Consumer[K]) Cleanup(sarama.ConsumerGroupSession) error {
 	return nil
 }
 
 // ConsumeClaim must start a consumer loop of ConsumerGroupClaim's Messages().
 // Once the Messages() channel is closed, the Handler must finish its processing
 // loop and exit.
-func (c *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+func (c *Consumer[K]) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	// NOTE:
 	// Do not move the code below to a goroutine.
 	// The `ConsumeClaim` itself is called within a goroutine, see:

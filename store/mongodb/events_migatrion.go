@@ -14,13 +14,13 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 )
 
-func (r *EsRepository) MigrateInPlaceCopyReplace(
+func (r *EsRepository[K, PK]) MigrateInPlaceCopyReplace(
 	ctx context.Context,
 	revision int,
 	snapshotThreshold uint32,
-	rehydrateFunc func(eventsourcing.Aggregater, *eventsourcing.Event) error, // called only if snapshot threshold is reached
+	rehydrateFunc func(eventsourcing.Aggregater[K], *eventsourcing.Event[K]) error, // called only if snapshot threshold is reached
 	codec eventsourcing.Codec,
-	handler eventsourcing.MigrationHandler,
+	handler eventsourcing.MigrationHandler[K],
 	targetAggregateKind eventsourcing.Kind,
 	aggregateKind eventsourcing.Kind,
 	eventTypeCriteria ...eventsourcing.Kind,
@@ -56,7 +56,7 @@ func (r *EsRepository) MigrateInPlaceCopyReplace(
 	}
 }
 
-func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eventsourcing.Kind, eventTypeCriteria []eventsourcing.Kind) ([]*eventsourcing.Event, error) {
+func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateKind eventsourcing.Kind, eventTypeCriteria []eventsourcing.Kind) ([]*eventsourcing.Event[K], error) {
 	if aggregateKind == "" {
 		return nil, faults.New("aggregate type needs to be specified")
 	}
@@ -107,24 +107,28 @@ func (r *EsRepository) eventsForMigration(ctx context.Context, aggregateKind eve
 		return nil, faults.Wrap(err)
 	}
 
-	evts := make([]*eventsourcing.Event, len(events))
+	evts := make([]*eventsourcing.Event[K], len(events))
 	for k, v := range events {
 		id, err := eventid.Parse(v.ID)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		evts[k] = toEventsourcingEvent(v, id)
+		evt, err := toEventsourcingEvent[K, PK](v, id)
+		if err != nil {
+			return nil, err
+		}
+		evts[k] = evt
 	}
 	return evts, nil
 }
 
-func (r *EsRepository) saveMigration(
+func (r *EsRepository[K, PK]) saveMigration(
 	ctx context.Context,
 	targetAggregateKind eventsourcing.Kind,
-	last *eventsourcing.Event,
+	last *eventsourcing.Event[K],
 	migration []*eventsourcing.EventMigration,
 	snapshotThreshold uint32,
-	rehydrateFunc func(eventsourcing.Aggregater, *eventsourcing.Event) error,
+	rehydrateFunc func(eventsourcing.Aggregater[K], *eventsourcing.Event[K]) error,
 	codec eventsourcing.Codec,
 	revision int,
 ) error {
@@ -140,8 +144,8 @@ func (r *EsRepository) saveMigration(
 			ctx,
 			&Event{
 				ID:               id.String(),
-				AggregateID:      last.AggregateID,
-				AggregateIDHash:  last.AggregateIDHash,
+				AggregateID:      last.AggregateID.String(),
+				AggregateIDHash:  int32(last.AggregateIDHash),
 				AggregateVersion: version,
 				AggregateKind:    last.AggregateKind,
 				Kind:             eventsourcing.InvalidatedKind,
@@ -155,7 +159,7 @@ func (r *EsRepository) saveMigration(
 
 		// invalidate all active events
 		filter := bson.D{
-			{"aggregate_id", last.AggregateID},
+			{"aggregate_id", last.AggregateID.String()},
 			{"migration", 0},
 		}
 		update := bson.M{
@@ -169,19 +173,19 @@ func (r *EsRepository) saveMigration(
 
 		// delete snapshots
 		_, err = r.snapshotCollection().DeleteMany(ctx, bson.D{
-			{"aggregate_id", last.AggregateID},
+			{"aggregate_id", last.AggregateID.String()},
 		})
 		if err != nil {
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
 		}
 
-		var aggregate eventsourcing.Aggregater
+		var aggregate eventsourcing.Aggregater[K]
 		if snapshotThreshold > 0 && len(migration) >= int(snapshotThreshold) {
 			t, err := codec.Decode(nil, targetAggregateKind)
 			if err != nil {
 				return faults.Wrap(err)
 			}
-			aggregate = t.(eventsourcing.Aggregater)
+			aggregate = t.(eventsourcing.Aggregater[K])
 		}
 
 		// insert new events
@@ -196,8 +200,8 @@ func (r *EsRepository) saveMigration(
 			lastID = gen.NewID()
 			event := &Event{
 				ID:               lastID.String(),
-				AggregateID:      last.AggregateID,
-				AggregateIDHash:  last.AggregateIDHash,
+				AggregateID:      last.AggregateID.String(),
+				AggregateIDHash:  int32(last.AggregateIDHash),
 				AggregateVersion: version,
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,
@@ -211,8 +215,12 @@ func (r *EsRepository) saveMigration(
 			if err != nil {
 				return err
 			}
+			evt, err := toEventsourcingEvent[K, PK](event, lastID)
+			if err != nil {
+				return err
+			}
 			if aggregate != nil {
-				err = rehydrateFunc(aggregate, toEventsourcingEvent(event, lastID))
+				err = rehydrateFunc(aggregate, evt)
 				if err != nil {
 					return err
 				}
@@ -227,7 +235,7 @@ func (r *EsRepository) saveMigration(
 
 			err = r.saveSnapshot(ctx, &Snapshot{
 				ID:               lastID.String(),
-				AggregateID:      last.AggregateID,
+				AggregateID:      last.AggregateID.String(),
 				AggregateVersion: version,
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,

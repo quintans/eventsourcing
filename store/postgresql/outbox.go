@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/oklog/ulid/v2"
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink/poller"
@@ -15,21 +16,21 @@ import (
 	"github.com/quintans/faults"
 )
 
-var _ poller.Repository = (*OutboxRepository)(nil)
+var _ poller.Repository[*ulid.ULID] = (*OutboxRepository[*ulid.ULID])(nil)
 
-type EventsRepository interface {
-	GetEventsByIDs(context.Context, []string) ([]*eventsourcing.Event, error)
+type EventsRepository[K eventsourcing.ID] interface {
+	GetEventsByRawIDs(context.Context, []string) ([]*eventsourcing.Event[K], error)
 }
 
-type OutboxRepository struct {
+type OutboxRepository[K eventsourcing.ID] struct {
 	Repository
 	tableName  string
-	eventsRepo EventsRepository
+	eventsRepo EventsRepository[K]
 }
 
-func NewOutboxStore(db *sql.DB, tableName string, eventsRepo EventsRepository) *OutboxRepository {
+func NewOutboxStore[K eventsourcing.ID](db *sql.DB, tableName string, eventsRepo EventsRepository[K]) *OutboxRepository[K] {
 	dbx := sqlx.NewDb(db, driverName)
-	r := &OutboxRepository{
+	r := &OutboxRepository[K]{
 		Repository: Repository{
 			db: dbx,
 		},
@@ -40,7 +41,7 @@ func NewOutboxStore(db *sql.DB, tableName string, eventsRepo EventsRepository) *
 	return r
 }
 
-func (r *OutboxRepository) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	var query bytes.Buffer
 	query.WriteString(fmt.Sprintf("SELECT id FROM %s", r.tableName))
 	args := buildFilter(&query, " WHERE ", filter, []interface{}{})
@@ -60,7 +61,7 @@ func (r *OutboxRepository) PendingEvents(ctx context.Context, batchSize int, fil
 		return nil, nil
 	}
 
-	rows, err := r.eventsRepo.GetEventsByIDs(ctx, ids)
+	rows, err := r.eventsRepo.GetEventsByRawIDs(ctx, ids)
 	if err != nil {
 		return nil, faults.Errorf("getting pending events: %w", err)
 	}
@@ -71,13 +72,13 @@ func (r *OutboxRepository) PendingEvents(ctx context.Context, batchSize int, fil
 	return rows, nil
 }
 
-func (r *OutboxRepository) AfterSink(ctx context.Context, eID eventid.EventID) error {
+func (r *OutboxRepository[K]) AfterSink(ctx context.Context, eID eventid.EventID) error {
 	_, err := r.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = $1", r.tableName), eID.String())
 	return faults.Wrapf(err, "deleting from '%s' where id='%s'", r.tableName, eID)
 }
 
-func OutboxInsertHandler(tableName string) store.InTxHandler {
-	return func(ctx context.Context, event *eventsourcing.Event) error {
+func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler[K] {
+	return func(ctx context.Context, event *eventsourcing.Event[K]) error {
 		tx := TxFromContext(ctx)
 		if tx == nil {
 			return faults.Errorf("no transaction in context")
@@ -85,7 +86,7 @@ func OutboxInsertHandler(tableName string) store.InTxHandler {
 		_, err := tx.ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO %s (id, aggregate_id, aggregate_kind, kind, metadata, aggregate_id_hash)
 		VALUES ($1, $2, $3, $4, $5, $6)`, tableName),
-			event.ID.String(), event.AggregateID, event.AggregateKind, event.Kind, event.Metadata, event.AggregateIDHash)
+			event.ID.String(), event.AggregateID.String(), event.AggregateKind, event.Kind, event.Metadata, event.AggregateIDHash)
 		return faults.Wrap(err)
 	}
 }

@@ -17,19 +17,19 @@ import (
 	"github.com/quintans/eventsourcing/store"
 )
 
-var _ projection.EventsRepository = (*InMemDB)(nil)
+var _ projection.EventsRepository[*ulid.ULID] = (*InMemDB[*ulid.ULID])(nil)
 
-type InMemDB struct {
+type InMemDB[K eventsourcing.ID] struct {
 	mu     sync.RWMutex
-	events []*eventsourcing.Event
-	cursor *Cursor
+	events []*eventsourcing.Event[K]
+	cursor *Cursor[K]
 }
 
-func NewInMemDB() *InMemDB {
-	return &InMemDB{}
+func NewInMemDB[K eventsourcing.ID]() *InMemDB[K] {
+	return &InMemDB[K]{}
 }
 
-func (db *InMemDB) Add(event *eventsourcing.Event) *eventsourcing.Event {
+func (db *InMemDB[K]) Add(event *eventsourcing.Event[K]) *eventsourcing.Event[K] {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -55,7 +55,7 @@ func NewID(entropy *ulid.MonotonicEntropy) eventid.EventID {
 	return eventid.New()
 }
 
-func (db *InMemDB) GetFrom(id eventid.EventID) []*eventsourcing.Event {
+func (db *InMemDB[K]) GetFrom(id eventid.EventID) []*eventsourcing.Event[K] {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
@@ -70,14 +70,14 @@ func (db *InMemDB) GetFrom(id eventid.EventID) []*eventsourcing.Event {
 		return nil
 	}
 	size := len(db.events)
-	events := make([]*eventsourcing.Event, size-found)
+	events := make([]*eventsourcing.Event[K], size-found)
 	for k := found; k < size; k++ {
 		events[k-found] = db.events[k]
 	}
 	return events
 }
 
-func (db *InMemDB) WatchAfter(resumeToken []byte) (*Cursor, error) {
+func (db *InMemDB[K]) WatchAfter(resumeToken []byte) (*Cursor[K], error) {
 	after := -1
 	if len(resumeToken) > 0 {
 		idx, err := strconv.Atoi(string(resumeToken))
@@ -86,7 +86,7 @@ func (db *InMemDB) WatchAfter(resumeToken []byte) (*Cursor, error) {
 		}
 		after = idx
 	}
-	cursor := &Cursor{
+	cursor := &Cursor[K]{
 		db:      db,
 		lastPos: after,
 		changed: make(chan bool, 1),
@@ -102,7 +102,7 @@ func (db *InMemDB) WatchAfter(resumeToken []byte) (*Cursor, error) {
 	return cursor, nil
 }
 
-func (db *InMemDB) RemoveCursor(c *Cursor) {
+func (db *InMemDB[K]) RemoveCursor(c *Cursor[K]) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if c.next != nil {
@@ -113,7 +113,7 @@ func (db *InMemDB) RemoveCursor(c *Cursor) {
 	}
 }
 
-func (db *InMemDB) ReadAt(idx int) (*eventsourcing.Event, bool) {
+func (db *InMemDB[K]) ReadAt(idx int) (*eventsourcing.Event[K], bool) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	if idx >= len(db.events) {
@@ -122,11 +122,11 @@ func (db *InMemDB) ReadAt(idx int) (*eventsourcing.Event, bool) {
 	return db.events[idx], true
 }
 
-func (db *InMemDB) GetEvents(ctx context.Context, afterEventID eventid.EventID, untilEventID eventid.EventID, limit int, filter store.Filter) ([]*eventsourcing.Event, error) {
+func (db *InMemDB[K]) GetEvents(ctx context.Context, afterEventID eventid.EventID, untilEventID eventid.EventID, limit int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	var events []*eventsourcing.Event
+	var events []*eventsourcing.Event[K]
 	for _, v := range db.events {
 		if v.ID.Compare(afterEventID) > 0 {
 			events = append(events, v)
@@ -138,17 +138,17 @@ func (db *InMemDB) GetEvents(ctx context.Context, afterEventID eventid.EventID, 
 	return events, nil
 }
 
-type Cursor struct {
-	next     *Cursor
-	previous *Cursor
+type Cursor[K eventsourcing.ID] struct {
+	next     *Cursor[K]
+	previous *Cursor[K]
 
 	mu      sync.Mutex
-	db      *InMemDB
+	db      *InMemDB[K]
 	lastPos int
 	changed chan bool
 }
 
-func (c *Cursor) Next() (*eventsourcing.Event, <-chan bool) {
+func (c *Cursor[K]) Next() (*eventsourcing.Event[K], <-chan bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -160,23 +160,23 @@ func (c *Cursor) Next() (*eventsourcing.Event, <-chan bool) {
 	return e, nil
 }
 
-func (c *Cursor) Close() {
+func (c *Cursor[K]) Close() {
 	c.db.RemoveCursor(c)
 }
 
-type InMemDBFeed struct {
-	db     *InMemDB
-	sinker sink.Sinker
+type InMemDBFeed[K eventsourcing.ID] struct {
+	db     *InMemDB[K]
+	sinker sink.Sinker[K]
 }
 
-func InMemDBNewFeed(db *InMemDB, sinker sink.Sinker) InMemDBFeed {
-	return InMemDBFeed{
+func InMemDBNewFeed[K eventsourcing.ID](db *InMemDB[K], sinker sink.Sinker[K]) InMemDBFeed[K] {
+	return InMemDBFeed[K]{
 		db:     db,
 		sinker: sinker,
 	}
 }
 
-func (f InMemDBFeed) Run(ctx context.Context) error {
+func (f InMemDBFeed[K]) Run(ctx context.Context) error {
 	var lastResumeToken []byte
 	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
 		if bytes.Compare(resumeToken, lastResumeToken) > 0 {

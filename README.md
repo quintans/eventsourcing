@@ -79,7 +79,7 @@ config := ... // get configuration into your custom structure
 kvStore := mysql.NewKVStore(config.Url, "resumes")
 
 // sinker provider
-sinker, _ := kafka.NewSink(logger, kvStore, "my-topic", config.KafkaUris)
+sinker, _ := kafka.NewSink[ulid.ULID](logger, kvStore, "my-topic", config.KafkaUris)
 
 dbConf := mysql.DBConfig{
 	Host:     config.Host,
@@ -104,8 +104,12 @@ logger := ... // slog
 // create projection that implements projection.Projection
 proj := ...
 
-esRepo, _ := mysql.NewStoreWithURL(dburl)
-sub, _ := kafka.NewSubscriberWithBrokers(ctx, logger, kafkaUris, "my-topic", nil)
+esRepo, _ := mysql.NewStoreWithURL[ulid.ULID](dburl) 
+// if the projection is part of another service and we cannot access the database directly
+// we can use the grpc repo
+// esRepo := projection.NewGrpcRepository[ulid.ULID](serviceAddr)
+
+sub, _ := kafka.NewSubscriberWithBrokers[ulid.ULID](ctx, logger, kafkaUris, "my-topic", nil)
 // store
 kvStore := mysql.NewKVStore(dbConfig.Url, "resumes")
 
@@ -119,18 +123,16 @@ Writing to aggregates:
 ```go
 // codec registry
 reg := NewJSONCodec()
-store, _ := mysql.NewStoreWithURL(url)
-es := eventsourcing.NewEventStore[*account.Account](store, reg, nil)
+store, _ := mysql.NewStoreWithURL[ulid.ULID](url)
+es := eventsourcing.NewEventStore[*account.Account, ulid.ULID](store, reg, nil)
 
-id := util.NewID()
-acc, _ := account.New("Paulo", id, 100)
+acc, _ := account.New("Paulo", 100)
 
 acc.Deposit(10)
 acc.Deposit(20)
 
 es.Create(ctx, acc)
 ```
-
 
 **Components**:
 - utility to read/write to/from an event store

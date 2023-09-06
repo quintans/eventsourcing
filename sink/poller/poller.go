@@ -17,14 +17,14 @@ const (
 	maxWait = time.Minute
 )
 
-type Repository interface {
-	PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event, error)
+type Repository[K eventsourcing.ID] interface {
+	PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error)
 	AfterSink(ctx context.Context, eID eventid.EventID) error
 }
 
-type Poller struct {
+type Poller[K eventsourcing.ID] struct {
 	logger         *slog.Logger
-	store          Repository
+	store          Repository[K]
 	pullInterval   time.Duration
 	limit          int
 	aggregateKinds []eventsourcing.Kind
@@ -33,37 +33,37 @@ type Poller struct {
 	partitionsHi   uint32
 }
 
-type Option func(*Poller)
+type Option[K eventsourcing.ID] func(*Poller[K])
 
-func WithPollInterval(pollInterval time.Duration) Option {
-	return func(p *Poller) {
+func WithPollInterval[K eventsourcing.ID](pollInterval time.Duration) Option[K] {
+	return func(p *Poller[K]) {
 		p.pullInterval = pollInterval
 	}
 }
 
-func WithLimit(limit int) Option {
-	return func(p *Poller) {
+func WithLimit[K eventsourcing.ID](limit int) Option[K] {
+	return func(p *Poller[K]) {
 		if limit > 0 {
 			p.limit = limit
 		}
 	}
 }
 
-func WithPartitions(partitionsLow, partitionsHi uint32) Option {
-	return func(p *Poller) {
+func WithPartitions[K eventsourcing.ID](partitionsLow, partitionsHi uint32) Option[K] {
+	return func(p *Poller[K]) {
 		p.partitionsLow = partitionsLow
 		p.partitionsHi = partitionsHi
 	}
 }
 
-func WithAggregateKinds(at ...eventsourcing.Kind) Option {
-	return func(f *Poller) {
+func WithAggregateKinds[K eventsourcing.ID](at ...eventsourcing.Kind) Option[K] {
+	return func(f *Poller[K]) {
 		f.aggregateKinds = at
 	}
 }
 
-func WithMetadataKV(key, value string) Option {
-	return func(f *Poller) {
+func WithMetadataKV[K eventsourcing.ID](key, value string) Option[K] {
+	return func(f *Poller[K]) {
 		if f.metadata == nil {
 			f.metadata = store.Metadata{}
 		}
@@ -77,14 +77,14 @@ func WithMetadataKV(key, value string) Option {
 	}
 }
 
-func WithMetadata(metadata store.Metadata) Option {
-	return func(f *Poller) {
+func WithMetadata[K eventsourcing.ID](metadata store.Metadata) Option[K] {
+	return func(f *Poller[K]) {
 		f.metadata = metadata
 	}
 }
 
-func New(logger *slog.Logger, repository Repository, options ...Option) Poller {
-	p := Poller{
+func New[K eventsourcing.ID](logger *slog.Logger, repository Repository[K], options ...Option[K]) Poller[K] {
+	p := Poller[K]{
 		logger:       logger,
 		pullInterval: 200 * time.Millisecond,
 		limit:        20,
@@ -100,14 +100,14 @@ func New(logger *slog.Logger, repository Repository, options ...Option) Poller {
 
 // Feed forwards the handling to a sink.
 // eg: a message queue
-func (p *Poller) Feed(ctx context.Context, sinker sink.Sinker) error {
+func (p *Poller[K]) Feed(ctx context.Context, sinker sink.Sinker[K]) error {
 	p.logger.Info("Starting poller feed")
 	p.pull(ctx, sinker)
 	p.logger.Info("Poller feed stopped")
 	return nil
 }
 
-func (p *Poller) pull(ctx context.Context, sinker sink.Sinker) {
+func (p *Poller[K]) pull(ctx context.Context, sinker sink.Sinker[K]) {
 	wait := p.pullInterval
 
 	for {
@@ -139,7 +139,7 @@ func (p *Poller) pull(ctx context.Context, sinker sink.Sinker) {
 	}
 }
 
-func (p *Poller) catchUp(ctx context.Context, sinker sink.Sinker) error {
+func (p *Poller[K]) catchUp(ctx context.Context, sinker sink.Sinker[K]) error {
 	filters := []store.FilterOption{
 		store.WithAggregateKinds(p.aggregateKinds...),
 		store.WithMetadata(p.metadata),
@@ -166,7 +166,7 @@ func (p *Poller) catchUp(ctx context.Context, sinker sink.Sinker) error {
 	return nil
 }
 
-func (p *Poller) handle(ctx context.Context, e *eventsourcing.Event, sinker sink.Sinker) error {
+func (p *Poller[K]) handle(ctx context.Context, e *eventsourcing.Event[K], sinker sink.Sinker[K]) error {
 	err := sinker.Sink(ctx, e, sink.Meta{})
 	if err != nil {
 		return err

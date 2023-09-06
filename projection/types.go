@@ -58,33 +58,33 @@ func (r ResumeKey) String() string {
 	return fmt.Sprintf("%s:%s#%d", r.projection, r.topic, r.partition)
 }
 
-type ConsumerOptions struct {
-	Filter  func(e *sink.Message) bool
+type ConsumerOptions[K eventsourcing.ID] struct {
+	Filter  func(e *sink.Message[K]) bool
 	AckWait time.Duration
 }
 
-type ConsumerOption func(*ConsumerOptions)
+type ConsumerOption[K eventsourcing.ID] func(*ConsumerOptions[K])
 
-func WithFilter(filter func(e *sink.Message) bool) ConsumerOption {
-	return func(o *ConsumerOptions) {
+func WithFilter[K eventsourcing.ID](filter func(e *sink.Message[K]) bool) ConsumerOption[K] {
+	return func(o *ConsumerOptions[K]) {
 		o.Filter = filter
 	}
 }
 
-func WithAckWait(ackWait time.Duration) ConsumerOption {
-	return func(o *ConsumerOptions) {
+func WithAckWait[K eventsourcing.ID](ackWait time.Duration) ConsumerOption[K] {
+	return func(o *ConsumerOptions[K]) {
 		o.AckWait = ackWait
 	}
 }
 
-type Consumer interface {
+type Consumer[K eventsourcing.ID] interface {
 	TopicPartitions() (string, []uint32)
 	// returns the subscriber Positions. The first Position should be 1
 	Positions(ctx context.Context) (map[uint32]SubscriberPosition, error)
-	StartConsumer(ctx context.Context, subPos map[uint32]SubscriberPosition, projectionName string, handle ConsumerHandler, options ...ConsumerOption) error
+	StartConsumer(ctx context.Context, subPos map[uint32]SubscriberPosition, projectionName string, handle ConsumerHandler[K], options ...ConsumerOption[K]) error
 }
 
-type ConsumerHandler func(ctx context.Context, e *sink.Message, partition uint32, seq uint64) error
+type ConsumerHandler[K eventsourcing.ID] func(ctx context.Context, e *sink.Message[K], partition uint32, seq uint64) error
 
 type ConsumerTopic struct {
 	Topic      string
@@ -96,9 +96,9 @@ type SubscriberPosition struct {
 	Position uint64
 }
 
-type Event struct {
+type Event[K eventsourcing.ID] struct {
 	ID               eventid.EventID
-	AggregateID      string
+	AggregateID      K
 	AggregateVersion uint32
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
@@ -108,8 +108,8 @@ type Event struct {
 	CreatedAt        time.Time
 }
 
-func FromEvent(e *eventsourcing.Event) *Event {
-	return &Event{
+func FromEvent[K eventsourcing.ID](e *eventsourcing.Event[K]) *Event[K] {
+	return &Event[K]{
 		ID:               e.ID,
 		AggregateID:      e.AggregateID,
 		AggregateVersion: e.AggregateVersion,
@@ -122,8 +122,8 @@ func FromEvent(e *eventsourcing.Event) *Event {
 	}
 }
 
-func FromMessage(m *sink.Message) *Event {
-	return &Event{
+func FromMessage[K eventsourcing.ID](m *sink.Message[K]) *Event[K] {
+	return &Event[K]{
 		ID:               m.ID,
 		AggregateID:      m.AggregateID,
 		AggregateVersion: m.AggregateVersion,
@@ -218,10 +218,10 @@ func (t Token) IsZero() bool {
 	return t == Token{}
 }
 
-type Projection interface {
+type Projection[K eventsourcing.ID] interface {
 	Name() string
 	CatchUpOptions() CatchUpOptions
-	Handle(ctx context.Context, e *sink.Message) error
+	Handle(ctx context.Context, e *sink.Message[K]) error
 }
 
 type (

@@ -21,24 +21,24 @@ import (
 	"github.com/quintans/eventsourcing/sink"
 )
 
-type Feed struct {
+type Feed[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	logger           *slog.Logger
 	connString       string
 	dbName           string
 	eventsCollection string
-	sinker           sink.Sinker
+	sinker           sink.Sinker[K]
 }
 
-type FeedOption func(*Feed)
+type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
 
-func WithFeedEventsCollection(eventsCollection string) FeedOption {
-	return func(p *Feed) {
+func WithFeedEventsCollection[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsCollection string) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
 		p.eventsCollection = eventsCollection
 	}
 }
 
-func NewFeed(logger *slog.Logger, connString, database string, sinker sink.Sinker, opts ...FeedOption) (Feed, error) {
-	feed := Feed{
+func NewFeed[K eventsourcing.ID, PK eventsourcing.IDPt[K]](logger *slog.Logger, connString, database string, sinker sink.Sinker[K], opts ...FeedOption[K, PK]) (Feed[K, PK], error) {
+	feed := Feed[K, PK]{
 		logger:           logger.With("feed", "mongo"),
 		dbName:           database,
 		connString:       connString,
@@ -57,7 +57,7 @@ type ChangeEvent struct {
 	FullDocument Event `bson:"fullDocument,omitempty"`
 }
 
-func (f *Feed) Run(ctx context.Context) error {
+func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	f.logger.Info("Starting Feed", "dbName", f.dbName, "eventsCollection", f.eventsCollection)
 	var lastResumeToken []byte
 	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
@@ -84,7 +84,7 @@ func (f *Feed) Run(ctx context.Context) error {
 		{"operationType", "insert"},
 	}
 	total, partitionIDs := f.sinker.Partitions()
-	if len(partitionIDs) > 1 {
+	if int(total) != len(partitionIDs) {
 		match = append(match, f.feedPartitionFilter(total, partitionIDs))
 	}
 
@@ -94,13 +94,20 @@ func (f *Feed) Run(ctx context.Context) error {
 	eventsCollection := client.Database(f.dbName).Collection(f.eventsCollection)
 	var eventsStream *mongo.ChangeStream
 	if len(lastResumeToken) != 0 {
-		f.logger.Info("Starting feeding", "partitions", partitionIDs, "lastResumeToken", hex.EncodeToString(lastResumeToken))
+		f.logger.Info("Starting feeding",
+			"partitions", total,
+			"partitionIDs", partitionIDs,
+			"lastResumeToken", hex.EncodeToString(lastResumeToken),
+		)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
 		if err != nil {
 			return faults.Wrap(err)
 		}
 	} else {
-		f.logger.Info("Starting feeding from the beginning", "partitions", partitionIDs)
+		f.logger.Info("Starting feeding from the beginning",
+			"partitions", total,
+			"partitionIDs", partitionIDs,
+		)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
 		if err != nil {
 			return faults.Wrap(err)
@@ -125,10 +132,15 @@ func (f *Feed) Run(ctx context.Context) error {
 			if err != nil {
 				return faults.Wrap(backoff.Permanent(err))
 			}
-			event := &eventsourcing.Event{
+			aggID := PK(new(K))
+			err = aggID.UnmarshalText([]byte(eventDoc.AggregateID))
+			if err != nil {
+				return faults.Errorf("unmarshaling id '%s': %w", eventDoc.AggregateID, err)
+			}
+			event := &eventsourcing.Event[K]{
 				ID:               id,
-				AggregateID:      eventDoc.AggregateID,
-				AggregateIDHash:  eventDoc.AggregateIDHash,
+				AggregateID:      *aggID,
+				AggregateIDHash:  uint32(eventDoc.AggregateIDHash),
 				AggregateVersion: eventDoc.AggregateVersion,
 				AggregateKind:    eventDoc.AggregateKind,
 				Kind:             eventDoc.Kind,
@@ -146,6 +158,8 @@ func (f *Feed) Run(ctx context.Context) error {
 			b.Reset()
 		}
 
+		f.logger.Info("Shutting down feed", "dbName", f.dbName, "eventsCollection", f.eventsCollection)
+
 		err := eventsStream.Err()
 		if errors.Is(err, context.Canceled) {
 			return backoff.Permanent(err)
@@ -154,7 +168,7 @@ func (f *Feed) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f *Feed) feedPartitionFilter(partitions uint32, partitionIDs []uint32) bson.E {
+func (f *Feed[K, PK]) feedPartitionFilter(partitions uint32, partitionIDs []uint32) bson.E {
 	parts := make([]uint32, len(partitionIDs))
 	for k, v := range partitionIDs {
 		parts[k] = v - 1
