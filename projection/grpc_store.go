@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	pb "github.com/quintans/eventsourcing/api/proto"
-	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
 )
@@ -66,6 +64,7 @@ func (c GrpcRepository[K, PK]) GetEvents(ctx context.Context, after, until event
 		if err != nil {
 			return nil, faults.Errorf("unmarshaling id '%s': %w", v.AggregateId, err)
 		}
+
 		events[k] = &eventsourcing.Event[K]{
 			ID:               eID,
 			AggregateID:      *idPtr,
@@ -74,7 +73,7 @@ func (c GrpcRepository[K, PK]) GetEvents(ctx context.Context, after, until event
 			Kind:             eventsourcing.Kind(v.Kind),
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
-			Metadata:         encoding.JSONOfString(v.Metadata),
+			Metadata:         v.Metadata,
 			CreatedAt:        *createdAt,
 		}
 	}
@@ -87,10 +86,8 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 		types[k] = v.String()
 	}
 	metadata := []*pb.Metadata{}
-	for key, v := range filter.Metadata {
-		for _, value := range v {
-			metadata = append(metadata, &pb.Metadata{Key: key, Value: value})
-		}
+	for _, v := range filter.Metadata {
+		metadata = append(metadata, &pb.Metadata{Key: v.Key, Value: v.Values})
 	}
 	return &pb.Filter{
 		AggregateKinds: types,
@@ -111,10 +108,7 @@ func (c GrpcRepository[K, PK]) dial() (pb.StoreClient, *grpc.ClientConn, error) 
 func tsToTime(ts *timestamp.Timestamp) (*time.Time, error) {
 	var exp *time.Time
 	if ts != nil {
-		t, err := ptypes.Timestamp(ts)
-		if err != nil {
-			return nil, faults.Wrap(err)
-		}
+		t := ts.AsTime()
 		exp = &t
 	}
 	return exp, nil

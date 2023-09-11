@@ -292,34 +292,48 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func TestListenerWithLabels(t *testing.T) {
+func TestListenerWithMetadata(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI(
+
+	r1, err := mongodb.NewStoreWithURI(
 		dbConfig.URL(),
 		dbConfig.Database,
 		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ulid.ULID](dbConfig.Database, "outbox")),
+		mongodb.WithMetadata[ulid.ULID](eventsourcing.Metadata{"geo": "EU"}),
 	)
 	require.NoError(t, err)
-	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es1 := eventsourcing.NewEventStore[*test.Account](r1, test.NewJSONCodec(), esOptions)
 
-	acc, err := test.NewAccount("Paulo", 100)
-	id := acc.GetID()
+	acc, _ := test.NewAccount("Paulo", 50)
+	err = es1.Create(ctx, acc)
 	require.NoError(t, err)
-	acc.Deposit(10)
-	acc.Deposit(20)
-	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
+
+	r2, err := mongodb.NewStoreWithURI(
+		dbConfig.URL(),
+		dbConfig.Database,
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ulid.ULID](dbConfig.Database, "outbox")),
+		mongodb.WithMetadata[ulid.ULID](eventsourcing.Metadata{"geo": "EU"}),
+	)
 	require.NoError(t, err)
-	err = es.Update(
+	defer r2.Close(context.Background())
+	es2 := eventsourcing.NewEventStore[*test.Account](r2, test.NewJSONCodec(), esOptions)
+
+	acc1, err := test.NewAccount("Paulo", 100)
+	id := acc1.GetID()
+	require.NoError(t, err)
+	acc1.Deposit(10)
+	acc1.Deposit(20)
+	err = es2.Create(ctx, acc1)
+	require.NoError(t, err)
+	err = es2.Update(
 		ctx,
 		id,
 		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
 		},
-		eventsourcing.WithMetadata(map[string]interface{}{"geo": "US"}),
 	)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
@@ -327,7 +341,7 @@ func TestListenerWithLabels(t *testing.T) {
 	acc2 := test.DehydratedAccount()
 	counter := 0
 
-	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
+	obs := mongodb.NewOutboxStore(r2.Client(), dbConfig.Database, "outbox", r2)
 	p := poller.New(logger, obs, poller.WithMetadataKV[ulid.ULID]("geo", "EU"))
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -336,7 +350,7 @@ func TestListenerWithLabels(t *testing.T) {
 	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
 		if e.AggregateID == id {
-			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := es2.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			mu.Lock()

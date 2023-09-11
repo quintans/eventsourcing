@@ -104,7 +104,7 @@ type Event[K eventsourcing.ID] struct {
 	Kind             eventsourcing.Kind
 	Body             encoding.Base64
 	IdempotencyKey   string
-	Metadata         *encoding.JSON
+	Metadata         eventsourcing.Metadata
 	CreatedAt        time.Time
 }
 
@@ -237,5 +237,5 @@ type CatchUpOptions struct {
 	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Metadata store.Metadata
+	Metadata store.MetadataFilter
 }

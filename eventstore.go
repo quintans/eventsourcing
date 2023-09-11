@@ -7,10 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/quintans/faults"
-
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/faults"
 )
 
 const (
@@ -63,7 +62,7 @@ type Event[K ID] struct {
 	Kind             Kind
 	Body             encoding.Base64
 	IdempotencyKey   string
-	Metadata         *encoding.JSON
+	Metadata         Metadata
 	CreatedAt        time.Time
 	Migrated         bool
 }
@@ -79,6 +78,7 @@ type Snapshot[K ID] struct {
 	AggregateKind    Kind
 	Body             []byte
 	CreatedAt        time.Time
+	Metadata         Metadata
 }
 
 type EsRepository[K ID] interface {
@@ -106,7 +106,7 @@ type EventMigration struct {
 	Kind           Kind
 	Body           []byte
 	IdempotencyKey string
-	Metadata       *encoding.JSON
+	Metadata       Metadata
 }
 
 func DefaultEventMigration[K ID](e *Event[K]) *EventMigration {
@@ -137,7 +137,6 @@ type EventRecord[K ID] struct {
 	Version        uint32
 	AggregateKind  Kind
 	IdempotencyKey string
-	Metadata       map[string]interface{}
 	CreatedAt      time.Time
 	Details        []EventRecordDetail
 }
@@ -148,10 +147,10 @@ type EventRecordDetail struct {
 	Body []byte
 }
 
+type Metadata map[string]string
+
 type PersistOptions struct {
 	IdempotencyKey string
-	// Metadata tags the event. eg: {"geo": "EU"}
-	Metadata map[string]interface{}
 }
 
 type PersistOption func(*PersistOptions)
@@ -159,12 +158,6 @@ type PersistOption func(*PersistOptions)
 func WithIdempotencyKey(key string) PersistOption {
 	return func(o *PersistOptions) {
 		o.IdempotencyKey = key
-	}
-}
-
-func WithMetadata(metadata map[string]interface{}) PersistOption {
-	return func(o *PersistOptions) {
-		o.Metadata = metadata
 	}
 }
 
@@ -344,7 +337,6 @@ func (es EventStore[T, K, PK]) save(
 		Version:        version,
 		AggregateKind:  tName,
 		IdempotencyKey: opts.IdempotencyKey,
-		Metadata:       opts.Metadata,
 		CreatedAt:      now,
 		Details:        details,
 	}

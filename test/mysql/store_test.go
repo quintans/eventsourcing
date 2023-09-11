@@ -246,42 +246,52 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func TestListenerWithLabels(t *testing.T) {
+func TestListenerWithMetadata(t *testing.T) {
 	t.Parallel()
 
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL(
+
+	r1, err := mysql.NewStoreWithURL(
 		dbConfig.URL(),
 		mysql.WithTxHandler(mysql.OutboxInsertHandler[ulid.ULID]("outbox")),
+		mysql.WithMetadata[ulid.ULID](eventsourcing.Metadata{"geo": "UK"}),
 	)
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es1 := eventsourcing.NewEventStore[*test.Account](r1, test.NewJSONCodec(), esOptions)
 
-	acc, err := test.NewAccount("Paulo", 100)
-	id := acc.GetID()
+	acc, _ := test.NewAccount("Paulo", 50)
+	err = es1.Create(ctx, acc)
 	require.NoError(t, err)
-	acc.Deposit(10)
-	acc.Deposit(20)
-	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
+
+	r2, err := mysql.NewStoreWithURL(
+		dbConfig.URL(),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler[ulid.ULID]("outbox")),
+		mysql.WithMetadata[ulid.ULID](eventsourcing.Metadata{"geo": "EU"}),
+	)
 	require.NoError(t, err)
-	err = es.Update(
+	es2 := eventsourcing.NewEventStore[*test.Account](r2, test.NewJSONCodec(), esOptions)
+
+	acc1, err := test.NewAccount("Pereira", 100)
+	id := acc1.GetID()
+	require.NoError(t, err)
+	acc1.Deposit(10)
+	acc1.Deposit(20)
+	err = es2.Create(ctx, acc1)
+	require.NoError(t, err)
+	err = es2.Update(
 		ctx,
 		id,
 		func(acc *test.Account) (*test.Account, error) {
 			acc.Deposit(5)
 			return acc, nil
 		},
-		eventsourcing.WithMetadata(map[string]interface{}{"geo": "US"}),
 	)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.DehydratedAccount()
-	counter := 0
-
-	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox", r)
+	outboxRepo := mysql.NewOutboxStore(r2.Connection(), "outbox", r2)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ulid.ULID]("geo", "EU"))
 
@@ -290,9 +300,11 @@ func TestListenerWithLabels(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
+	acc2 := test.DehydratedAccount()
+	counter := 0
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
 		if e.AggregateID == id {
-			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := es2.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			mu.Lock()

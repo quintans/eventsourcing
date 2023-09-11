@@ -113,18 +113,15 @@ func OutboxInsertHandler[K eventsourcing.ID](database, collName string) store.In
 		if sess == nil {
 			return faults.Errorf("no session in context")
 		}
-		m, err := event.Metadata.AsMap()
-		if err != nil {
-			return faults.Wrap(err)
-		}
+
 		coll := sess.Client().Database(database).Collection(collName)
-		_, err = coll.InsertOne(ctx, Outbox{
+		_, err := coll.InsertOne(ctx, Outbox{
 			ID:              event.ID.String(),
 			AggregateID:     event.AggregateID.String(),
 			AggregateIDHash: event.AggregateIDHash,
 			AggregateKind:   event.AggregateKind,
 			Kind:            event.Kind,
-			Metadata:        m,
+			Metadata:        fromMetadata(event.Metadata),
 		})
 		return faults.Wrap(err)
 	}

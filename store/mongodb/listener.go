@@ -119,6 +119,7 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = 10 * time.Second
 
+	// TODO is there any instance that it is no
 	return backoff.Retry(func() error {
 		for eventsStream.Next(ctx) {
 			var changeEvent ChangeEvent
@@ -135,8 +136,9 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 			aggID := PK(new(K))
 			err = aggID.UnmarshalText([]byte(eventDoc.AggregateID))
 			if err != nil {
-				return faults.Errorf("unmarshaling id '%s': %w", eventDoc.AggregateID, err)
+				return faults.Errorf("unmarshaling id '%s': %w", eventDoc.AggregateID, backoff.Permanent(err))
 			}
+
 			event := &eventsourcing.Event[K]{
 				ID:               id,
 				AggregateID:      *aggID,
@@ -146,13 +148,13 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 				Kind:             eventDoc.Kind,
 				Body:             eventDoc.Body,
 				IdempotencyKey:   eventDoc.IdempotencyKey,
-				Metadata:         encoding.JSONOfMap(eventDoc.Metadata),
+				Metadata:         toMetadata(eventDoc.Metadata),
 				CreatedAt:        eventDoc.CreatedAt,
 				Migrated:         eventDoc.Migrated,
 			}
 			err = f.sinker.Sink(ctx, event, sink.Meta{ResumeToken: lastResumeToken})
 			if err != nil {
-				return backoff.Permanent(err)
+				return faults.Errorf("sinking: %w", err)
 			}
 
 			b.Reset()

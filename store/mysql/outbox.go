@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/oklog/ulid/v2"
@@ -14,6 +15,11 @@ import (
 	"github.com/quintans/eventsourcing/sink/poller"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
+)
+
+const (
+	coreOutboxCols = "id, aggregate_id, aggregate_kind, kind, aggregate_id_hash"
+	coreOutboxVars = "?, ?, ?, ?, ?"
 )
 
 var _ poller.Repository[*ulid.ULID] = (*OutboxRepository[*ulid.ULID])(nil)
@@ -83,10 +89,25 @@ func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler
 		if tx == nil {
 			return faults.Errorf("no transaction in context")
 		}
-		_, err := tx.ExecContext(ctx,
-			fmt.Sprintf(`INSERT INTO %s (id, aggregate_id, aggregate_kind, kind, metadata, aggregate_id_hash)
-		VALUES (?, ?, ?, ?, ?, ?)`, tableName),
-			event.ID.String(), event.AggregateID.String(), event.AggregateKind, event.Kind, event.Metadata, event.AggregateIDHash)
+
+		columns := []string{coreOutboxCols}
+		values := []any{
+			event.ID.String(),
+			event.AggregateID.String(),
+			event.AggregateKind,
+			event.Kind,
+			event.AggregateIDHash,
+		}
+		vars := []string{coreOutboxVars}
+		for k, v := range event.Metadata {
+			columns = append(columns, store.MetaColumnPrefix+k)
+			vars = append(vars, "?")
+			values = append(values, v)
+		}
+
+		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", tableName, strings.Join(columns, ", "), strings.Join(vars, ", "))
+
+		_, err := tx.ExecContext(ctx, query, values...)
 		return faults.Wrap(err)
 	}
 }

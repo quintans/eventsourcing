@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -20,6 +21,7 @@ import (
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store"
 )
 
 const (
@@ -253,6 +255,10 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
+		meta, err := extractMetadata(values)
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
 
 		eid, err := eventid.Parse(id)
 		if err != nil {
@@ -271,7 +277,7 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 			AggregateKind:    eventsourcing.Kind(aggregateKind),
 			Kind:             eventsourcing.Kind(kind),
 			Body:             body,
-			Metadata:         encoding.JSONOfString(metadata),
+			Metadata:         meta,
 			IdempotencyKey:   idempotencyKey,
 			CreatedAt:        createdAt,
 			Migrated:         migrated,
@@ -294,6 +300,24 @@ func extract(values map[string]pgtype.Value, targets map[string]interface{}) err
 		}
 	}
 	return nil
+}
+
+func extractMetadata(values map[string]pgtype.Value) (eventsourcing.Metadata, error) {
+	meta := eventsourcing.Metadata{}
+	for k, v := range values {
+		if v.Get() == nil || !strings.HasPrefix(k, store.MetaColumnPrefix) {
+			continue
+		}
+
+		var s string
+		err := v.AssignTo(&s)
+		if err != nil {
+			return nil, faults.Errorf("failed to assign %s: %w", k, err)
+		}
+		meta[k[len(store.MetaColumnPrefix):]] = s
+
+	}
+	return meta, nil
 }
 
 func (f *FeedLogrepl[K, PK]) listReplicationSlot(ctx context.Context, conn *pgconn.PgConn) (map[string]bool, error) {

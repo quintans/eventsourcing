@@ -28,7 +28,7 @@ type Poller[K eventsourcing.ID] struct {
 	pullInterval   time.Duration
 	limit          int
 	aggregateKinds []eventsourcing.Kind
-	metadata       store.Metadata
+	metadata       store.MetadataFilter
 	partitionsLow  uint32
 	partitionsHi   uint32
 }
@@ -62,22 +62,16 @@ func WithAggregateKinds[K eventsourcing.ID](at ...eventsourcing.Kind) Option[K] 
 	}
 }
 
-func WithMetadataKV[K eventsourcing.ID](key, value string) Option[K] {
+func WithMetadataKV[K eventsourcing.ID](key string, values ...string) Option[K] {
 	return func(f *Poller[K]) {
 		if f.metadata == nil {
-			f.metadata = store.Metadata{}
+			f.metadata = store.MetadataFilter{}
 		}
-		values := f.metadata[key]
-		if values == nil {
-			values = []string{value}
-		} else {
-			values = append(values, value)
-		}
-		f.metadata[key] = values
+		f.metadata.Add(key, values...)
 	}
 }
 
-func WithMetadata[K eventsourcing.ID](metadata store.Metadata) Option[K] {
+func WithMetadata[K eventsourcing.ID](metadata store.MetadataFilter) Option[K] {
 	return func(f *Poller[K]) {
 		f.metadata = metadata
 	}

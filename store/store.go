@@ -8,11 +8,13 @@ import (
 	"github.com/quintans/eventsourcing"
 )
 
+const MetaColumnPrefix = "meta_"
+
 type Filter struct {
 	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Metadata Metadata
+	Metadata MetadataFilter
 	Splits   uint32
 	Split    uint32
 }
@@ -34,24 +36,34 @@ func WithAggregateKinds(at ...eventsourcing.Kind) FilterOption {
 	}
 }
 
-func WithMetadataKV(key, value string) FilterOption {
+func WithMetadataFilter(key, value string) FilterOption {
 	return func(f *Filter) {
 		if f.Metadata == nil {
-			f.Metadata = Metadata{}
+			f.Metadata = MetadataFilter{}
 		}
-		values := f.Metadata[key]
-		if values == nil {
-			values = []string{value}
-		} else {
-			values = append(values, value)
-		}
-		f.Metadata[key] = values
+		f.Metadata.Add(key, value)
 	}
 }
 
-type Metadata map[string][]string
+type (
+	MetadataFilter []*MetadataKVs
+	MetadataKVs    struct {
+		Key    string
+		Values []string
+	}
+)
 
-func WithMetadata(metadata Metadata) FilterOption {
+func (m *MetadataFilter) Add(key string, values ...string) {
+	for _, v := range *m {
+		if v.Key == key {
+			v.Values = append(v.Values, values...)
+			return
+		}
+	}
+	*m = append(*m, &MetadataKVs{Key: key, Values: values})
+}
+
+func WithMetadata(metadata MetadataFilter) FilterOption {
 	return func(f *Filter) {
 		f.Metadata = metadata
 	}
@@ -86,4 +98,9 @@ type KVWStore interface {
 type KVStore interface {
 	KVRStore
 	KVWStore
+}
+
+type Metadata struct {
+	Key   string
+	Value string
 }

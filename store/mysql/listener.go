@@ -24,6 +24,7 @@ import (
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store"
 )
 
 const resumeTokenSep = ":"
@@ -251,6 +252,17 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 		if err != nil {
 			return faults.Errorf("unmarshaling id '%s': %w", aggIDStr, err)
 		}
+		// metadata
+		meta := eventsourcing.Metadata{}
+		for k, v := range r.cols {
+			if strings.HasPrefix(v.Name, store.MetaColumnPrefix) {
+				c, ok := r.row[k].(string)
+				if !ok {
+					return faults.Errorf("metadata values must be a string (%s: %T)", aggIDStr, aggIDStr)
+				}
+				meta[v.Name[len(store.MetaColumnPrefix):]] = c
+			}
+		}
 		h.events = append(h.events, &eventsourcing.Event[K]{
 			ID:               id,
 			AggregateID:      *aggID,
@@ -260,7 +272,7 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 			Kind:             eventsourcing.Kind(r.getAsString("kind")),
 			Body:             r.getStringAsBytes("body"),
 			IdempotencyKey:   r.getAsString("idempotency_key"),
-			Metadata:         encoding.JSONOfBytes(r.getAsBytes("metadata")),
+			Metadata:         meta,
 			CreatedAt:        r.getAsTimeDate("created_at"),
 			Migrated:         r.getAsBool("migrated"),
 		})

@@ -240,35 +240,45 @@ func TestListenerWithMetadata(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL(
+
+	r1, err := postgresql.NewStoreWithURL(
 		dbConfig.URL(),
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ulid.ULID]("outbox")),
+		postgresql.WithMetadata[ulid.ULID](eventsourcing.Metadata{"geo": "UK"}),
 	)
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es1 := eventsourcing.NewEventStore[*test.Account](r1, test.NewJSONCodec(), esOptions)
 
-	acc, _ := test.NewAccount("Paulo", 100)
-	id := acc.GetID()
-	acc.Deposit(10)
-	acc.Deposit(20)
-	err = es.Create(ctx, acc, eventsourcing.WithMetadata(map[string]interface{}{"geo": "EU"}))
+	acc, _ := test.NewAccount("Paulo", 50)
+	err = es1.Create(ctx, acc)
 	require.NoError(t, err)
-	err = es.Update(
+
+	r2, err := postgresql.NewStoreWithURL(
+		dbConfig.URL(),
+		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ulid.ULID]("outbox")),
+		postgresql.WithMetadata[ulid.ULID](eventsourcing.Metadata{"geo": "EU"}),
+	)
+	require.NoError(t, err)
+	es2 := eventsourcing.NewEventStore[*test.Account](r2, test.NewJSONCodec(), esOptions)
+
+	acc1, _ := test.NewAccount("Pereira", 100)
+	id := acc1.GetID()
+	acc1.Deposit(10)
+	acc1.Deposit(20)
+	err = es2.Create(ctx, acc1)
+	require.NoError(t, err)
+	err = es2.Update(
 		ctx,
 		id,
 		func(a *test.Account) (*test.Account, error) {
 			a.Deposit(5)
 			return a, nil
 		},
-		eventsourcing.WithMetadata(map[string]interface{}{"geo": "US"}),
 	)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.DehydratedAccount()
-	counter := 0
-
-	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
+	outboxRepo := postgresql.NewOutboxStore(r2.Connection().DB, "outbox", r2)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ulid.ULID]("geo", "EU"))
 
@@ -276,9 +286,11 @@ func TestListenerWithMetadata(t *testing.T) {
 	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
+	acc2 := test.DehydratedAccount()
+	counter := 0
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
 		if e.AggregateID == id {
-			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := es2.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			mu.Lock()

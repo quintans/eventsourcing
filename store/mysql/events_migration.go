@@ -92,7 +92,7 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 
 	evts := make([]*eventsourcing.Event[K], len(events))
 	for k, v := range events {
-		evt, err := toEventsourcingEvent[K, PK](v)
+		evt, err := toEventSourcingEvent[K, PK](v)
 		if err != nil {
 			return nil, err
 		}
@@ -127,6 +127,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			AggregateKind:    last.AggregateKind,
 			Kind:             eventsourcing.InvalidatedKind, // for this kind, the missing event fields do not need to be populated
 			CreatedAt:        now,
+			Metadata:         r.metadata,
 		})
 		if err != nil {
 			return err
@@ -177,7 +178,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			}
 			if aggregate != nil {
 				event.ID = lastID
-				evt, err := toEventsourcingEvent[K, PK](event)
+				evt, err := toEventSourcingEvent[K, PK](event)
 				if err != nil {
 					return err
 				}
@@ -201,6 +202,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,
 				CreatedAt:        time.Now().UTC(),
+				Metadata:         r.metadata,
 			})
 			if err != nil {
 				return err
