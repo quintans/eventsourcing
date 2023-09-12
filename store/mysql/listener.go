@@ -143,7 +143,7 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				return backoff.Permanent(faults.Wrap(err))
+				return nil
 			}
 
 			mu.Lock()
@@ -255,13 +255,15 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 		// metadata
 		meta := eventsourcing.Metadata{}
 		for k, v := range r.cols {
-			if strings.HasPrefix(v.Name, store.MetaColumnPrefix) {
-				c, ok := r.row[k].(string)
-				if !ok {
-					return faults.Errorf("metadata values must be a string (%s: %T)", aggIDStr, aggIDStr)
-				}
-				meta[v.Name[len(store.MetaColumnPrefix):]] = c
+			if r.row[k] == nil || !strings.HasPrefix(v.Name, store.MetaColumnPrefix) {
+				continue
 			}
+
+			c, ok := r.row[k].(string)
+			if !ok {
+				return faults.Errorf("metadata for column '%s' must be a string, got %T", v.Name, r.row[k])
+			}
+			meta[v.Name[len(store.MetaColumnPrefix):]] = c
 		}
 		h.events = append(h.events, &eventsourcing.Event[K]{
 			ID:               id,

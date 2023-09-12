@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"time"
 
@@ -103,4 +104,29 @@ type KVStore interface {
 type Metadata struct {
 	Key   string
 	Value string
+}
+
+// NilString converts nil to empty string
+type NilString string
+
+func (ns *NilString) Scan(value interface{}) error {
+	if value == nil {
+		*ns = ""
+		return nil
+	}
+
+	switch s := value.(type) {
+	case string:
+		*ns = NilString(s)
+	case []byte:
+		*ns = NilString(s)
+	}
+	return nil
+}
+
+func (ns NilString) Value() (driver.Value, error) {
+	if ns == "" {
+		return nil, nil
+	}
+	return string(ns), nil
 }

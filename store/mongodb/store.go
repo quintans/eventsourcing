@@ -487,11 +487,7 @@ func partitionFilter(field string, splits, split uint32) bson.E {
 }
 
 func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event[K], error) {
-	return queryEvents[K, PK](ctx, r.eventsCollection(), filter, opts)
-}
-
-func queryEvents[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.Context, coll *mongo.Collection, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event[K], error) {
-	cursor, err := coll.Find(ctx, filter, opts)
+	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, nil
@@ -544,7 +540,7 @@ func toEventsourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 
 func (r *EsRepository[K, PK]) GetEventsByRawIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	return queryEvents[K, PK](ctx, r.eventsCollection(), bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
+	return r.queryEvents(ctx, bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
 }
 
 func fromMetadata(meta eventsourcing.Metadata) primitive.M {

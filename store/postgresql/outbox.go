@@ -108,9 +108,9 @@ func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler
 			values = append(values, v)
 		}
 
-		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", strings.Join(columns, ", "), tableName, strings.Join(vars, ", "))
+		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", tableName, strings.Join(columns, ", "), strings.Join(vars, ", "))
 
 		_, err := tx.ExecContext(ctx, query, values...)
-		return faults.Wrap(err)
+		return faults.Wrapf(err, "inserting into the outbox, query=%s, args=%+v", query, values)
 	}
 }

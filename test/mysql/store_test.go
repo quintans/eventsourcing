@@ -16,10 +16,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink/poller"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/store/mysql"
-	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
+	"github.com/quintans/eventsourcing/util/ids"
 )
 
 var (
@@ -28,6 +30,31 @@ var (
 		SnapshotThreshold: 3,
 	}
 )
+
+type Snapshot struct {
+	ID               eventid.EventID    `db:"id,omitempty"`
+	AggregateID      string             `db:"aggregate_id,omitempty"`
+	AggregateVersion uint32             `db:"aggregate_version,omitempty"`
+	AggregateKind    eventsourcing.Kind `db:"aggregate_kind,omitempty"`
+	Body             []byte             `db:"body,omitempty"`
+	CreatedAt        time.Time          `db:"created_at,omitempty"`
+	MetaTenant       store.NilString    `db:"meta_tenant,omitempty"`
+}
+
+type Event struct {
+	ID               eventid.EventID    `db:"id"`
+	AggregateID      string             `db:"aggregate_id"`
+	AggregateIDHash  int32              `db:"aggregate_id_hash"`
+	AggregateVersion uint32             `db:"aggregate_version"`
+	AggregateKind    eventsourcing.Kind `db:"aggregate_kind"`
+	Kind             eventsourcing.Kind `db:"kind"`
+	Body             []byte             `db:"body"`
+	IdempotencyKey   store.NilString    `db:"idempotency_key"`
+	CreatedAt        time.Time          `db:"created_at"`
+	Migration        int                `db:"migration"`
+	Migrated         bool               `db:"migrated"`
+	MetaTenant       store.NilString    `db:"meta_tenant,omitempty"`
+}
 
 func connect(dbConfig DBConfig) (*sqlx.DB, error) {
 	dburl := dbConfig.URL()
@@ -48,7 +75,7 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
+	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -82,7 +109,7 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
-	evts := []mysql.Event{}
+	evts := []Event{}
 	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id.String())
 	require.NoError(t, err)
 	require.Equal(t, 5, len(evts))
@@ -127,7 +154,7 @@ func TestPollListener(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStoreWithURL(
 		dbConfig.URL(),
-		mysql.WithTxHandler(mysql.OutboxInsertHandler[ulid.ULID]("outbox")),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
 	)
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -156,8 +183,8 @@ func TestPollListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 
-	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
+	mockSink := test.NewMockSink(test.NewMockSinkData[ids.AggID](), 1, 1, 1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ids.AggID]) error {
 		if e.AggregateID == id {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -191,7 +218,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	ctx := context.Background()
 	r, err := mysql.NewStoreWithURL(
 		dbConfig.URL(),
-		mysql.WithTxHandler(mysql.OutboxInsertHandler[ulid.ULID]("outbox")),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
 	)
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -214,13 +241,13 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	counter := 0
 	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox", r)
 	require.NoError(t, err)
-	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds[ulid.ULID](test.KindAccount))
+	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds[ids.AggID](test.KindAccount))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 
-	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
+	mockSink := test.NewMockSink(test.NewMockSinkData[ids.AggID](), 1, 1, 1)
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ids.AggID]) error {
 		if e.AggregateID == id {
 			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -255,20 +282,21 @@ func TestListenerWithMetadata(t *testing.T) {
 
 	r1, err := mysql.NewStoreWithURL(
 		dbConfig.URL(),
-		mysql.WithTxHandler(mysql.OutboxInsertHandler[ulid.ULID]("outbox")),
-		mysql.WithMetadata[ulid.ULID](eventsourcing.Metadata{"geo": "UK"}),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
+		mysql.WithMetadata[ids.AggID](eventsourcing.Metadata{"tenant": "abc"}),
 	)
 	require.NoError(t, err)
 	es1 := eventsourcing.NewEventStore[*test.Account](r1, test.NewJSONCodec(), esOptions)
 
 	acc, _ := test.NewAccount("Paulo", 50)
+	acc.Deposit(20)
 	err = es1.Create(ctx, acc)
 	require.NoError(t, err)
 
 	r2, err := mysql.NewStoreWithURL(
 		dbConfig.URL(),
-		mysql.WithTxHandler(mysql.OutboxInsertHandler[ulid.ULID]("outbox")),
-		mysql.WithMetadata[ulid.ULID](eventsourcing.Metadata{"geo": "EU"}),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
+		mysql.WithMetadata[ids.AggID](eventsourcing.Metadata{"tenant": "xyz"}),
 	)
 	require.NoError(t, err)
 	es2 := eventsourcing.NewEventStore[*test.Account](r2, test.NewJSONCodec(), esOptions)
@@ -293,16 +321,16 @@ func TestListenerWithMetadata(t *testing.T) {
 
 	outboxRepo := mysql.NewOutboxStore(r2.Connection(), "outbox", r2)
 	require.NoError(t, err)
-	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ulid.ULID]("geo", "EU"))
+	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ids.AggID]("tenant", "xyz"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 	errCh := make(chan error, 1)
 
-	mockSink := test.NewMockSink(test.NewMockSinkData[ulid.ULID](), 1, 1, 1)
+	mockSink := test.NewMockSink(test.NewMockSinkData[ids.AggID](), 1, 1, 1)
 	acc2 := test.DehydratedAccount()
 	counter := 0
-	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ulid.ULID]) error {
+	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ids.AggID]) error {
 		if e.AggregateID == id {
 			if err := es2.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
@@ -323,10 +351,10 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, <-errCh, "unable to poll")
 
 	mu.Lock()
-	assert.Equal(t, 3, counter)
+	assert.Equal(t, 4, counter)
 	mu.Unlock()
 	assert.Equal(t, id, acc2.ID())
-	assert.Equal(t, int64(130), acc2.Balance())
+	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
@@ -336,7 +364,7 @@ func TestForget(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
+	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -386,7 +414,7 @@ func TestForget(t *testing.T) {
 	}
 
 	err = es.Forget(ctx,
-		eventsourcing.ForgetRequest[ulid.ULID]{
+		eventsourcing.ForgetRequest[ids.AggID]{
 			AggregateID: id,
 			EventKind:   "OwnerUpdated",
 		},
@@ -434,11 +462,11 @@ func TestMigration(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
+	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 	require.NoError(t, err)
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ")
+	id := ids.AggID(ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ"))
 	acc, err := test.NewAccountWithID("Paulo Pereira", id, 100)
 	require.NoError(t, err)
 	acc.Deposit(20)
@@ -456,7 +484,7 @@ func TestMigration(t *testing.T) {
 	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,
-		func(events []*eventsourcing.Event[ulid.ULID]) ([]*eventsourcing.EventMigration, error) {
+		func(events []*eventsourcing.Event[ids.AggID]) ([]*eventsourcing.EventMigration, error) {
 			var migration []*eventsourcing.EventMigration
 			var m *eventsourcing.EventMigration
 			// default codec used by the event store
@@ -486,7 +514,7 @@ func TestMigration(t *testing.T) {
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
 
-	snaps := []postgresql.Snapshot{}
+	snaps := []Snapshot{}
 	err = db.Select(&snaps, "SELECT * FROM snapshots WHERE aggregate_id = ? ORDER by id ASC", id.String())
 	require.NoError(t, err)
 	require.Equal(t, 1, len(snaps))
@@ -496,7 +524,7 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, 9, int(snap.AggregateVersion))
 	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","status":"OPEN","balance":105,"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(snap.Body))
 
-	evts := []mysql.Event{}
+	evts := []Event{}
 	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id.String())
 	require.NoError(t, err)
 	require.Equal(t, 9, len(evts))

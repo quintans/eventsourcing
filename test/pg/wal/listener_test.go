@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
 	tpg "github.com/quintans/eventsourcing/test/pg"
+	"github.com/quintans/eventsourcing/util/ids"
 	"github.com/quintans/faults"
 )
 
@@ -79,7 +79,7 @@ func TestListener(t *testing.T) {
 
 			dbConfig := setup(t)
 
-			repository, err := postgresql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
+			repository, err := postgresql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 			require.NoError(t, err)
 
 			quit := make(chan os.Signal, 1)
@@ -87,7 +87,7 @@ func TestListener(t *testing.T) {
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
 
-			data := test.NewMockSinkData[ulid.ULID]()
+			data := test.NewMockSinkData[ids.AggID]()
 			ctx, cancel := context.WithCancel(context.Background())
 			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestListener(t *testing.T) {
 			cancel()
 
 			// resume from the begginning
-			data = test.NewMockSinkData[ulid.ULID]()
+			data = test.NewMockSinkData[ids.AggID]()
 			ctx, cancel = context.WithCancel(context.Background())
 			err = feeding(ctx, dbConfig, tt.splitSlots, data)
 			require.NoError(t, err)
@@ -157,13 +157,13 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tpg.DBConfig, slots []slot, data *test.MockSinkData[ulid.ULID]) error {
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, slots []slot, data *test.MockSinkData[ids.AggID]) error {
 	partitions := partitionSize(slots)
 
 	var wg sync.WaitGroup
 	for k, v := range slots {
 		mockSink := test.NewMockSink(data, partitions, v.low, v.high)
-		listener, err := postgresql.NewFeed[ulid.ULID](dbConfig.ReplicationURL(), k+1, len(slots), mockSink)
+		listener, err := postgresql.NewFeed[ids.AggID](dbConfig.ReplicationURL(), k+1, len(slots), mockSink)
 		if err != nil {
 			return faults.Wrap(err)
 		}

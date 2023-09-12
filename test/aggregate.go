@@ -1,8 +1,6 @@
 package test
 
 import (
-	"github.com/oklog/ulid/v2"
-
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing/encoding/jsoncodec"
@@ -28,7 +26,7 @@ const (
 )
 
 type AccountCreated struct {
-	Id    ulid.ULID
+	Id    ids.AggID
 	Money int64
 	Owner string
 }
@@ -85,7 +83,7 @@ func NewAccount(owner string, money int64) (*Account, error) {
 	return NewAccountWithID(owner, ids.New(), money)
 }
 
-func NewAccountWithID(owner string, id ulid.ULID, money int64) (*Account, error) {
+func NewAccountWithID(owner string, id ids.AggID, money int64) (*Account, error) {
 	a := DehydratedAccount()
 	if err := a.root.ApplyChange(&AccountCreated{
 		Id:    id,
@@ -106,7 +104,7 @@ func DehydratedAccount() *Account {
 type Account struct {
 	root eventsourcing.RootAggregate `json:"-"`
 
-	id      ulid.ULID
+	id      ids.AggID
 	status  Status
 	balance int64
 	owner   string
@@ -116,14 +114,14 @@ func (a *Account) PopEvents() []eventsourcing.Eventer {
 	return a.root.PopEvents()
 }
 
-func (a *Account) GetID() ulid.ULID {
+func (a *Account) GetID() ids.AggID {
 	if a == nil {
-		return ulid.ULID{}
+		return ids.AggID{}
 	}
 	return a.id
 }
 
-func (a *Account) ID() ulid.ULID {
+func (a *Account) ID() ids.AggID {
 	return a.id
 }
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"strconv"
 	"strings"
@@ -32,7 +31,7 @@ const (
 	coreSnapVars = "?, ?, ?, ?, ?, ?"
 
 	coreEventCols = "id, aggregate_id, aggregate_id_hash, aggregate_version, aggregate_kind, kind, body, idempotency_key, created_at, migration, migrated"
-	coreEventVars = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+	coreEventVars = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
 )
 
 // Event is the event data is stored in the database
@@ -44,37 +43,11 @@ type Event struct {
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
 	Body             []byte
-	IdempotencyKey   NilString
+	IdempotencyKey   store.NilString
 	CreatedAt        time.Time
 	Migration        int
 	Migrated         bool
 	Metadata         eventsourcing.Metadata
-}
-
-// NilString converts nil to empty string
-type NilString string
-
-// Scan implements the Scanner interface.
-func (ns *NilString) Scan(value interface{}) error {
-	if value == nil {
-		*ns = ""
-		return nil
-	}
-
-	switch s := value.(type) {
-	case string:
-		*ns = NilString(s)
-	case []byte:
-		*ns = NilString(s)
-	}
-	return nil
-}
-
-func (ns NilString) Value() (driver.Value, error) {
-	if ns == "" {
-		return nil, nil
-	}
-	return string(ns), nil
 }
 
 type Snapshot struct {
@@ -200,7 +173,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 				AggregateKind:    eRec.AggregateKind,
 				Kind:             e.Kind,
 				Body:             e.Body,
-				IdempotencyKey:   NilString(idempotencyKey),
+				IdempotencyKey:   store.NilString(idempotencyKey),
 				CreatedAt:        eRec.CreatedAt,
 				Metadata:         r.metadata,
 			})
@@ -225,15 +198,17 @@ func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *
 	values := []any{
 		event.ID.String(),
 		event.AggregateID,
+		event.AggregateIDHash,
 		event.AggregateVersion,
 		event.AggregateKind,
 		event.Kind,
 		event.Body,
 		event.IdempotencyKey,
 		event.CreatedAt,
-		event.AggregateIDHash,
+		event.Migration,
 		event.Migrated,
 	}
+
 	vars := []string{coreEventVars}
 	for k, v := range event.Metadata {
 		columns = append(columns, store.MetaColumnPrefix+k)
@@ -248,7 +223,7 @@ func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *
 		if isDup(err) {
 			return faults.Wrap(eventsourcing.ErrConcurrentModification)
 		}
-		return faults.Errorf("unable to insert event: %w", err)
+		return faults.Errorf("unable to insert event, query: %s, args: %+v: %w", query, values, err)
 	}
 
 	return r.applyTxHandlers(ctx, event)
@@ -363,27 +338,26 @@ type sqlExecuter interface {
 
 func saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
 	values := []any{
-		&s.ID,
-		&s.AggregateID,
-		&s.AggregateVersion,
-		&s.AggregateKind,
-		&s.Body,
-		&s.CreatedAt,
+		s.ID,
+		s.AggregateID,
+		s.AggregateVersion,
+		s.AggregateKind,
+		s.Body,
+		s.CreatedAt,
 	}
 	columns := []string{coreSnapCols}
-	vars := []string{coreEventVars}
+	vars := []string{coreSnapVars}
 	for k, v := range s.Metadata {
 		columns = append(columns, store.MetaColumnPrefix+k)
 		vars = append(vars, "?")
 		values = append(values, v)
 	}
 
-	query := fmt.Sprintf("INSERT INTO snapshots (%s) VALUES %s)", strings.Join(columns, ", "), strings.Join(vars, ", "))
+	query := fmt.Sprintf("INSERT INTO snapshots (%s) VALUES (%s)", strings.Join(columns, ", "), strings.Join(vars, ", "))
 
 	// TODO instead of adding we could replace UPDATE/INSERT
-	_, err := x.ExecContext(ctx, query, vars)
-
-	return faults.Wrap(err)
+	_, err := x.ExecContext(ctx, query, values...)
+	return faults.Wrapf(err, "saving snapshot, query:%s, args: %+v", query, values)
 }
 
 func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
@@ -511,7 +485,7 @@ func buildFilter(qry *bytes.Buffer, prefix string, filter store.Filter, args []i
 				if idx > 0 {
 					query.WriteString(" OR ")
 				}
-				query.WriteString(fmt.Sprintf("%s = ?", kv.Key))
+				query.WriteString(fmt.Sprintf("%s%s = ?", store.MetaColumnPrefix, kv.Key))
 				args = append(args, v)
 				query.WriteString(")")
 			}
@@ -541,7 +515,7 @@ func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, query string, arg
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
-		return nil, faults.Errorf("querying events with %s, args=%+v: %w", query, args, err)
+		return nil, faults.Errorf("querying events, query=%s, args=%+v: %w", query, args, err)
 	}
 	events := []*eventsourcing.Event[K]{}
 	for rows.Next() {

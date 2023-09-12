@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"strconv"
 	"strings"
@@ -46,36 +45,11 @@ type Event struct {
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
 	Body             []byte
-	IdempotencyKey   NilString
+	IdempotencyKey   store.NilString
 	CreatedAt        time.Time
 	Migration        int
 	Migrated         bool
 	Metadata         eventsourcing.Metadata
-}
-
-// NilString converts nil to empty string
-type NilString string
-
-func (ns *NilString) Scan(value interface{}) error {
-	if value == nil {
-		*ns = ""
-		return nil
-	}
-
-	switch s := value.(type) {
-	case string:
-		*ns = NilString(s)
-	case []byte:
-		*ns = NilString(s)
-	}
-	return nil
-}
-
-func (ns NilString) Value() (driver.Value, error) {
-	if ns == "" {
-		return nil, nil
-	}
-	return string(ns), nil
 }
 
 type Snapshot struct {
@@ -200,7 +174,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 				AggregateKind:    eRec.AggregateKind,
 				Kind:             e.Kind,
 				Body:             e.Body,
-				IdempotencyKey:   NilString(idempotencyKey),
+				IdempotencyKey:   store.NilString(idempotencyKey),
 				CreatedAt:        eRec.CreatedAt,
 				Metadata:         r.metadata,
 			})
@@ -225,13 +199,14 @@ func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *
 	values := []any{
 		event.ID.String(),
 		event.AggregateID,
+		event.AggregateIDHash,
 		event.AggregateVersion,
 		event.AggregateKind,
 		event.Kind,
 		event.Body,
 		event.IdempotencyKey,
 		event.CreatedAt,
-		event.AggregateIDHash,
+		event.Migration,
 		event.Migrated,
 	}
 	vars := []string{coreEventVars}
@@ -309,7 +284,7 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, query string, ar
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
-		return nil, faults.Errorf("querying snapshots with %s, args=%+v: %w", query, args, err)
+		return nil, faults.Errorf("querying snapshots, query=%s, args=%+v: %w", query, args, err)
 	}
 	snaps := []eventsourcing.Snapshot[K]{}
 	for rows.Next() {
@@ -365,15 +340,15 @@ type sqlExecuter interface {
 
 func saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
 	values := []any{
-		&s.ID,
-		&s.AggregateID,
-		&s.AggregateVersion,
-		&s.AggregateKind,
-		&s.Body,
-		&s.CreatedAt,
+		s.ID,
+		s.AggregateID,
+		s.AggregateVersion,
+		s.AggregateKind,
+		s.Body,
+		s.CreatedAt,
 	}
 	columns := []string{coreSnapCols}
-	vars := []string{coreEventVars}
+	vars := []string{coreSnapVars}
 	count := coreSnapVarCount
 	for k, v := range s.Metadata {
 		columns = append(columns, store.MetaColumnPrefix+k)
@@ -382,12 +357,12 @@ func saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
 		values = append(values, v)
 	}
 
-	query := fmt.Sprintf("INSERT INTO snapshots (%s) VALUES %s)", strings.Join(columns, ", "), strings.Join(vars, ", "))
+	query := fmt.Sprintf("INSERT INTO snapshots (%s) VALUES (%s)", strings.Join(columns, ", "), strings.Join(vars, ", "))
 
 	// TODO instead of adding we could replace UPDATE/INSERT
-	_, err := x.ExecContext(ctx, query, vars)
+	_, err := x.ExecContext(ctx, query, values...)
 
-	return faults.Wrap(err)
+	return faults.Wrapf(err, "saving snapshot, query:%s, args: %+v", query, values)
 }
 
 func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
@@ -445,7 +420,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 	}
 
 	// forget snapshots
-	snaps, err := r.getSnapshots(ctx, "SELECT * FROM snapshots WHERE aggregate_id = ?", request.AggregateID.String())
+	snaps, err := r.getSnapshots(ctx, "SELECT * FROM snapshots WHERE aggregate_id = $1", request.AggregateID.String())
 	if err != nil {
 		return faults.Errorf("getting snapshot for aggregate '%s': %w", request.AggregateID, err)
 	}
@@ -517,7 +492,7 @@ func buildFilter(qry *bytes.Buffer, prefix string, filter store.Filter, args []i
 					query.WriteString(" OR ")
 				}
 				args = append(args, v)
-				query.WriteString(fmt.Sprintf("%s = $%d", kv.Key, len(args)))
+				query.WriteString(fmt.Sprintf("%s%s = $%d", store.MetaColumnPrefix, kv.Key, len(args)))
 				query.WriteString(")")
 			}
 			conditions = append(conditions, query.String())

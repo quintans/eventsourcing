@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/projection"
 	pkafka "github.com/quintans/eventsourcing/projection/kafka"
@@ -18,6 +17,7 @@ import (
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/test/integration"
 	shared "github.com/quintans/eventsourcing/test/mysql"
+	"github.com/quintans/eventsourcing/util/ids"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -35,14 +35,14 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 
 	dbConfig := shared.Setup(t)
 
-	esRepo, err := mysql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
+	esRepo, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := kafka.NewSink[ulid.ULID](logger, &integration.MockKVStore{}, topic, uris)
+	sinker, err := kafka.NewSink[ids.AggID](logger, &integration.MockKVStore{}, topic, uris)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
@@ -81,14 +81,14 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 
 	dbConfig := shared.Setup(t)
 
-	esRepo, err := mysql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
+	esRepo, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := kafka.NewSink[ulid.ULID](logger, &integration.MockKVStore{}, topic, uris)
+	sinker, err := kafka.NewSink[ids.AggID](logger, &integration.MockKVStore{}, topic, uris)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
@@ -150,13 +150,13 @@ func runKafkaContainer(t *testing.T) []string {
 	return []string{"localhost:29092"}
 }
 
-func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository[ulid.ULID, *ulid.ULID]) *integration.ProjectionMock[ulid.ULID] {
+func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID]) *integration.ProjectionMock[ids.AggID] {
 	// create projection
-	proj := integration.NewProjectionMock[ulid.ULID]("balances")
+	proj := integration.NewProjectionMock[ids.AggID]("balances")
 
 	kvStore := &integration.MockKVStore{}
 
-	sub, err := pkafka.NewSubscriberWithBrokers[ulid.ULID](ctx, logger, uri, "accounts", nil)
+	sub, err := pkafka.NewSubscriberWithBrokers[ids.AggID](ctx, logger, uri, "accounts", nil)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository

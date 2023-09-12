@@ -237,7 +237,6 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 		var kind string
 		body := []byte{}
 		var idempotencyKey string
-		var metadata string
 		var createdAt time.Time
 		var migrated bool
 		err = extract(values, map[string]interface{}{
@@ -248,7 +247,6 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 			"kind":              &kind,
 			"body":              &body,
 			"idempotency_key":   &idempotencyKey,
-			"metadata":          &metadata,
 			"created_at":        &createdAt,
 			"migrated":          &migrated,
 		})

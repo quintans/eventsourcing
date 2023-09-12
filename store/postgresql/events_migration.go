@@ -12,6 +12,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util/ids"
 )
 
@@ -81,23 +82,10 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 
 	// TODO should select by batches
 	// get all events for the aggregate id returned by the subquery
-	events := []*Event{}
 	query := fmt.Sprintf("SELECT * FROM events WHERE aggregate_id = (%s) AND migration = 0 ORDER BY aggregate_version ASC", subquery.String())
-	err := r.db.SelectContext(ctx, &events, query, args...)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	} else if err != nil {
-		return nil, faults.Errorf("unable to query events: %w\n%s", err, query)
-	}
+	events, err := r.queryEvents(ctx, query, args...)
 
-	evts := make([]*eventsourcing.Event[K], len(events))
-	for k, v := range events {
-		evts[k], err = toEventSourcingEvent[K, PK](v)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return evts, nil
+	return events, faults.Wrapf(err, "retrieving events for migration")
 }
 
 func (r *EsRepository[K, PK]) saveMigration(
@@ -166,7 +154,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,
 				Body:             mig.Body,
-				IdempotencyKey:   NilString(mig.IdempotencyKey),
+				IdempotencyKey:   store.NilString(mig.IdempotencyKey),
 				Metadata:         mig.Metadata,
 				CreatedAt:        now,
 				Migrated:         true,

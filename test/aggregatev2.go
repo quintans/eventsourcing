@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -48,7 +47,7 @@ func (n NameVO) LastName() string {
 }
 
 type AccountCreatedV2 struct {
-	Id    ulid.ULID
+	Id    ids.AggID
 	Money int64
 	Owner NameVO
 }
@@ -139,7 +138,7 @@ func DehydratedAccountV2() *AccountV2 {
 type AccountV2 struct {
 	root eventsourcing.RootAggregate `json:"-"`
 
-	id      ulid.ULID
+	id      ids.AggID
 	status  Status
 	balance int64
 	owner   NameVO
@@ -149,11 +148,11 @@ func (a *AccountV2) PopEvents() []eventsourcing.Eventer {
 	return a.root.PopEvents()
 }
 
-func (a *AccountV2) GetID() ulid.ULID {
+func (a *AccountV2) GetID() ids.AggID {
 	return a.id
 }
 
-func (a *AccountV2) ID() ulid.ULID {
+func (a *AccountV2) ID() ids.AggID {
 	return a.id
 }
 
