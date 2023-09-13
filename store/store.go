@@ -17,7 +17,7 @@ type Filter struct {
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
 	Metadata MetadataFilter
 	Splits   uint32
-	Split    uint32
+	SplitIDs []uint32
 }
 
 type FilterOption func(*Filter)
@@ -27,7 +27,7 @@ func WithFilter(filter Filter) FilterOption {
 		f.AggregateKinds = filter.AggregateKinds
 		f.Metadata = filter.Metadata
 		f.Splits = filter.Splits
-		f.Split = filter.Split
+		f.SplitIDs = filter.SplitIDs
 	}
 }
 
@@ -70,10 +70,10 @@ func WithMetadata(metadata MetadataFilter) FilterOption {
 	}
 }
 
-func WithPartitions(partitions, partition uint32) FilterOption {
+func WithSplits(partitions uint32, partitionIDs []uint32) FilterOption {
 	return func(f *Filter) {
 		f.Splits = partitions
-		f.Split = partition
+		f.SplitIDs = partitionIDs
 	}
 }
 

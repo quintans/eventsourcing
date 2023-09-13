@@ -31,7 +31,7 @@ and
 * Snapshots
 * Event Idempotency
 * Forget (GDPR)
-* Metadata associated to an event
+* Metadata associated to an event store (extra fields/columns)
 * Reactive streaming from the database into an Event BUS
 * Polling from the database with the Outbox table into an Event BUS
 * Transaction hooks

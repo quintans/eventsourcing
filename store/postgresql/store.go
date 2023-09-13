@@ -443,7 +443,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > $1 AND id <= $2 AND migration = 0")
 	args := []interface{}{after.String(), until.String()}
-	args = buildFilter(&query, " AND ", filter, args)
+	args = buildFilter(&query, " AND ", r.metadata, filter, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -461,7 +461,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(qry *bytes.Buffer, prefix string, filter store.Filter, args []interface{}) []interface{} {
+func buildFilter(qry *bytes.Buffer, prefix string, metadata eventsourcing.Metadata, filter store.Filter, args []interface{}) []interface{} {
 	var conditions []string
 	if len(filter.AggregateKinds) > 0 {
 		var query strings.Builder
@@ -477,14 +477,35 @@ func buildFilter(qry *bytes.Buffer, prefix string, filter store.Filter, args []i
 		conditions = append(conditions, query.String())
 	}
 
-	if filter.Splits > 1 && filter.Split > 1 {
-		size := len(args)
-		args = append(args, filter.Splits, filter.Split)
-		conditions = append(conditions, fmt.Sprintf("MOD(aggregate_id_hash, $%d) = $%d", size+1, size+2))
+	if filter.Splits > 1 && len(filter.SplitIDs) != int(filter.Splits) {
+		args = append(args, filter.Splits)
+		pos := len(args)
+		s := strings.Builder{}
+		for k, v := range filter.SplitIDs {
+			if k > 0 {
+				s.WriteString(", ")
+			}
+			args = append(args, v)
+			s.WriteString("$" + strconv.Itoa(len(args)))
+		}
+		conditions = append(conditions, fmt.Sprintf("MOD(aggregate_id_hash, $%d) IN (%s)", pos, s.String()))
+	}
+
+	for k, v := range metadata {
+		args = append(args, v)
+		qry.WriteString(fmt.Sprintf(" AND %s%s = $%d", store.MetaColumnPrefix, k, len(args)))
 	}
 
 	if len(filter.Metadata) > 0 {
 		for _, kv := range filter.Metadata {
+			// ignore if already set by the metadata
+			if metadata != nil {
+				_, ok := metadata[kv.Key]
+				if ok {
+					continue
+				}
+			}
+
 			var query strings.Builder
 			query.WriteString("(")
 			for idx, v := range kv.Values {

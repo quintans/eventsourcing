@@ -66,7 +66,7 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 		AggregateKinds: types,
 		Metadata:       metadata,
 		Splits:         pbFilter.Splits,
-		Split:          pbFilter.Split,
+		SplitIDs:       pbFilter.SplitIds,
 	}
 }
 

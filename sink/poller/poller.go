@@ -29,8 +29,8 @@ type Poller[K eventsourcing.ID] struct {
 	limit          int
 	aggregateKinds []eventsourcing.Kind
 	metadata       store.MetadataFilter
-	partitionsLow  uint32
-	partitionsHi   uint32
+	splits         uint32
+	splitIDs       []uint32
 }
 
 type Option[K eventsourcing.ID] func(*Poller[K])
@@ -49,10 +49,10 @@ func WithLimit[K eventsourcing.ID](limit int) Option[K] {
 	}
 }
 
-func WithPartitions[K eventsourcing.ID](partitionsLow, partitionsHi uint32) Option[K] {
+func WithSplits[K eventsourcing.ID](splits uint32, splitIDs []uint32) Option[K] {
 	return func(p *Poller[K]) {
-		p.partitionsLow = partitionsLow
-		p.partitionsHi = partitionsHi
+		p.splits = splits
+		p.splitIDs = splitIDs
 	}
 }
 
@@ -137,7 +137,7 @@ func (p *Poller[K]) catchUp(ctx context.Context, sinker sink.Sinker[K]) error {
 	filters := []store.FilterOption{
 		store.WithAggregateKinds(p.aggregateKinds...),
 		store.WithMetadata(p.metadata),
-		store.WithPartitions(p.partitionsLow, p.partitionsHi),
+		store.WithSplits(p.splits, p.splitIDs),
 	}
 	filter := store.Filter{}
 	for _, f := range filters {

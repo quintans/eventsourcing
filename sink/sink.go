@@ -12,8 +12,6 @@ import (
 )
 
 type Sinker[K eventsourcing.ID] interface {
-	Partitions() (uint32, []uint32)
-	Accepts(hash uint32) bool
 	Sink(ctx context.Context, e *eventsourcing.Event[K], meta Meta) error
 	ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) error
 	Close()

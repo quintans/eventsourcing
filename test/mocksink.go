@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/oklog/ulid/v2"
@@ -82,7 +83,7 @@ func (s *MockSinkClient[K]) Partitions() (uint32, []uint32) {
 
 func (s *MockSinkClient[K]) Accepts(hash uint32) bool {
 	partition := util.CalcPartition(hash, s.totalPartitions)
-	return util.In(partition, s.partitions...)
+	return slices.Contains(s.partitions, partition)
 }
 
 func (s *MockSinkClient[K]) OnSink(handler func(ctx context.Context, e *eventsourcing.Event[K]) error) {
@@ -91,7 +92,7 @@ func (s *MockSinkClient[K]) OnSink(handler func(ctx context.Context, e *eventsou
 
 func (s *MockSinkClient[K]) Sink(ctx context.Context, e *eventsourcing.Event[K], m sink.Meta) error {
 	partition := util.CalcPartition(e.AggregateIDHash, s.totalPartitions)
-	if !util.In(partition, s.partitions...) {
+	if !slices.Contains(s.partitions, partition) {
 		return nil
 	}
 

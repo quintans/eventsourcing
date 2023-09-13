@@ -433,7 +433,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 		{"migration", bson.D{{"$eq", 0}}},
 	}
 
-	flt = buildFilter(filter, flt)
+	flt = buildFilter(r.metadata, filter, flt)
 
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
 	if batchSize > 0 {
@@ -453,34 +453,46 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(filter store.Filter, flt bson.D) bson.D {
+func buildFilter(metadata eventsourcing.Metadata, filter store.Filter, flt bson.D) bson.D {
 	if len(filter.AggregateKinds) > 0 {
 		flt = append(flt, bson.E{"aggregate_kind", bson.D{{"$in", filter.AggregateKinds}}})
 	}
 
-	if filter.Splits > 1 && filter.Split > 1 {
-		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Splits, filter.Split))
+	if filter.Splits > 1 && len(filter.SplitIDs) != int(filter.Splits) {
+		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Splits, filter.SplitIDs))
+	}
+
+	for k, v := range metadata {
+		flt = append(flt, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
 	}
 
 	if len(filter.Metadata) > 0 {
-		for _, v := range filter.Metadata {
-			flt = append(flt, bson.E{"metadata." + v.Key, bson.D{{"$in", v.Values}}})
+		for _, kv := range filter.Metadata {
+			// ignore if already set by the metadata
+			if metadata != nil {
+				_, ok := metadata[kv.Key]
+				if ok {
+					continue
+				}
+			}
+
+			flt = append(flt, bson.E{"metadata." + kv.Key, bson.D{{"$in", kv.Values}}})
 		}
 	}
 	return flt
 }
 
-func partitionFilter(field string, splits, split uint32) bson.E {
+func partitionFilter(field string, splits uint32, splitIDs []uint32) bson.E {
 	field = "$" + field
 	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, splits]}],  split]} }
 	return bson.E{
 		"$expr",
 		bson.D{
-			{"$eq", bson.A{
+			{"$in", bson.A{
 				bson.D{
 					{"$mod", bson.A{field, splits}},
 				},
-				split,
+				splitIDs,
 			}},
 		},
 	}

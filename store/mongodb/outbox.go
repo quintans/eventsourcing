@@ -62,7 +62,7 @@ func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, 
 		opts.SetBatchSize(-1)
 	}
 
-	flt := buildFilter(filter, bson.D{})
+	flt := buildFilter(nil, filter, bson.D{})
 
 	cursor, err := r.collection().Find(ctx, flt, opts)
 	if err != nil {

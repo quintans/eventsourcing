@@ -1,14 +1,5 @@
 package util
 
-func In[T comparable](test T, values ...T) bool {
-	for _, v := range values {
-		if v == test {
-			return true
-		}
-	}
-	return false
-}
-
 func IfZero[T comparable](test, def T) T {
 	var zero T
 	if test == zero {

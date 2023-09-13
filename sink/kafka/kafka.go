@@ -24,13 +24,13 @@ var _ sink.Sinker[*ulid.ULID] = (*Sink[*ulid.ULID])(nil)
 const checkPointBuffer = 1_000
 
 type Sink[K eventsourcing.ID] struct {
-	kvStore    store.KVStore
-	logger     *slog.Logger
-	producer   sarama.SyncProducer
-	topic      string
-	partitions []uint32
-	codec      sink.Codec[K]
-	brokers    []string
+	kvStore       store.KVStore
+	logger        *slog.Logger
+	producer      sarama.SyncProducer
+	topic         string
+	allPartitions []uint32
+	codec         sink.Codec[K]
+	brokers       []string
 
 	checkPointCh chan resume
 }
@@ -58,20 +58,20 @@ func NewSink[K eventsourcing.ID, PK eventsourcing.IDPt[K]](logger *slog.Logger, 
 		return nil, faults.Errorf("initializing kafka producer: %w", err)
 	}
 
-	partitions, err := client.Partitions(topic)
+	allPartitions, err := client.Partitions(topic)
 	if err != nil {
 		return nil, faults.Errorf("getting partitions: %w", err)
 	}
 
 	s := &Sink[K]{
-		kvStore:      kvStore,
-		logger:       logger.With("sink", "kafka"),
-		topic:        topic,
-		codec:        sink.JSONCodec[K, PK]{},
-		producer:     prd,
-		partitions:   util.NormalizePartitions(partitions),
-		brokers:      brokers,
-		checkPointCh: make(chan resume, checkPointBuffer),
+		kvStore:       kvStore,
+		logger:        logger.With("sink", "kafka"),
+		topic:         topic,
+		codec:         sink.JSONCodec[K, PK]{},
+		producer:      prd,
+		allPartitions: util.NormalizePartitions(allPartitions),
+		brokers:       brokers,
+		checkPointCh:  make(chan resume, checkPointBuffer),
 	}
 
 	// saves into the resume db. It is fine if it sporadically fails. It will just pickup from there
@@ -108,16 +108,12 @@ func (s *Sink[K]) Close() {
 	s.checkPointCh <- resume{} // signal quit
 }
 
-func (s *Sink[K]) Partitions() (total uint32, partitions []uint32) {
-	return uint32(len(s.partitions)), s.partitions
-}
-
 // ResumeTokens iterates over all the last saved resumed token per partition
 // It will return 0 if there is no last message
 func (s *Sink[K]) ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) (e error) {
 	defer faults.Catch(&e, "ResumeTokens(...)")
 
-	for _, partition := range s.partitions {
+	for _, partition := range s.allPartitions {
 		topic, err := resumeTokenKey(s.topic, partition)
 		if err != nil {
 			return faults.Wrap(err)
@@ -152,10 +148,6 @@ func resumeTokenKey(topic string, partitionID uint32) (_ string, e error) {
 		return "", faults.Errorf("the partitionID (%d) must be greater than  0", partitionID)
 	}
 	return fmt.Sprintf("%s#%d", topic, partitionID), nil
-}
-
-func (s *Sink[K]) Accepts(_ uint32) bool {
-	return true
 }
 
 // Sink sends the event to the message queue

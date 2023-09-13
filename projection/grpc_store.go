@@ -93,7 +93,7 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 		AggregateKinds: types,
 		Metadata:       metadata,
 		Splits:         filter.Splits,
-		Split:          filter.Split,
+		SplitIds:       filter.SplitIDs,
 	}
 }
 

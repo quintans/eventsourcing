@@ -50,7 +50,7 @@ func NewOutboxStore[K eventsourcing.ID](db *sql.DB, tableName string, eventsRepo
 func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	var query bytes.Buffer
 	query.WriteString(fmt.Sprintf("SELECT id FROM %s", r.tableName))
-	args := buildFilter(&query, " WHERE ", filter, []interface{}{})
+	args := buildFilter(&query, " WHERE ", nil, filter, []interface{}{})
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")

@@ -46,7 +46,7 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink[ids.AggID](&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
+	sinker, err := nats.NewSink[ids.AggID](&integration.MockKVStore{}, logger, topic, 1, uri)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
@@ -93,7 +93,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink[ids.AggID](&integration.MockKVStore{}, logger, topic, 1, []uint32{1}, uri)
+	sinker, err := nats.NewSink[ids.AggID](&integration.MockKVStore{}, logger, topic, 1, uri)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 

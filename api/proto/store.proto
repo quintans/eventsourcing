@@ -21,7 +21,7 @@ message Filter {
   repeated string aggregate_kinds = 1;
   repeated Metadata metadata = 2;
   uint32 splits = 3;
-  uint32 split = 4;
+  repeated uint32 split_ids = 4;
 }
 
 message Metadata {

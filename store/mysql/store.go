@@ -362,11 +362,15 @@ func saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
 
 func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
 	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events e WHERE e.aggregate_id = ? AND migration = 0")
+	query.WriteString("SELECT * FROM events WHERE aggregate_id = ? AND migration = 0")
 	args := []interface{}{aggregateID.String()}
 	if snapVersion > -1 {
-		query.WriteString(" AND e.aggregate_version > ?")
+		query.WriteString(" AND aggregate_version > ?")
 		args = append(args, snapVersion)
+	}
+	for k, v := range r.metadata {
+		args = append(args, v)
+		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
 	}
 	query.WriteString(" ORDER BY aggregate_version ASC")
 
@@ -397,8 +401,16 @@ func (r *EsRepository[K, PK]) HasIdempotencyKey(ctx context.Context, idempotency
 func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte, snapshot bool) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
+	query := strings.Builder{}
+	query.WriteString("SELECT * FROM events WHERE aggregate_id = ? AND kind = ?")
+	args := []any{req.AggregateID.String(), req.EventKind}
+	for k, v := range r.metadata {
+		args = append(args, v)
+		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
+	}
+
 	// Forget events
-	events, err := r.queryEvents(ctx, "SELECT * FROM events WHERE aggregate_id = ? AND kind = ?", req.AggregateID.String(), req.EventKind)
+	events, err := r.queryEvents(ctx, query.String(), args...)
 	if err != nil {
 		return faults.Errorf("getting events for Aggregate '%s' and event kind '%s': %w", req.AggregateID, req.EventKind, err)
 	}
@@ -438,7 +450,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > ? AND id <= ? AND migration = 0")
 	args := []interface{}{after.String(), until.String()}
-	args = buildFilter(&query, " AND ", filter, args)
+	args = buildFilter(&query, " AND ", r.metadata, filter, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -456,7 +468,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(qry *bytes.Buffer, prefix string, filter store.Filter, args []interface{}) []interface{} {
+func buildFilter(qry *bytes.Buffer, prefix string, metadata eventsourcing.Metadata, filter store.Filter, args []interface{}) []interface{} {
 	var conditions []string
 	if len(filter.AggregateKinds) > 0 {
 		var query strings.Builder
@@ -472,13 +484,34 @@ func buildFilter(qry *bytes.Buffer, prefix string, filter store.Filter, args []i
 		conditions = append(conditions, query.String())
 	}
 
-	if filter.Splits > 1 && filter.Split > 1 {
-		args = append(args, filter.Splits, filter.Split)
-		conditions = append(conditions, "MOD(aggregate_id_hash, ?) = ?")
+	if filter.Splits > 1 && len(filter.SplitIDs) != int(filter.Splits) {
+		args = append(args, filter.Splits)
+		s := strings.Builder{}
+		for k, v := range filter.SplitIDs {
+			if k > 0 {
+				s.WriteString(", ")
+			}
+			s.WriteString("?")
+			args = append(args, v)
+		}
+		conditions = append(conditions, fmt.Sprintf("MOD(aggregate_id_hash, ?) IN (%s)", s.String()))
+	}
+
+	for k, v := range metadata {
+		args = append(args, v)
+		qry.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
 	}
 
 	if len(filter.Metadata) > 0 {
 		for _, kv := range filter.Metadata {
+			// ignore if already set by the metadata
+			if metadata != nil {
+				_, ok := metadata[kv.Key]
+				if ok {
+					continue
+				}
+			}
+
 			var query strings.Builder
 			query.WriteString("(")
 			for idx, v := range kv.Values {

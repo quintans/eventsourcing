@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 )
 
 const resumeTokenSep = ":"
@@ -36,6 +38,7 @@ type Feed[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	flavour               string
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker[K]
+	filter                *store.Filter
 }
 
 type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
@@ -55,6 +58,12 @@ func WithFlavour[K eventsourcing.ID, PK eventsourcing.IDPt[K]](flavour string) F
 func WithBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
 		p.backoffMaxElapsedTime = duration
+	}
+}
+
+func WithFilter[K eventsourcing.ID, PK eventsourcing.IDPt[K]](filter *store.Filter) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
+		p.filter = filter
 	}
 }
 
@@ -128,6 +137,7 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 		backoff:         b,
 		chanel:          c,
 		eventsTable:     f.eventsTable,
+		filter:          f.filter,
 	}
 	c.SetEventHandler(blh)
 
@@ -212,6 +222,7 @@ type binlogHandler[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	backoff                 *backoff.ExponentialBackOff
 	chanel                  *canal.Canal
 	eventsTable             string
+	filter                  *store.Filter
 }
 
 func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
@@ -230,17 +241,6 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 	// base value for canal.InsertAction
 	for i := 0; i < len(e.Rows); i++ {
 		r := rec{row: e.Rows[i], cols: columns}
-		hash := r.getAsUint32("aggregate_id_hash")
-		// we check the first because all the rows are for the same transaction,
-		// and for the same aggregate
-		if i == 0 {
-			// check if the event is to be forwarded to the sinker
-			if !h.sinker.Accepts(hash) {
-				// filtering out events that are not inside the partition range
-				// we exit the loop because all rows are for the same aggregate
-				return nil
-			}
-		}
 		id, err := eventid.Parse(r.getAsString("id"))
 		if err != nil {
 			return faults.Wrap(err)
@@ -265,10 +265,10 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 			}
 			meta[v.Name[len(store.MetaColumnPrefix):]] = c
 		}
-		h.events = append(h.events, &eventsourcing.Event[K]{
+		event := &eventsourcing.Event[K]{
 			ID:               id,
 			AggregateID:      *aggID,
-			AggregateIDHash:  hash,
+			AggregateIDHash:  r.getAsUint32("aggregate_id_hash"),
 			AggregateVersion: r.getAsUint32("aggregate_version"),
 			AggregateKind:    eventsourcing.Kind(r.getAsString("aggregate_kind")),
 			Kind:             eventsourcing.Kind(r.getAsString("kind")),
@@ -277,10 +277,47 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 			Metadata:         meta,
 			CreatedAt:        r.getAsTimeDate("created_at"),
 			Migrated:         r.getAsBool("migrated"),
-		})
+		}
+		// we check the first because all the rows are for the same transaction,
+		// therefore for the same aggregate
+		if i == 0 {
+			// check if the event is to be forwarded to the sinker
+			if !h.accepts(event) {
+				// we exit the loop because all rows are for the same aggregate
+				return nil
+			}
+		}
+		h.events = append(h.events, event)
 	}
 
 	return nil
+}
+
+// accepts check if the event is to be forwarded to the sinker
+func (h *binlogHandler[K, PK]) accepts(event *eventsourcing.Event[K]) bool {
+	if h.filter == nil {
+		return true
+	}
+
+	if h.filter.Splits > 1 && len(h.filter.SplitIDs) != int(h.filter.Splits) {
+		p := util.CalcPartition(event.AggregateIDHash, h.filter.Splits)
+		if !slices.Contains(h.filter.SplitIDs, p) {
+			return false
+		}
+	}
+
+	if len(h.filter.AggregateKinds) > 0 && !slices.Contains(h.filter.AggregateKinds, event.AggregateKind) {
+		return false
+	}
+
+	for _, v := range h.filter.Metadata {
+		val := event.Metadata[v.Key]
+		if val == "" || !slices.Contains(v.Values, val) {
+			return false
+		}
+	}
+
+	return true
 }
 
 type rec struct {
