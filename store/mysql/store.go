@@ -18,6 +18,7 @@ import (
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/util/ids"
 )
 
@@ -84,6 +85,14 @@ func WithMetadata[K eventsourcing.ID, PK eventsourcing.IDPt[K]](metadata eventso
 	}
 }
 
+// WithMetadataHook defines the hook that will return the metadata.
+// This metadata will override any metadata defined at the repository level
+func WithMetadataHook[K eventsourcing.ID, PK eventsourcing.IDPt[K]](fn store.MetadataHook[K]) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
+		r.metadataHook = fn
+	}
+}
+
 type Repository struct {
 	db *sqlx.DB
 }
@@ -122,8 +131,9 @@ func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, *s
 
 type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	Repository
-	txHandlers []store.InTxHandler[K]
-	metadata   eventsourcing.Metadata
+	txHandlers   []store.InTxHandler[K]
+	metadata     eventsourcing.Metadata
+	metadataHook store.MetadataHook[K]
 }
 
 func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, options ...Option[K, PK]) (*EsRepository[K, PK], error) {
@@ -165,6 +175,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			aggIDStr := eRec.AggregateID.String()
 			var err error
 			id = e.ID
+			metadata := r.metadataMerge(ctx, r.metadata)
 			err = r.saveEvent(c, tx, &Event{
 				ID:               id,
 				AggregateID:      aggIDStr,
@@ -175,10 +186,10 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 				Body:             e.Body,
 				IdempotencyKey:   store.NilString(idempotencyKey),
 				CreatedAt:        eRec.CreatedAt,
-				Metadata:         r.metadata,
+				Metadata:         metadata,
 			})
 			if err != nil {
-				return err
+				return faults.Wrap(err)
 			}
 			// for a batch of events, the idempotency key is only applied on the first record
 			idempotencyKey = ""
@@ -191,6 +202,14 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 	}
 
 	return id, version, nil
+}
+
+func (r *EsRepository[K, PK]) metadataMerge(ctx context.Context, metadata eventsourcing.Metadata) eventsourcing.Metadata {
+	if r.metadataHook == nil {
+		return metadata
+	}
+	meta := r.metadataHook(ctx)
+	return util.MapMerge(metadata, meta)
 }
 
 func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *Event) error {
@@ -254,7 +273,17 @@ func isDup(err error) bool {
 }
 
 func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (eventsourcing.Snapshot[K], error) {
-	snaps, err := r.getSnapshots(ctx, "SELECT * FROM snapshots WHERE aggregate_id = ? ORDER BY id DESC LIMIT 1", aggregateID.String())
+	query := strings.Builder{}
+	query.WriteString("SELECT * FROM snapshots WHERE aggregate_id = ?")
+	args := []any{aggregateID.String()}
+
+	metadata := r.metadataMerge(ctx, r.metadata)
+	for k, v := range metadata {
+		args = append(args, v)
+		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
+	}
+	query.WriteString(" ORDER BY id DESC LIMIT 1")
+	snaps, err := r.getSnapshots(ctx, query.String(), args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return eventsourcing.Snapshot[K]{}, nil
@@ -271,7 +300,8 @@ func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (e
 func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, query string, args ...any) ([]eventsourcing.Snapshot[K], error) {
 	columns := []string{coreSnapCols}
 	base := []store.Metadata{}
-	for k := range r.metadata {
+	metadata := r.metadataMerge(ctx, r.metadata)
+	for k := range metadata {
 		columns = append(columns, store.MetaColumnPrefix+k)
 		base = append(base, store.Metadata{Key: k})
 	}
@@ -296,7 +326,7 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, query string, ar
 			&snap.CreatedAt,
 		}
 		meta := []*store.Metadata{}
-		for k := range r.metadata {
+		for k := range metadata {
 			m := &store.Metadata{Key: k}
 			meta = append(meta, m)
 			dest = append(dest, &m.Value)
@@ -321,14 +351,15 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, query string, ar
 }
 
 func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
-	return saveSnapshot(ctx, r.db, &Snapshot{
+	metadata := r.metadataMerge(ctx, r.metadata)
+	return r.saveSnapshot(ctx, r.db, &Snapshot{
 		ID:               snapshot.ID,
 		AggregateID:      snapshot.AggregateID.String(),
 		AggregateVersion: snapshot.AggregateVersion,
 		AggregateKind:    snapshot.AggregateKind,
 		Body:             snapshot.Body,
 		CreatedAt:        snapshot.CreatedAt.UTC(),
-		Metadata:         r.metadata,
+		Metadata:         metadata,
 	})
 }
 
@@ -336,7 +367,7 @@ type sqlExecuter interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 }
 
-func saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
+func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
 	values := []any{
 		s.ID,
 		s.AggregateID,
@@ -361,14 +392,16 @@ func saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
 }
 
 func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
-	var query bytes.Buffer
+	var query strings.Builder
 	query.WriteString("SELECT * FROM events WHERE aggregate_id = ? AND migration = 0")
 	args := []interface{}{aggregateID.String()}
 	if snapVersion > -1 {
 		query.WriteString(" AND aggregate_version > ?")
 		args = append(args, snapVersion)
 	}
-	for k, v := range r.metadata {
+
+	metadata := r.metadataMerge(ctx, r.metadata)
+	for k, v := range metadata {
 		args = append(args, v)
 		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
 	}
@@ -404,7 +437,8 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.Forg
 	query := strings.Builder{}
 	query.WriteString("SELECT * FROM events WHERE aggregate_id = ? AND kind = ?")
 	args := []any{req.AggregateID.String(), req.EventKind}
-	for k, v := range r.metadata {
+	metadata := r.metadataMerge(ctx, r.metadata)
+	for k, v := range metadata {
 		args = append(args, v)
 		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
 	}
@@ -450,7 +484,8 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	var query bytes.Buffer
 	query.WriteString("SELECT * FROM events WHERE id > ? AND id <= ? AND migration = 0")
 	args := []interface{}{after.String(), until.String()}
-	args = buildFilter(&query, " AND ", r.metadata, filter, args)
+	metadata := r.metadataMerge(ctx, r.metadata)
+	args = buildFilter(&query, " AND ", metadata, filter, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -537,7 +572,8 @@ func buildFilter(qry *bytes.Buffer, prefix string, metadata eventsourcing.Metada
 func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, query string, args ...any) ([]*eventsourcing.Event[K], error) {
 	columns := []string{coreEventCols}
 	base := []store.Metadata{}
-	for k := range r.metadata {
+	metadata := r.metadataMerge(ctx, r.metadata)
+	for k := range metadata {
 		columns = append(columns, store.MetaColumnPrefix+k)
 		base = append(base, store.Metadata{Key: k})
 	}
@@ -568,7 +604,7 @@ func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, query string, arg
 		}
 
 		meta := []*store.Metadata{}
-		for k := range r.metadata {
+		for k := range metadata {
 			m := &store.Metadata{Key: k}
 			meta = append(meta, m)
 			dest = append(dest, &m.Value)

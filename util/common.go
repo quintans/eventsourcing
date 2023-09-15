@@ -22,3 +22,13 @@ func NormalizePartitions(p []int32) []uint32 {
 	}
 	return out
 }
+
+func MapMerge[K comparable, V any](ms ...map[K]V) map[K]V {
+	out := map[K]V{}
+	for _, m := range ms {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
+}

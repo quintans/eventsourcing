@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/avast/retry-go/v3"
 	"github.com/quintans/eventsourcing/test"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -46,7 +47,13 @@ func Setup(t *testing.T, dockerComposePath string) DBConfig {
 	require.NoError(t, err)
 	defer client.Disconnect(context.Background())
 
-	err = dbSchema(client)
+	err = retry.Do(
+		func() error {
+			return dbSchema(client)
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+	)
 	require.NoError(t, err)
 
 	return dbConfig

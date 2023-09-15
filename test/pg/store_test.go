@@ -267,36 +267,34 @@ func TestListenerWithMetadata(t *testing.T) {
 
 	dbConfig := setup(t)
 
-	ctx := context.Background()
-
-	r1, err := postgresql.NewStoreWithURL(
+	key := "tenant"
+	r, err := postgresql.NewStoreWithURL(
 		dbConfig.URL(),
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
-		postgresql.WithMetadata[ids.AggID](eventsourcing.Metadata{"tenant": "abc"}),
+		postgresql.WithMetadataHook[ids.AggID](func(ctx context.Context) eventsourcing.Metadata {
+			val := ctx.Value(key).(string)
+			return eventsourcing.Metadata{key: val}
+		}),
 	)
 	require.NoError(t, err)
-	es1 := eventsourcing.NewEventStore[*test.Account](r1, test.NewJSONCodec(), esOptions)
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+
+	ctx := context.WithValue(context.Background(), key, "abc")
 
 	acc, _ := test.NewAccount("Paulo", 50)
 	acc.Deposit(20)
-	err = es1.Create(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 
-	r2, err := postgresql.NewStoreWithURL(
-		dbConfig.URL(),
-		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
-		postgresql.WithMetadata[ids.AggID](eventsourcing.Metadata{"tenant": "xyz"}),
-	)
-	require.NoError(t, err)
-	es2 := eventsourcing.NewEventStore[*test.Account](r2, test.NewJSONCodec(), esOptions)
+	ctx = context.WithValue(context.Background(), key, "xyz")
 
 	acc1, _ := test.NewAccount("Pereira", 100)
 	id := acc1.GetID()
 	acc1.Deposit(10)
 	acc1.Deposit(20)
-	err = es2.Create(ctx, acc1)
+	err = es.Create(ctx, acc1)
 	require.NoError(t, err)
-	err = es2.Update(
+	err = es.Update(
 		ctx,
 		id,
 		func(a *test.Account) (*test.Account, error) {
@@ -307,7 +305,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	outboxRepo := postgresql.NewOutboxStore(r2.Connection().DB, "outbox", r2)
+	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ids.AggID]("tenant", "xyz"))
 
@@ -319,7 +317,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	counter := 0
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ids.AggID]) error {
 		if e.AggregateID == id {
-			if err := es2.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			mu.Lock()

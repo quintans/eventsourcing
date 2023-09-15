@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/avast/retry-go/v3"
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
@@ -76,7 +77,13 @@ func setup(t *testing.T) DBConfig {
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()
 
-	err = dbSchema(dbConfig)
+	err = retry.Do(
+		func() error {
+			return dbSchema(dbConfig)
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+	)
 	require.NoError(t, err)
 
 	return dbConfig

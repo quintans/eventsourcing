@@ -22,8 +22,6 @@ type Subscriber[K eventsourcing.ID] interface {
 	Subscribe(string, Subscription[K])
 }
 
-type InTxHandler[K eventsourcing.ID] func(context.Context, *eventsourcing.Event[K]) error
-
 type EventBus[K eventsourcing.ID] struct {
 	subscribers []subscription[K]
 	coreMW      []EventBusMW[K]

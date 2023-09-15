@@ -11,6 +11,11 @@ import (
 
 const MetaColumnPrefix = "meta_"
 
+type (
+	InTxHandler[K eventsourcing.ID]  func(context.Context, *eventsourcing.Event[K]) error
+	MetadataHook[K eventsourcing.ID] func(context.Context) eventsourcing.Metadata
+)
+
 type Filter struct {
 	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values

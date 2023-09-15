@@ -296,40 +296,37 @@ func TestListenerWithAggregateKind(t *testing.T) {
 func TestListenerWithMetadata(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
-	ctx := context.Background()
-
-	r1, err := mongodb.NewStoreWithURI(
+	key := "tenant"
+	r, err := mongodb.NewStoreWithURI(
 		dbConfig.URL(),
 		dbConfig.Database,
 		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
-		mongodb.WithMetadata[ids.AggID](eventsourcing.Metadata{"tenant": "abc"}),
+		mongodb.WithMetadataHook[ids.AggID](func(ctx context.Context) eventsourcing.Metadata {
+			val := ctx.Value(key).(string)
+			return eventsourcing.Metadata{key: val}
+		}),
 	)
 	require.NoError(t, err)
-	es1 := eventsourcing.NewEventStore[*test.Account](r1, test.NewJSONCodec(), esOptions)
+	defer r.Close(context.Background())
+	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+
+	ctx := context.WithValue(context.Background(), key, "abc")
 
 	acc, _ := test.NewAccount("Paulo", 50)
 	acc.Deposit(20)
-	err = es1.Create(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 
-	r2, err := mongodb.NewStoreWithURI(
-		dbConfig.URL(),
-		dbConfig.Database,
-		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
-		mongodb.WithMetadata[ids.AggID](eventsourcing.Metadata{"tenant": "xyz"}),
-	)
-	require.NoError(t, err)
-	defer r2.Close(context.Background())
-	es2 := eventsourcing.NewEventStore[*test.Account](r2, test.NewJSONCodec(), esOptions)
+	ctx = context.WithValue(context.Background(), key, "xyz")
 
 	acc1, err := test.NewAccount("Paulo", 100)
 	id := acc1.GetID()
 	require.NoError(t, err)
 	acc1.Deposit(10)
 	acc1.Deposit(20)
-	err = es2.Create(ctx, acc1)
+	err = es.Create(ctx, acc1)
 	require.NoError(t, err)
-	err = es2.Update(
+	err = es.Update(
 		ctx,
 		id,
 		func(acc *test.Account) (*test.Account, error) {
@@ -343,7 +340,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	acc2 := test.DehydratedAccount()
 	counter := 0
 
-	obs := mongodb.NewOutboxStore(r2.Client(), dbConfig.Database, "outbox", r2)
+	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs, poller.WithMetadataKV[ids.AggID]("tenant", "xyz"))
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -352,7 +349,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	mockSink := test.NewMockSink(test.NewMockSinkData[ids.AggID](), 1, 1, 1)
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ids.AggID]) error {
 		if e.AggregateID == id {
-			if err := es2.ApplyChangeFromHistory(acc2, e); err != nil {
+			if err := es.ApplyChangeFromHistory(acc2, e); err != nil {
 				return err
 			}
 			mu.Lock()

@@ -105,6 +105,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
 		id := gen.NewID()
+		metadata := r.metadataMerge(ctx, r.metadata)
 		err := r.saveEvent(c, tx, &Event{
 			ID:               id,
 			AggregateID:      last.AggregateID.String(),
@@ -113,6 +114,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			AggregateKind:    last.AggregateKind,
 			Kind:             eventsourcing.InvalidatedKind,
 			CreatedAt:        time.Now(),
+			Metadata:         metadata,
 		})
 		if err != nil {
 			return err
@@ -146,6 +148,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 		for _, mig := range migration {
 			version++
 			lastID = gen.NewID()
+			metadata := r.metadataMerge(ctx, r.metadata)
 			event := &Event{
 				ID:               lastID,
 				AggregateID:      last.AggregateID.String(),
@@ -155,7 +158,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				Kind:             mig.Kind,
 				Body:             mig.Body,
 				IdempotencyKey:   store.NilString(mig.IdempotencyKey),
-				Metadata:         mig.Metadata,
+				Metadata:         metadata,
 				CreatedAt:        now,
 				Migrated:         true,
 			}
@@ -182,6 +185,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
 			}
 
+			metadata := r.metadataMerge(ctx, r.metadata)
 			err = saveSnapshot(c, tx, &Snapshot{
 				ID:               lastID,
 				AggregateID:      last.AggregateID.String(),
@@ -189,6 +193,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,
 				CreatedAt:        now,
+				Metadata:         metadata,
 			})
 			if err != nil {
 				return err
