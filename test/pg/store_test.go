@@ -70,7 +70,7 @@ func TestSaveAndGet(t *testing.T) {
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	acc, err := test.NewAccount("Paulo", 100)
-	id := acc.ID()
+	id := acc.GetID()
 	require.NoError(t, err)
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -116,7 +116,7 @@ func TestSaveAndGet(t *testing.T) {
 
 	acc2, err := es.Retrieve(ctx, id)
 	require.NoError(t, err)
-	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(136), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 
@@ -163,7 +163,7 @@ func TestPollListener(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.DehydratedAccount()
+	acc2 := test.DehydratedAccount(id)
 	counter := 0
 	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestPollListener(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 4, counter)
 	mu.Unlock()
-	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -226,7 +226,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.DehydratedAccount()
+	acc2 := test.DehydratedAccount(id)
 	counter := 0
 	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
 	require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 4, counter)
 	mu.Unlock()
-	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -313,7 +313,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	var mu sync.Mutex
 
 	mockSink := test.NewMockSink(test.NewMockSinkData[ids.AggID](), 1, 1, 1)
-	acc2 := test.DehydratedAccount()
+	acc2 := test.DehydratedAccount(id)
 	counter := 0
 	mockSink.OnSink(func(ctx context.Context, e *eventsourcing.Event[ids.AggID]) error {
 		if e.AggregateID == id {
@@ -336,7 +336,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 4, counter)
 	mu.Unlock()
-	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -378,7 +378,9 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		e, er := codec.Decode(v, test.KindOwnerUpdated)
+		e, er := codec.Decode(v, eventsourcing.DecoderMeta[ids.AggID]{
+			Kind: test.KindOwnerUpdated,
+		})
 		require.NoError(t, er)
 		ou := e.(*test.OwnerUpdated)
 		assert.NotEmpty(t, ou.Owner)
@@ -389,7 +391,10 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
-		x, er := codec.Decode(v, test.KindAccount)
+		x, er := codec.Decode(v, eventsourcing.DecoderMeta[ids.AggID]{
+			Kind:        test.KindAccount,
+			AggregateID: id,
+		})
 		require.NoError(t, er)
 		a := x.(*test.Account)
 		assert.NotEmpty(t, a.Owner())
@@ -419,7 +424,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
-		e, er := codec.Decode(v, test.KindOwnerUpdated)
+		e, er := codec.Decode(v, eventsourcing.DecoderMeta[ids.AggID]{Kind: test.KindOwnerUpdated})
 		require.NoError(t, er)
 		ou := e.(*test.OwnerUpdated)
 		assert.Empty(t, ou.Owner)
@@ -430,11 +435,14 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
-		x, err := codec.Decode(v, test.KindAccount)
+		x, err := codec.Decode(v, eventsourcing.DecoderMeta[ids.AggID]{
+			Kind:        test.KindAccount,
+			AggregateID: id,
+		})
 		require.NoError(t, err)
 		a := x.(*test.Account)
 		assert.Empty(t, a.Owner())
-		assert.NotEmpty(t, a.ID)
+		assert.NotEmpty(t, a.GetID())
 	}
 }
 
@@ -450,7 +458,8 @@ func TestMigration(t *testing.T) {
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	id := ids.AggID(ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ"))
-	acc, _ := test.NewAccountWithID("Paulo Pereira", id, 100)
+	acc, err := test.NewAccountWithID("Paulo Pereira", id, 100)
+	require.NoError(t, err)
 	acc.Deposit(20)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")
@@ -514,7 +523,7 @@ func TestMigration(t *testing.T) {
 	evt := evts[0]
 	assert.Equal(t, "AccountCreated", evt.Kind.String())
 	assert.Equal(t, 1, int(evt.AggregateVersion))
-	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"owner":"Paulo Pereira"}`, string(evt.Body))
+	assert.Equal(t, `{"money":100,"owner":"Paulo Pereira"}`, string(evt.Body))
 	assert.Equal(t, 1, evt.Migration)
 	assert.False(t, evt.Migrated)
 
@@ -549,7 +558,7 @@ func TestMigration(t *testing.T) {
 	evt = evts[5]
 	assert.Equal(t, "AccountCreated_V2", evt.Kind.String())
 	assert.Equal(t, 6, int(evt.AggregateVersion))
-	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"owner":{"firstName":"Paulo","lastName":"Pereira"}}`, string(evt.Body))
+	assert.Equal(t, `{"money":100,"owner":{"firstName":"Paulo","lastName":"Pereira"}}`, string(evt.Body))
 	assert.Equal(t, 0, evt.Migration)
 	assert.True(t, evt.Migrated)
 

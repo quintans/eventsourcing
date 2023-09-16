@@ -454,7 +454,7 @@ func (r *EsRepository[K, PK]) HasIdempotencyKey(ctx context.Context, idempotency
 	return exists, nil
 }
 
-func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte, snapshot bool) ([]byte, error)) error {
+func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	query := strings.Builder{}
@@ -473,7 +473,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 	qry := fmt.Sprintf("UPDATE %s SET body = $1 WHERE ID = $2", r.eventsTable)
 	for _, evt := range events {
-		body, err := forget(evt.Kind, evt.Body, false)
+		body, err := forget(evt.Kind, evt.Body)
 		if err != nil {
 			return err
 		}
@@ -492,7 +492,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 	qry = fmt.Sprintf("UPDATE %s SET body = $1 WHERE ID = $2", r.snapshotsTable)
 	for _, snap := range snaps {
-		body, err := forget(snap.AggregateKind, snap.Body, true)
+		body, err := forget(snap.AggregateKind, snap.Body)
 		if err != nil {
 			return err
 		}

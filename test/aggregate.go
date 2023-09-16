@@ -26,7 +26,6 @@ const (
 )
 
 type AccountCreated struct {
-	Id    ids.AggID
 	Money int64
 	Owner string
 }
@@ -59,21 +58,21 @@ func (e OwnerUpdated) GetKind() eventsourcing.Kind {
 	return KindOwnerUpdated
 }
 
-func NewJSONCodec() *jsoncodec.Codec {
-	c := jsoncodec.New()
-	c.RegisterFactory(KindAccount, func() eventsourcing.Kinder {
-		return DehydratedAccount()
+func NewJSONCodec() *jsoncodec.Codec[ids.AggID] {
+	c := jsoncodec.New[ids.AggID]()
+	c.RegisterFactory(KindAccount, func(id ids.AggID) eventsourcing.Kinder {
+		return DehydratedAccount(id)
 	})
-	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindAccountCreated, func(_ ids.AggID) eventsourcing.Kinder {
 		return &AccountCreated{}
 	})
-	c.RegisterFactory(KindMoneyDeposited, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindMoneyDeposited, func(_ ids.AggID) eventsourcing.Kinder {
 		return &MoneyDeposited{}
 	})
-	c.RegisterFactory(KindMoneyWithdrawn, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindMoneyWithdrawn, func(_ ids.AggID) eventsourcing.Kinder {
 		return &MoneyWithdrawn{}
 	})
-	c.RegisterFactory(KindOwnerUpdated, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindOwnerUpdated, func(_ ids.AggID) eventsourcing.Kinder {
 		return &OwnerUpdated{}
 	})
 	return c
@@ -84,9 +83,8 @@ func NewAccount(owner string, money int64) (*Account, error) {
 }
 
 func NewAccountWithID(owner string, id ids.AggID, money int64) (*Account, error) {
-	a := DehydratedAccount()
+	a := DehydratedAccount(id)
 	if err := a.root.ApplyChange(&AccountCreated{
-		Id:    id,
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -95,8 +93,10 @@ func NewAccountWithID(owner string, id ids.AggID, money int64) (*Account, error)
 	return a, nil
 }
 
-func DehydratedAccount() *Account {
-	a := &Account{}
+func DehydratedAccount(id ids.AggID) *Account {
+	a := &Account{
+		id: id,
+	}
 	a.root = eventsourcing.NewRootAggregate(a)
 	return a
 }
@@ -118,10 +118,6 @@ func (a *Account) GetID() ids.AggID {
 	if a == nil {
 		return ids.AggID{}
 	}
-	return a.id
-}
-
-func (a *Account) ID() ids.AggID {
 	return a.id
 }
 
@@ -181,7 +177,6 @@ func (a *Account) HandleEvent(event eventsourcing.Eventer) error {
 }
 
 func (a *Account) HandleAccountCreated(event AccountCreated) {
-	a.id = event.Id
 	a.balance = event.Money
 	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events

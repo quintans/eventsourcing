@@ -152,7 +152,7 @@ func runKafkaContainer(t *testing.T) []string {
 
 func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID]) *integration.ProjectionMock[ids.AggID] {
 	// create projection
-	proj := integration.NewProjectionMock[ids.AggID]("balances")
+	proj := integration.NewProjectionMock[ids.AggID]("balances", test.NewJSONCodec())
 
 	kvStore := &integration.MockKVStore{}
 

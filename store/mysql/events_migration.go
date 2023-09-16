@@ -21,7 +21,7 @@ func (r *EsRepository[K, PK]) MigrateInPlaceCopyReplace(
 	revision int,
 	snapshotThreshold uint32,
 	rehydrateFunc func(eventsourcing.Aggregater[K], *eventsourcing.Event[K]) error, // called only if snapshot threshold is reached
-	codec eventsourcing.Codec,
+	codec eventsourcing.Codec[K],
 	handler eventsourcing.MigrationHandler[K],
 	targetAggregateKind eventsourcing.Kind,
 	aggregateKind eventsourcing.Kind,
@@ -94,7 +94,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 	migration []*eventsourcing.EventMigration,
 	snapshotThreshold uint32,
 	rehydrateFunc func(eventsourcing.Aggregater[K], *eventsourcing.Event[K]) error,
-	codec eventsourcing.Codec,
+	codec eventsourcing.Codec[K],
 	revision int,
 ) error {
 	version := last.AggregateVersion
@@ -136,7 +136,10 @@ func (r *EsRepository[K, PK]) saveMigration(
 
 		var aggregate eventsourcing.Aggregater[K]
 		if snapshotThreshold > 0 && len(migration) >= int(snapshotThreshold) {
-			t, er := codec.Decode(nil, targetAggregateKind)
+			t, er := codec.Decode(nil, eventsourcing.DecoderMeta[K]{
+				Kind:        targetAggregateKind,
+				AggregateID: last.AggregateID,
+			})
 			if er != nil {
 				return faults.Wrap(er)
 			}

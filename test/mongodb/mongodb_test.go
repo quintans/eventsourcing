@@ -101,7 +101,7 @@ func TestSaveAndGet(t *testing.T) {
 
 	acc2, err := es.Retrieve(ctx, id)
 	require.NoError(t, err)
-	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(111), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 
@@ -196,7 +196,7 @@ func TestPollListener(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.DehydratedAccount()
+	acc2 := test.DehydratedAccount(id)
 	counter := 0
 	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs)
@@ -226,7 +226,7 @@ func TestPollListener(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 4, counter)
 	mu.Unlock()
-	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(110), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -258,7 +258,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.DehydratedAccount()
+	acc2 := test.DehydratedAccount(id)
 	counter := 0
 	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs, poller.WithAggregateKinds[ids.AggID](AggregateAccount))
@@ -288,7 +288,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 4, counter)
 	mu.Unlock()
-	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -337,7 +337,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	acc2 := test.DehydratedAccount()
+	acc2 := test.DehydratedAccount(id)
 	counter := 0
 
 	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
@@ -368,7 +368,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	mu.Lock()
 	assert.Equal(t, 4, counter)
 	mu.Unlock()
-	assert.Equal(t, id, acc2.ID())
+	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(135), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
@@ -421,7 +421,7 @@ func TestForget(t *testing.T) {
 	for _, e := range evts {
 		if e.Kind == "OwnerUpdated" {
 			foundEvent = true
-			event, er := codec.Decode(e.Body, e.Kind)
+			event, er := codec.Decode(e.Body, eventsourcing.DecoderMeta[ids.AggID]{Kind: e.Kind})
 			require.NoError(t, er)
 			evt := event.(*test.OwnerUpdated)
 			assert.NotEmpty(t, evt.Owner)
@@ -439,7 +439,10 @@ func TestForget(t *testing.T) {
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		a, er := codec.Decode(v.Body, test.KindAccount)
+		a, er := codec.Decode(v.Body, eventsourcing.DecoderMeta[ids.AggID]{
+			Kind:        test.KindAccount,
+			AggregateID: id,
+		})
 		require.NoError(t, er)
 		snap := a.(*test.Account)
 		assert.NotEmpty(t, snap.Owner())
@@ -483,7 +486,7 @@ func TestForget(t *testing.T) {
 	for _, e := range evts {
 		if e.Kind == "OwnerUpdated" {
 			foundEvent = true
-			event, er := codec.Decode(e.Body, e.Kind)
+			event, er := codec.Decode(e.Body, eventsourcing.DecoderMeta[ids.AggID]{Kind: e.Kind})
 			require.NoError(t, er)
 			evt := event.(*test.OwnerUpdated)
 			assert.Empty(t, evt.Owner)
@@ -501,11 +504,14 @@ func TestForget(t *testing.T) {
 	cursor.All(ctx, &snaps)
 	assert.Equal(t, 2, len(snaps))
 	for _, v := range snaps {
-		s, err := codec.Decode(v.Body, test.KindAccount)
+		s, err := codec.Decode(v.Body, eventsourcing.DecoderMeta[ids.AggID]{
+			Kind:        test.KindAccount,
+			AggregateID: id,
+		})
 		require.NoError(t, err)
 		snap := s.(*test.Account)
 		assert.Empty(t, snap.Owner())
-		assert.NotEmpty(t, snap.ID())
+		assert.NotEmpty(t, snap.GetID())
 	}
 }
 
@@ -579,7 +585,7 @@ func TestMigration(t *testing.T) {
 	evt := evts[0]
 	assert.Equal(t, "AccountCreated", evt.Kind.String())
 	assert.Equal(t, 1, int(evt.AggregateVersion))
-	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"owner":"Paulo Pereira"}`, string(evt.Body))
+	assert.Equal(t, `{"money":100,"owner":"Paulo Pereira"}`, string(evt.Body))
 	assert.Equal(t, 1, evt.Migration)
 	assert.False(t, evt.Migrated)
 
@@ -614,7 +620,7 @@ func TestMigration(t *testing.T) {
 	evt = evts[5]
 	assert.Equal(t, "AccountCreated_V2", evt.Kind.String())
 	assert.Equal(t, 6, int(evt.AggregateVersion))
-	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","money":100,"owner":{"firstName":"Paulo","lastName":"Pereira"}}`, string(evt.Body))
+	assert.Equal(t, `{"money":100,"owner":{"firstName":"Paulo","lastName":"Pereira"}}`, string(evt.Body))
 	assert.Equal(t, 0, evt.Migration)
 	assert.True(t, evt.Migrated)
 
