@@ -2,19 +2,27 @@ package store
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"time"
 
 	"github.com/quintans/eventsourcing"
 )
 
+const MetaColumnPrefix = "meta_"
+
+type (
+	InTxHandler[K eventsourcing.ID]  func(context.Context, *eventsourcing.Event[K]) error
+	MetadataHook[K eventsourcing.ID] func(context.Context) eventsourcing.Metadata
+)
+
 type Filter struct {
 	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Metadata Metadata
+	Metadata MetadataFilter
 	Splits   uint32
-	Split    uint32
+	SplitIDs []uint32
 }
 
 type FilterOption func(*Filter)
@@ -24,7 +32,7 @@ func WithFilter(filter Filter) FilterOption {
 		f.AggregateKinds = filter.AggregateKinds
 		f.Metadata = filter.Metadata
 		f.Splits = filter.Splits
-		f.Split = filter.Split
+		f.SplitIDs = filter.SplitIDs
 	}
 }
 
@@ -34,33 +42,43 @@ func WithAggregateKinds(at ...eventsourcing.Kind) FilterOption {
 	}
 }
 
-func WithMetadataKV(key, value string) FilterOption {
+func WithMetadataFilter(key, value string) FilterOption {
 	return func(f *Filter) {
 		if f.Metadata == nil {
-			f.Metadata = Metadata{}
+			f.Metadata = MetadataFilter{}
 		}
-		values := f.Metadata[key]
-		if values == nil {
-			values = []string{value}
-		} else {
-			values = append(values, value)
-		}
-		f.Metadata[key] = values
+		f.Metadata.Add(key, value)
 	}
 }
 
-type Metadata map[string][]string
+type (
+	MetadataFilter []*MetadataKVs
+	MetadataKVs    struct {
+		Key    string
+		Values []string
+	}
+)
 
-func WithMetadata(metadata Metadata) FilterOption {
+func (m *MetadataFilter) Add(key string, values ...string) {
+	for _, v := range *m {
+		if v.Key == key {
+			v.Values = append(v.Values, values...)
+			return
+		}
+	}
+	*m = append(*m, &MetadataKVs{Key: key, Values: values})
+}
+
+func WithMetadata(metadata MetadataFilter) FilterOption {
 	return func(f *Filter) {
 		f.Metadata = metadata
 	}
 }
 
-func WithPartitions(partitions, partition uint32) FilterOption {
+func WithSplits(partitions uint32, partitionIDs []uint32) FilterOption {
 	return func(f *Filter) {
 		f.Splits = partitions
-		f.Split = partition
+		f.SplitIDs = partitionIDs
 	}
 }
 
@@ -86,4 +104,34 @@ type KVWStore interface {
 type KVStore interface {
 	KVRStore
 	KVWStore
+}
+
+type Metadata struct {
+	Key   string
+	Value string
+}
+
+// NilString converts nil to empty string
+type NilString string
+
+func (ns *NilString) Scan(value interface{}) error {
+	if value == nil {
+		*ns = ""
+		return nil
+	}
+
+	switch s := value.(type) {
+	case string:
+		*ns = NilString(s)
+	case []byte:
+		*ns = NilString(s)
+	}
+	return nil
+}
+
+func (ns NilString) Value() (driver.Value, error) {
+	if ns == "" {
+		return nil, nil
+	}
+	return string(ns), nil
 }

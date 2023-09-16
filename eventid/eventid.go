@@ -102,13 +102,11 @@ func (e EventID) Compare(other EventID) int {
 	return e.u.Compare(other.u)
 }
 
-// MarshalJSON returns m as string.
 func (e EventID) MarshalJSON() ([]byte, error) {
 	encoded := `"` + e.String() + `"`
 	return []byte(encoded), nil
 }
 
-// UnmarshalJSON sets *m to a decoded base64.
 func (e *EventID) UnmarshalJSON(data []byte) error {
 	if e == nil {
 		return faults.New("eventid.UnmarshalJSON: UnmarshalJSON on nil pointer")

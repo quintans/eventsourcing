@@ -1,17 +1,18 @@
 package postgresql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util/ids"
 )
 
@@ -67,9 +68,9 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 	}
 
 	args := []interface{}{aggregateKind}
-	var subquery bytes.Buffer
+	var subquery strings.Builder
 	// get the id of the aggregate
-	subquery.WriteString("SELECT aggregate_id FROM events WHERE aggregate_kind = $1 AND migration = 0 AND (")
+	subquery.WriteString(fmt.Sprintf("SELECT aggregate_id FROM %s WHERE aggregate_kind = $1 AND migration = 0 AND (", r.eventsTable))
 	for k, v := range eventTypeCriteria {
 		if k > 0 {
 			subquery.WriteString(" OR ")
@@ -81,23 +82,10 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 
 	// TODO should select by batches
 	// get all events for the aggregate id returned by the subquery
-	events := []*Event{}
-	query := fmt.Sprintf("SELECT * FROM events WHERE aggregate_id = (%s) AND migration = 0 ORDER BY aggregate_version ASC", subquery.String())
-	err := r.db.SelectContext(ctx, &events, query, args...)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	} else if err != nil {
-		return nil, faults.Errorf("unable to query events: %w\n%s", err, query)
-	}
+	query := fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = (%s) AND migration = 0 ORDER BY aggregate_version ASC", r.eventsTable, subquery.String())
+	events, err := r.queryEvents(ctx, query, args...)
 
-	evts := make([]*eventsourcing.Event[K], len(events))
-	for k, v := range events {
-		evts[k], err = toEventSourcingEvent[K, PK](v)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return evts, nil
+	return events, faults.Wrapf(err, "retrieving events for migration")
 }
 
 func (r *EsRepository[K, PK]) saveMigration(
@@ -117,6 +105,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
 		id := gen.NewID()
+		metadata := r.metadataMerge(ctx, r.metadata)
 		err := r.saveEvent(c, tx, &Event{
 			ID:               id,
 			AggregateID:      last.AggregateID.String(),
@@ -125,19 +114,22 @@ func (r *EsRepository[K, PK]) saveMigration(
 			AggregateKind:    last.AggregateKind,
 			Kind:             eventsourcing.InvalidatedKind,
 			CreatedAt:        time.Now(),
+			Metadata:         metadata,
 		})
 		if err != nil {
 			return err
 		}
 
 		// invalidate all active events
-		_, err = tx.ExecContext(c, "UPDATE events SET migration = $1 WHERE aggregate_id = $2 AND migration = 0", revision, last.AggregateID.String())
+		qry := fmt.Sprintf("UPDATE %s SET migration = $1 WHERE aggregate_id = $2 AND migration = 0", r.eventsTable)
+		_, err = tx.ExecContext(c, qry, revision, last.AggregateID.String())
 		if err != nil {
 			return faults.Errorf("failed to invalidate events: %w", err)
 		}
 
 		// delete snapshots
-		_, err = tx.ExecContext(c, "DELETE FROM snapshots WHERE aggregate_id = $1", last.AggregateID.String())
+		qry = fmt.Sprintf("DELETE FROM %s WHERE aggregate_id = $1", r.snapshotsTable)
+		_, err = tx.ExecContext(c, qry, last.AggregateID.String())
 		if err != nil {
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
 		}
@@ -158,6 +150,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 		for _, mig := range migration {
 			version++
 			lastID = gen.NewID()
+			metadata := r.metadataMerge(ctx, r.metadata)
 			event := &Event{
 				ID:               lastID,
 				AggregateID:      last.AggregateID.String(),
@@ -166,8 +159,8 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,
 				Body:             mig.Body,
-				IdempotencyKey:   NilString(mig.IdempotencyKey),
-				Metadata:         mig.Metadata,
+				IdempotencyKey:   store.NilString(mig.IdempotencyKey),
+				Metadata:         metadata,
 				CreatedAt:        now,
 				Migrated:         true,
 			}
@@ -194,13 +187,15 @@ func (r *EsRepository[K, PK]) saveMigration(
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
 			}
 
-			err = saveSnapshot(c, tx, &Snapshot{
+			metadata := r.metadataMerge(ctx, r.metadata)
+			err = r.saveSnapshot(c, tx, &Snapshot{
 				ID:               lastID,
 				AggregateID:      last.AggregateID.String(),
 				AggregateVersion: version,
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,
 				CreatedAt:        now,
+				Metadata:         metadata,
 			})
 			if err != nil {
 				return err

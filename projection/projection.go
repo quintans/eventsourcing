@@ -335,7 +335,7 @@ func catching[K eventsourcing.ID](
 		AggregateKinds: options.AggregateKinds,
 		Metadata:       options.Metadata,
 		Splits:         partitions,
-		Split:          partition,
+		SplitIDs:       []uint32{partition},
 	})
 
 	handle := func(ctx context.Context, msg *sink.Message[K]) error {

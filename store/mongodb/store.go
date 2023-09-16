@@ -3,20 +3,22 @@ package mongodb
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 
 	"github.com/quintans/eventsourcing"
-	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/eventsourcing/util/ids"
 )
 
@@ -49,6 +51,7 @@ type Snapshot struct {
 	AggregateKind    eventsourcing.Kind `bson:"aggregate_kind,omitempty"`
 	Body             []byte             `bson:"body,omitempty"`
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
+	Metadata         bson.M
 }
 
 var _ eventsourcing.EsRepository[ulid.ULID] = (*EsRepository[ulid.ULID, *ulid.ULID])(nil)
@@ -70,6 +73,25 @@ func WithSnapshotsCollection[K eventsourcing.ID, PK eventsourcing.IDPt[K]](snaps
 func WithTxHandler[K eventsourcing.ID, PK eventsourcing.IDPt[K]](txHandler store.InTxHandler[K]) Option[K, PK] {
 	return func(r *EsRepository[K, PK]) {
 		r.txHandlers = append(r.txHandlers, txHandler)
+	}
+}
+
+// WithMetadata defines the metadata to be save on every event. Data keys will be converted to lower case
+func WithMetadata[K eventsourcing.ID, PK eventsourcing.IDPt[K]](metadata eventsourcing.Metadata) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
+		m := eventsourcing.Metadata{}
+		for k, v := range metadata {
+			m[strings.ToLower(k)] = v
+		}
+		r.metadata = m
+	}
+}
+
+// WithMetadataHook defines the hook that will return the metadata.
+// This metadata will override any metadata defined at the repository level
+func WithMetadataHook[K eventsourcing.ID, PK eventsourcing.IDPt[K]](fn store.MetadataHook[K]) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
+		r.metadataHook = fn
 	}
 }
 
@@ -119,6 +141,8 @@ type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	txHandlers              []store.InTxHandler[K]
 	eventsCollectionName    string
 	snapshotsCollectionName string
+	metadata                eventsourcing.Metadata
+	metadataHook            store.MetadataHook[K]
 }
 
 // NewStoreWithURI creates a new instance of MongoEsRepository
@@ -185,6 +209,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			version++
 			id = e.ID
 			aggIDStr := eRec.AggregateID.String()
+			metadata := r.metadataMerge(ctx, r.metadata)
 			err := r.saveEvent(
 				ctx,
 				&Event{
@@ -196,7 +221,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 					Body:             e.Body,
 					AggregateVersion: version,
 					IdempotencyKey:   idempotencyKey,
-					Metadata:         eRec.Metadata,
+					Metadata:         fromMetadata(metadata),
 					CreatedAt:        eRec.CreatedAt,
 				},
 				id,
@@ -218,6 +243,14 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 	}
 
 	return id, version, nil
+}
+
+func (r *EsRepository[K, PK]) metadataMerge(ctx context.Context, metadata eventsourcing.Metadata) eventsourcing.Metadata {
+	if r.metadataHook == nil {
+		return metadata
+	}
+	meta := r.metadataHook(ctx)
+	return util.MapMerge(metadata, meta)
 }
 
 func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, doc *Event, id eventid.EventID) error {
@@ -265,7 +298,14 @@ func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (e
 	snap := Snapshot{}
 	opts := options.FindOne()
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
-	if err := r.snapshotCollection().FindOne(ctx, bson.D{{"aggregate_id", aggregateID.String()}}, opts).Decode(&snap); err != nil {
+	filter := bson.D{{"aggregate_id", aggregateID.String()}}
+
+	metadata := r.metadataMerge(ctx, r.metadata)
+	for k, v := range metadata {
+		filter = append(filter, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
+	}
+
+	if err := r.snapshotCollection().FindOne(ctx, filter, opts).Decode(&snap); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return eventsourcing.Snapshot[K]{}, nil
 		}
@@ -283,10 +323,12 @@ func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (e
 		AggregateKind:    snap.AggregateKind,
 		Body:             snap.Body,
 		CreatedAt:        snap.CreatedAt,
+		Metadata:         toMetadata(snap.Metadata),
 	}, nil
 }
 
 func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
+	metadata := r.metadataMerge(ctx, r.metadata)
 	return r.saveSnapshot(ctx, &Snapshot{
 		ID:               snapshot.ID.String(),
 		AggregateID:      snapshot.AggregateID.String(),
@@ -294,6 +336,7 @@ func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *events
 		AggregateKind:    snapshot.AggregateKind,
 		Body:             snapshot.Body,
 		CreatedAt:        snapshot.CreatedAt,
+		Metadata:         fromMetadata(metadata),
 	})
 }
 
@@ -311,6 +354,11 @@ func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateI
 	}
 	if snapVersion > -1 {
 		filter = append(filter, bson.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
+	}
+
+	metadata := r.metadataMerge(ctx, r.metadata)
+	for k, v := range metadata {
+		filter = append(filter, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
 	}
 
 	opts := options.Find()
@@ -348,6 +396,10 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 	filter := bson.D{
 		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
 		{"kind", bson.D{{"$eq", request.EventKind}}},
+	}
+	metadata := r.metadataMerge(ctx, r.metadata)
+	for k, v := range metadata {
+		filter = append(filter, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
 	}
 	cursor, err := r.eventsCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
@@ -417,7 +469,8 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 		{"migration", bson.D{{"$eq", 0}}},
 	}
 
-	flt = buildFilter(filter, flt)
+	metadata := r.metadataMerge(ctx, r.metadata)
+	flt = buildFilter(metadata, filter, flt)
 
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
 	if batchSize > 0 {
@@ -437,45 +490,53 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(filter store.Filter, flt bson.D) bson.D {
+func buildFilter(metadata eventsourcing.Metadata, filter store.Filter, flt bson.D) bson.D {
 	if len(filter.AggregateKinds) > 0 {
 		flt = append(flt, bson.E{"aggregate_kind", bson.D{{"$in", filter.AggregateKinds}}})
 	}
 
-	if filter.Splits > 1 && filter.Split > 1 {
-		flt = append(flt, partitionFilter("aggregate_id_hash", filter.Splits, filter.Split))
+	if filter.Splits > 1 && len(filter.SplitIDs) != int(filter.Splits) {
+		flt = append(flt, splitFilter("aggregate_id_hash", filter.Splits, filter.SplitIDs))
+	}
+
+	for k, v := range metadata {
+		flt = append(flt, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
 	}
 
 	if len(filter.Metadata) > 0 {
-		for k, v := range filter.Metadata {
-			flt = append(flt, bson.E{"metadata." + k, bson.D{{"$in", v}}})
+		for _, kv := range filter.Metadata {
+			// ignore if already set by the metadata
+			if metadata != nil {
+				_, ok := metadata[kv.Key]
+				if ok {
+					continue
+				}
+			}
+
+			flt = append(flt, bson.E{"metadata." + kv.Key, bson.D{{"$in", kv.Values}}})
 		}
 	}
 	return flt
 }
 
-func partitionFilter(field string, splits, split uint32) bson.E {
+func splitFilter(field string, splits uint32, splitIDs []uint32) bson.E {
 	field = "$" + field
 	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, splits]}],  split]} }
 	return bson.E{
 		"$expr",
 		bson.D{
-			{"$eq", bson.A{
+			{"$in", bson.A{
 				bson.D{
 					{"$mod", bson.A{field, splits}},
 				},
-				split,
+				splitIDs,
 			}},
 		},
 	}
 }
 
 func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event[K], error) {
-	return queryEvents[K, PK](ctx, r.eventsCollection(), filter, opts)
-}
-
-func queryEvents[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.Context, coll *mongo.Collection, filter bson.D, opts *options.FindOptions) ([]*eventsourcing.Event[K], error) {
-	cursor, err := coll.Find(ctx, filter, opts)
+	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, nil
@@ -510,6 +571,7 @@ func toEventsourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 	if err != nil {
 		return nil, faults.Errorf("unmarshaling id '%s': %w", e.AggregateID, err)
 	}
+
 	return &eventsourcing.Event[K]{
 		ID:               id,
 		AggregateID:      *aggID,
@@ -519,7 +581,7 @@ func toEventsourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 		IdempotencyKey:   e.IdempotencyKey,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		Metadata:         encoding.JSONOfMap(e.Metadata),
+		Metadata:         toMetadata(e.Metadata),
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
 	}, nil
@@ -527,5 +589,21 @@ func toEventsourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 
 func (r *EsRepository[K, PK]) GetEventsByRawIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	return queryEvents[K, PK](ctx, r.eventsCollection(), bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
+	return r.queryEvents(ctx, bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
+}
+
+func fromMetadata(meta eventsourcing.Metadata) primitive.M {
+	m := primitive.M{}
+	for k, v := range meta {
+		m[k] = v
+	}
+	return m
+}
+
+func toMetadata(meta primitive.M) eventsourcing.Metadata {
+	m := eventsourcing.Metadata{}
+	for k, v := range meta {
+		m[k] = v.(string)
+	}
+	return m
 }

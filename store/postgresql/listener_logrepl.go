@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -20,6 +22,8 @@ import (
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/eventsourcing/util"
 )
 
 const (
@@ -27,37 +31,44 @@ const (
 	outputPlugin    = "pgoutput"
 )
 
-type FeedLogreplOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*FeedLogrepl[K, PK])
+type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
 
-func WithPublication[K eventsourcing.ID, PK eventsourcing.IDPt[K]](publicationName string) FeedLogreplOption[K, PK] {
-	return func(p *FeedLogrepl[K, PK]) {
+func WithPublication[K eventsourcing.ID, PK eventsourcing.IDPt[K]](publicationName string) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
 		p.publicationName = publicationName
 	}
 }
 
-func WithBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedLogreplOption[K, PK] {
-	return func(p *FeedLogrepl[K, PK]) {
+func WithBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
 		p.backoffMaxElapsedTime = duration
 	}
 }
 
-type FeedLogrepl[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
+func WithFilter[K eventsourcing.ID, PK eventsourcing.IDPt[K]](filter *store.Filter) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
+		p.filter = filter
+	}
+}
+
+type Feed[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	dburl                 string
 	publicationName       string
 	slotIndex             int
 	totalSlots            int
 	backoffMaxElapsedTime time.Duration
 	sinker                sink.Sinker[K]
+	filter                *store.Filter
 }
 
 // NewFeed creates a new Postgresql 10+ logic replication feed.
 // slotIndex is the index of this feed in a group of feeds. Its value should be between 1 and totalSlots.
 // slotIndex=1 has a special maintenance behaviour of dropping any slot above totalSlots.
-func NewFeed[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, slotIndex, totalSlots int, sinker sink.Sinker[K], options ...FeedLogreplOption[K, PK]) (FeedLogrepl[K, PK], error) {
+func NewFeed[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, slotIndex, totalSlots int, sinker sink.Sinker[K], options ...FeedOption[K, PK]) (Feed[K, PK], error) {
 	if slotIndex < 1 || slotIndex > totalSlots {
-		return FeedLogrepl[K, PK]{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
+		return Feed[K, PK]{}, faults.Errorf("slotIndex must be between 1 and %d, got %d", totalSlots, slotIndex)
 	}
-	f := FeedLogrepl[K, PK]{
+	f := Feed[K, PK]{
 		dburl:                 connString,
 		publicationName:       defaultSlotName,
 		slotIndex:             slotIndex,
@@ -75,7 +86,7 @@ func NewFeed[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, sl
 
 // Run listens to replication logs and pushes them to sinker
 // https://github.com/jackc/pglogrepl/blob/master/example/pglogrepl_demo/main.go
-func (f *FeedLogrepl[K, PK]) Run(ctx context.Context) error {
+func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	var lastResumeToken pglogrepl.LSN // from the last position
 	err := f.sinker.ResumeTokens(ctx, func(resumeToken encoding.Base64) error {
 		xLogPos, err := pglogrepl.ParseLSN(resumeToken.AsString())
@@ -196,7 +207,7 @@ func (f *FeedLogrepl[K, PK]) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool) (*eventsourcing.Event[K], error) {
+func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool) (*eventsourcing.Event[K], error) {
 	m, err := pgoutput.Parse(WALData)
 	if err != nil {
 		return nil, faults.Errorf("error parsing %s: %w", string(WALData), err)
@@ -222,12 +233,6 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 			return nil, faults.Wrap(err)
 		}
 
-		// check if the event is to be forwarded to the sinker
-		if !f.sinker.Accepts(uint32(aggregateIDHash)) {
-			// filtering out events that are not inside the partition range
-			return nil, nil
-		}
-
 		var id string
 		var aggregateID string
 		var aggregateVersion int32
@@ -235,7 +240,6 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 		var kind string
 		body := []byte{}
 		var idempotencyKey string
-		var metadata string
 		var createdAt time.Time
 		var migrated bool
 		err = extract(values, map[string]interface{}{
@@ -246,10 +250,13 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 			"kind":              &kind,
 			"body":              &body,
 			"idempotency_key":   &idempotencyKey,
-			"metadata":          &metadata,
 			"created_at":        &createdAt,
 			"migrated":          &migrated,
 		})
+		if err != nil {
+			return nil, faults.Wrap(err)
+		}
+		meta, err := extractMetadata(values)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
@@ -263,7 +270,7 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 		if err != nil {
 			return nil, faults.Errorf("unmarshaling id '%s': %w", aggregateID, err)
 		}
-		e := eventsourcing.Event[K]{
+		e := &eventsourcing.Event[K]{
 			ID:               eid,
 			AggregateID:      *aggID,
 			AggregateIDHash:  uint32(aggregateIDHash),
@@ -271,13 +278,18 @@ func (f FeedLogrepl[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, ski
 			AggregateKind:    eventsourcing.Kind(aggregateKind),
 			Kind:             eventsourcing.Kind(kind),
 			Body:             body,
-			Metadata:         encoding.JSONOfString(metadata),
+			Metadata:         meta,
 			IdempotencyKey:   idempotencyKey,
 			CreatedAt:        createdAt,
 			Migrated:         migrated,
 		}
 
-		return &e, nil
+		// check if the event is to be forwarded to the sinker
+		if !f.accepts(e) {
+			return nil, nil
+		}
+
+		return e, nil
 	}
 	return nil, nil
 }
@@ -296,7 +308,52 @@ func extract(values map[string]pgtype.Value, targets map[string]interface{}) err
 	return nil
 }
 
-func (f *FeedLogrepl[K, PK]) listReplicationSlot(ctx context.Context, conn *pgconn.PgConn) (map[string]bool, error) {
+func extractMetadata(values map[string]pgtype.Value) (eventsourcing.Metadata, error) {
+	meta := eventsourcing.Metadata{}
+	for k, v := range values {
+		if v.Get() == nil || !strings.HasPrefix(k, store.MetaColumnPrefix) {
+			continue
+		}
+
+		var s string
+		err := v.AssignTo(&s)
+		if err != nil {
+			return nil, faults.Errorf("failed to assign %s: %w", k, err)
+		}
+		meta[k[len(store.MetaColumnPrefix):]] = s
+
+	}
+	return meta, nil
+}
+
+// accepts check if the event is to be forwarded to the sinker
+func (f *Feed[K, PK]) accepts(event *eventsourcing.Event[K]) bool {
+	if f.filter == nil {
+		return true
+	}
+
+	if f.filter.Splits > 1 && len(f.filter.SplitIDs) != int(f.filter.Splits) {
+		p := util.CalcPartition(event.AggregateIDHash, f.filter.Splits)
+		if !slices.Contains(f.filter.SplitIDs, p) {
+			return false
+		}
+	}
+
+	if len(f.filter.AggregateKinds) > 0 && !slices.Contains(f.filter.AggregateKinds, event.AggregateKind) {
+		return false
+	}
+
+	for _, v := range f.filter.Metadata {
+		val := event.Metadata[v.Key]
+		if val == "" || !slices.Contains(v.Values, val) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (f *Feed[K, PK]) listReplicationSlot(ctx context.Context, conn *pgconn.PgConn) (map[string]bool, error) {
 	sql := fmt.Sprintf("SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE '%s%%'", f.publicationName)
 	mrr := conn.Exec(ctx, sql)
 	results, err := mrr.ReadAll()
@@ -321,7 +378,7 @@ func (f *FeedLogrepl[K, PK]) listReplicationSlot(ctx context.Context, conn *pgco
 	return slots, nil
 }
 
-func (f *FeedLogrepl[K, PK]) dropSlotsInExcess(ctx context.Context, conn *pgconn.PgConn, slots map[string]bool) error {
+func (f *Feed[K, PK]) dropSlotsInExcess(ctx context.Context, conn *pgconn.PgConn, slots map[string]bool) error {
 	// we only do the clean up when the listener has index 0
 	if f.slotIndex != 1 {
 		return nil

@@ -1,14 +1,5 @@
 package util
 
-func In[T comparable](test T, values ...T) bool {
-	for _, v := range values {
-		if v == test {
-			return true
-		}
-	}
-	return false
-}
-
 func IfZero[T comparable](test, def T) T {
 	var zero T
 	if test == zero {
@@ -28,6 +19,16 @@ func NormalizePartitions(p []int32) []uint32 {
 	out := make([]uint32, len(p))
 	for k, v := range p {
 		out[k] = uint32(v + 1)
+	}
+	return out
+}
+
+func MapMerge[K comparable, V any](ms ...map[K]V) map[K]V {
+	out := map[K]V{}
+	for _, m := range ms {
+		for k, v := range m {
+			out[k] = v
+		}
 	}
 	return out
 }

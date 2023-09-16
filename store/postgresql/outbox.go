@@ -1,11 +1,11 @@
 package postgresql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/oklog/ulid/v2"
@@ -14,6 +14,12 @@ import (
 	"github.com/quintans/eventsourcing/sink/poller"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
+)
+
+const (
+	coreOutboxCols     = "id, aggregate_id, aggregate_kind, kind, aggregate_id_hash"
+	coreOutboxVars     = "$1, $2, $3, $4, $5"
+	coreOutboxVarCount = 5
 )
 
 var _ poller.Repository[*ulid.ULID] = (*OutboxRepository[*ulid.ULID])(nil)
@@ -42,9 +48,9 @@ func NewOutboxStore[K eventsourcing.ID](db *sql.DB, tableName string, eventsRepo
 }
 
 func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
-	var query bytes.Buffer
+	var query strings.Builder
 	query.WriteString(fmt.Sprintf("SELECT id FROM %s", r.tableName))
-	args := buildFilter(&query, " WHERE ", filter, []interface{}{})
+	args := buildFilter(&query, " WHERE ", nil, filter, []interface{}{})
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
@@ -83,10 +89,27 @@ func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler
 		if tx == nil {
 			return faults.Errorf("no transaction in context")
 		}
-		_, err := tx.ExecContext(ctx,
-			fmt.Sprintf(`INSERT INTO %s (id, aggregate_id, aggregate_kind, kind, metadata, aggregate_id_hash)
-		VALUES ($1, $2, $3, $4, $5, $6)`, tableName),
-			event.ID.String(), event.AggregateID.String(), event.AggregateKind, event.Kind, event.Metadata, event.AggregateIDHash)
-		return faults.Wrap(err)
+
+		columns := []string{coreOutboxCols}
+		values := []any{
+			event.ID.String(),
+			event.AggregateID.String(),
+			event.AggregateKind,
+			event.Kind,
+			event.AggregateIDHash,
+		}
+		vars := []string{coreOutboxVars}
+		count := coreOutboxVarCount
+		for k, v := range event.Metadata {
+			columns = append(columns, store.MetaColumnPrefix+k)
+			count++
+			vars = append(vars, "$"+strconv.Itoa(count))
+			values = append(values, v)
+		}
+
+		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", tableName, strings.Join(columns, ", "), strings.Join(vars, ", "))
+
+		_, err := tx.ExecContext(ctx, query, values...)
+		return faults.Wrapf(err, "inserting into the outbox, query=%s, args=%+v", query, values)
 	}
 }

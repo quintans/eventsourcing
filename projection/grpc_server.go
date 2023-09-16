@@ -2,18 +2,15 @@ package projection
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 
-	"github.com/golang/protobuf/ptypes"
-	"github.com/quintans/faults"
-	"google.golang.org/grpc"
-
 	"github.com/quintans/eventsourcing"
-
 	pb "github.com/quintans/eventsourcing/api/proto"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
+	"github.com/quintans/faults"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type GrpcServer[K eventsourcing.ID] struct {
@@ -37,14 +34,7 @@ func (s *GrpcServer[K]) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (
 	}
 	pbEvents := make([]*pb.Event, len(events))
 	for k, v := range events {
-		createdAt, err := ptypes.TimestampProto(v.CreatedAt)
-		if err != nil {
-			return nil, faults.Errorf("could convert timestamp to proto: %w", err)
-		}
-		metadata, err := json.Marshal(v.Metadata)
-		if err != nil {
-			return nil, faults.Errorf("unable marshal metadata: %w", err)
-		}
+		createdAt := timestamppb.New(v.CreatedAt)
 		pbEvents[k] = &pb.Event{
 			Id:               v.ID.String(),
 			AggregateId:      v.AggregateID.String(),
@@ -53,7 +43,7 @@ func (s *GrpcServer[K]) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (
 			Kind:             v.Kind.String(),
 			Body:             v.Body,
 			IdempotencyKey:   v.IdempotencyKey,
-			Metadata:         string(metadata),
+			Metadata:         v.Metadata,
 			CreatedAt:        createdAt,
 		}
 	}
@@ -65,21 +55,18 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	for k, v := range pbFilter.AggregateKinds {
 		types[k] = eventsourcing.Kind(v)
 	}
-	metadata := store.Metadata{}
-	for _, v := range pbFilter.Metadata {
-		values := metadata[v.Key]
-		if values == nil {
-			values = []string{v.Value}
-		} else {
-			values = append(values, v.Value)
-		}
-		metadata[v.Key] = values
+	metadata := store.MetadataFilter{}
+	for _, kv := range pbFilter.Metadata {
+		metadata = append(metadata, &store.MetadataKVs{
+			Key:    kv.Key,
+			Values: kv.Value,
+		})
 	}
 	return store.Filter{
 		AggregateKinds: types,
 		Metadata:       metadata,
 		Splits:         pbFilter.Splits,
-		Split:          pbFilter.Split,
+		SplitIDs:       pbFilter.SplitIds,
 	}
 }
 

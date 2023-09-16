@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/avast/retry-go/v3"
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
@@ -73,7 +74,13 @@ func Setup(t *testing.T) DBConfig {
 	dbConfig.Port = port.Int()
 
 	dbURL := fmt.Sprintf("%s:%s@(%s:%s)/%s", dbConfig.Username, dbConfig.Password, ip, port.Port(), dbConfig.Database)
-	err = dbSchema(dbURL)
+	err = retry.Do(
+		func() error {
+			return dbSchema(dbURL)
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+	)
 	require.NoError(t, err)
 
 	return dbConfig
@@ -94,17 +101,18 @@ func dbSchema(dbURL string) error {
 			aggregate_version INTEGER NOT NULL,
 			aggregate_kind VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
-			metadata JSON,
 			body VARBINARY(60000),
 			idempotency_key VARCHAR (50),
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			migration INTEGER NOT NULL DEFAULT 0,
-			migrated BOOLEAN NOT NULL DEFAULT false
+			migrated BOOLEAN NOT NULL DEFAULT false,
+			meta_tenant VARCHAR (50) NULL
 		)ENGINE=innodb;`,
 		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);`,
 		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);`,
 		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
 		`CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migration);`,
+		`CREATE INDEX evt_tenant_idx ON events (meta_tenant);`,
 
 		`CREATE TABLE IF NOT EXISTS snapshots(
 			id VARCHAR (50) PRIMARY KEY,
@@ -113,6 +121,7 @@ func dbSchema(dbURL string) error {
 			aggregate_kind VARCHAR (50) NOT NULL,
 			body VARBINARY(60000) NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			meta_tenant VARCHAR (50) NULL,
 			FOREIGN KEY (id) REFERENCES events (id)
 		)ENGINE=innodb;`,
 		`CREATE INDEX agg_id_idx ON snapshots(aggregate_id);`,
@@ -122,7 +131,7 @@ func dbSchema(dbURL string) error {
 			aggregate_id_hash INTEGER NOT NULL,
 			aggregate_kind VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
-			metadata JSON
+			meta_tenant VARCHAR (50) NULL
 		);`,
 	}
 

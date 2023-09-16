@@ -12,8 +12,6 @@ import (
 )
 
 type Sinker[K eventsourcing.ID] interface {
-	Partitions() (uint32, []uint32)
-	Accepts(hash uint32) bool
 	Sink(ctx context.Context, e *eventsourcing.Event[K], meta Meta) error
 	ResumeTokens(ctx context.Context, forEach func(resumeToken encoding.Base64) error) error
 	Close()
@@ -44,20 +42,20 @@ type Message[K eventsourcing.ID] struct {
 	Kind             eventsourcing.Kind
 	Body             encoding.Base64
 	IdempotencyKey   string
-	Metadata         *encoding.JSON
+	Metadata         eventsourcing.Metadata
 	CreatedAt        time.Time
 }
 
 type messageJSON struct {
-	ID               eventid.EventID    `json:"id,omitempty"`
-	AggregateID      string             `json:"aggregate_id,omitempty"`
-	AggregateVersion uint32             `json:"aggregate_version,omitempty"`
-	AggregateKind    eventsourcing.Kind `json:"aggregate_kind,omitempty"`
-	Kind             eventsourcing.Kind `json:"kind,omitempty"`
-	Body             encoding.Base64    `json:"body,omitempty"`
-	IdempotencyKey   string             `json:"idempotency_key,omitempty"`
-	Metadata         *encoding.JSON     `json:"metadata,omitempty"`
-	CreatedAt        time.Time          `json:"created_at,omitempty"`
+	ID               eventid.EventID        `json:"id,omitempty"`
+	AggregateID      string                 `json:"aggregate_id,omitempty"`
+	AggregateVersion uint32                 `json:"aggregate_version,omitempty"`
+	AggregateKind    eventsourcing.Kind     `json:"aggregate_kind,omitempty"`
+	Kind             eventsourcing.Kind     `json:"kind,omitempty"`
+	Body             encoding.Base64        `json:"body,omitempty"`
+	IdempotencyKey   string                 `json:"idempotency_key,omitempty"`
+	Metadata         eventsourcing.Metadata `json:"metadata,omitempty"`
+	CreatedAt        time.Time              `json:"created_at,omitempty"`
 }
 
 type JSONCodec[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct{}

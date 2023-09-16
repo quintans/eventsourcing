@@ -193,10 +193,6 @@ func (r *EsRepository[K, PK]) saveMigration(
 		now = time.Now()
 		for _, mig := range migration {
 			version++
-			metadata, err := mig.Metadata.AsMap()
-			if err != nil {
-				return faults.Wrap(err)
-			}
 			lastID = gen.NewID()
 			event := &Event{
 				ID:               lastID.String(),
@@ -207,7 +203,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				Kind:             mig.Kind,
 				Body:             mig.Body,
 				IdempotencyKey:   mig.IdempotencyKey,
-				Metadata:         metadata,
+				Metadata:         fromMetadata(r.metadata),
 				CreatedAt:        now,
 				Migrated:         true,
 			}
@@ -240,6 +236,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,
 				CreatedAt:        time.Now().UTC(),
+				Metadata:         fromMetadata(r.metadata),
 			})
 			if err != nil {
 				return err

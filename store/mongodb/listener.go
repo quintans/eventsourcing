@@ -19,6 +19,7 @@ import (
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink"
+	"github.com/quintans/eventsourcing/store"
 )
 
 type Feed[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
@@ -27,6 +28,7 @@ type Feed[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	dbName           string
 	eventsCollection string
 	sinker           sink.Sinker[K]
+	filter           *store.Filter
 }
 
 type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
@@ -34,6 +36,12 @@ type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
 func WithFeedEventsCollection[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsCollection string) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
 		p.eventsCollection = eventsCollection
+	}
+}
+
+func WithFilter[K eventsourcing.ID, PK eventsourcing.IDPt[K]](filter *store.Filter) FeedOption[K, PK] {
+	return func(p *Feed[K, PK]) {
+		p.filter = filter
 	}
 }
 
@@ -83,9 +91,10 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	match := bson.D{
 		{"operationType", "insert"},
 	}
-	total, partitionIDs := f.sinker.Partitions()
-	if int(total) != len(partitionIDs) {
-		match = append(match, f.feedPartitionFilter(total, partitionIDs))
+	var splits uint32
+	splitIDs := []uint32{}
+	if f.filter != nil && int(splits) != len(splitIDs) {
+		match = append(match, f.feedPartitionFilter(splits, splitIDs))
 	}
 
 	matchPipeline := bson.D{{Key: "$match", Value: match}}
@@ -95,8 +104,8 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	var eventsStream *mongo.ChangeStream
 	if len(lastResumeToken) != 0 {
 		f.logger.Info("Starting feeding",
-			"partitions", total,
-			"partitionIDs", partitionIDs,
+			"splits", splits,
+			"splitIDs", splitIDs,
 			"lastResumeToken", hex.EncodeToString(lastResumeToken),
 		)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetResumeAfter(bson.Raw(lastResumeToken)))
@@ -105,8 +114,8 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 		}
 	} else {
 		f.logger.Info("Starting feeding from the beginning",
-			"partitions", total,
-			"partitionIDs", partitionIDs,
+			"splits", splits,
+			"splitIDs", splitIDs,
 		)
 		eventsStream, err = eventsCollection.Watch(ctx, pipeline, options.ChangeStream().SetStartAtOperationTime(&primitive.Timestamp{}))
 		if err != nil {
@@ -119,6 +128,7 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = 10 * time.Second
 
+	// TODO is there any instance that it is no
 	return backoff.Retry(func() error {
 		for eventsStream.Next(ctx) {
 			var changeEvent ChangeEvent
@@ -135,8 +145,9 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 			aggID := PK(new(K))
 			err = aggID.UnmarshalText([]byte(eventDoc.AggregateID))
 			if err != nil {
-				return faults.Errorf("unmarshaling id '%s': %w", eventDoc.AggregateID, err)
+				return faults.Errorf("unmarshaling id '%s': %w", eventDoc.AggregateID, backoff.Permanent(err))
 			}
+
 			event := &eventsourcing.Event[K]{
 				ID:               id,
 				AggregateID:      *aggID,
@@ -146,13 +157,13 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 				Kind:             eventDoc.Kind,
 				Body:             eventDoc.Body,
 				IdempotencyKey:   eventDoc.IdempotencyKey,
-				Metadata:         encoding.JSONOfMap(eventDoc.Metadata),
+				Metadata:         toMetadata(eventDoc.Metadata),
 				CreatedAt:        eventDoc.CreatedAt,
 				Migrated:         eventDoc.Migrated,
 			}
 			err = f.sinker.Sink(ctx, event, sink.Meta{ResumeToken: lastResumeToken})
 			if err != nil {
-				return backoff.Permanent(err)
+				return faults.Errorf("sinking: %w", err)
 			}
 
 			b.Reset()

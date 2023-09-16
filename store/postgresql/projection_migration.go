@@ -1,12 +1,12 @@
 package postgresql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/avast/retry-go/v3"
@@ -187,7 +187,7 @@ func (r *EsRepository[K, PK]) distinctAggregates(
 	aggregateID := ""
 	for {
 		args := []interface{}{aggregateKind}
-		var query bytes.Buffer
+		var query strings.Builder
 		// get the id of the aggregate
 		query.WriteString("SELECT distinct aggregate_id FROM events WHERE aggregate_kind = $1")
 		if aggregateID != "" {

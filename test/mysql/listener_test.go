@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
+	"github.com/quintans/eventsourcing/util/ids"
 )
 
 type slot struct {
@@ -74,7 +74,7 @@ func TestListener(t *testing.T) {
 
 			dbConfig := Setup(t)
 
-			repository, err := mysql.NewStoreWithURL[ulid.ULID](dbConfig.URL())
+			repository, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 			require.NoError(t, err)
 
 			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), esOptions)
@@ -87,7 +87,7 @@ func TestListener(t *testing.T) {
 				Password: dbConfig.Password,
 			}
 
-			data := test.NewMockSinkData[ulid.ULID]()
+			data := test.NewMockSinkData[ids.AggID]()
 			ctx, cancel := context.WithCancel(context.Background())
 			errs := feeding(ctx, cfg, tt.partitionSlots, data)
 
@@ -131,7 +131,7 @@ func TestListener(t *testing.T) {
 			}
 
 			// resume from the beginning
-			data = test.NewMockSinkData[ulid.ULID]()
+			data = test.NewMockSinkData[ids.AggID]()
 			ctx, cancel = context.WithCancel(context.Background())
 			errs = feeding(ctx, cfg, tt.partitionSlots, data)
 
@@ -157,7 +157,7 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig mysql.DBConfig, slots []slot, data *test.MockSinkData[ulid.ULID]) chan error {
+func feeding(ctx context.Context, dbConfig mysql.DBConfig, slots []slot, data *test.MockSinkData[ids.AggID]) chan error {
 	partitions := partitionSize(slots)
 
 	errCh := make(chan error, len(slots))

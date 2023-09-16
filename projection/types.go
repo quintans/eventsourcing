@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/quintans/eventsourcing"
@@ -12,7 +13,6 @@ import (
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util"
 	"github.com/quintans/faults"
 )
 
@@ -104,7 +104,7 @@ type Event[K eventsourcing.ID] struct {
 	Kind             eventsourcing.Kind
 	Body             encoding.Base64
 	IdempotencyKey   string
-	Metadata         *encoding.JSON
+	Metadata         eventsourcing.Metadata
 	CreatedAt        time.Time
 }
 
@@ -182,7 +182,7 @@ func ParseToken(s string) (_ Token, e error) {
 		return Token{}, faults.Errorf("parsing token data '%s': %w", s, err)
 	}
 
-	if !util.In(t.Kind, CatchUpToken, ConsumerToken) {
+	if !slices.Contains([]TokenKind{CatchUpToken, ConsumerToken}, t.Kind) {
 		return Token{}, faults.Errorf("invalid kind when parsing token: %s", s)
 	}
 
@@ -237,5 +237,5 @@ type CatchUpOptions struct {
 	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Metadata store.Metadata
+	Metadata store.MetadataFilter
 }
