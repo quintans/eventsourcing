@@ -41,9 +41,11 @@ type resume struct {
 }
 
 // NewSink instantiate a Kafka sink
-func NewSink[K eventsourcing.ID, PK eventsourcing.IDPt[K]](logger *slog.Logger, kvStore store.KVStore, topic string, brokers []string) (*Sink[K], error) {
+func NewSink[K eventsourcing.ID, PK eventsourcing.IDPt[K]](logger *slog.Logger, kvStore store.KVStore, topic string, brokers []string, config *sarama.Config) (*Sink[K], error) {
 	// producer config
-	config := sarama.NewConfig()
+	if config == nil {
+		config = sarama.NewConfig()
+	}
 	config.Producer.Retry.Max = 5
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	config.Producer.Return.Successes = true

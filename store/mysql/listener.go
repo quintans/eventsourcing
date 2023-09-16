@@ -43,7 +43,7 @@ type Feed[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 
 type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
 
-func WithFeedEventsCollection[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsCollection string) FeedOption[K, PK] {
+func WithFeedEventsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsCollection string) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
 		p.eventsTable = eventsCollection
 	}

@@ -1,7 +1,6 @@
 package mysql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -28,11 +27,13 @@ const (
 )
 
 const (
+	defSnapTable = "snapshots"
 	coreSnapCols = "id, aggregate_id, aggregate_version, aggregate_kind, body, created_at"
 	coreSnapVars = "?, ?, ?, ?, ?, ?"
 
-	coreEventCols = "id, aggregate_id, aggregate_id_hash, aggregate_version, aggregate_kind, kind, body, idempotency_key, created_at, migration, migrated"
-	coreEventVars = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+	defEventsTable = "events"
+	coreEventCols  = "id, aggregate_id, aggregate_id_hash, aggregate_version, aggregate_kind, kind, body, idempotency_key, created_at, migration, migrated"
+	coreEventVars  = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
 )
 
 // Event is the event data is stored in the database
@@ -93,6 +94,18 @@ func WithMetadataHook[K eventsourcing.ID, PK eventsourcing.IDPt[K]](fn store.Met
 	}
 }
 
+func WithEventsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](table string) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
+		r.eventsTable = table
+	}
+}
+
+func WithSnapshotsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](table string) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
+		r.snapshotsTable = table
+	}
+}
+
 type Repository struct {
 	db *sqlx.DB
 }
@@ -131,9 +144,11 @@ func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, *s
 
 type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	Repository
-	txHandlers   []store.InTxHandler[K]
-	metadata     eventsourcing.Metadata
-	metadataHook store.MetadataHook[K]
+	eventsTable    string
+	snapshotsTable string
+	txHandlers     []store.InTxHandler[K]
+	metadata       eventsourcing.Metadata
+	metadataHook   store.MetadataHook[K]
 }
 
 func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, options ...Option[K, PK]) (*EsRepository[K, PK], error) {
@@ -151,6 +166,8 @@ func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](db *sql.DB, options 
 		Repository: Repository{
 			db: dbx,
 		},
+		eventsTable:    defEventsTable,
+		snapshotsTable: defSnapTable,
 	}
 
 	for _, opt := range options {
@@ -235,7 +252,7 @@ func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *
 		values = append(values, v)
 	}
 
-	query := fmt.Sprintf("INSERT INTO events (%s) VALUES (%s)", strings.Join(columns, ", "), strings.Join(vars, ", "))
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", r.eventsTable, strings.Join(columns, ", "), strings.Join(vars, ", "))
 
 	_, err := tx.ExecContext(ctx, query, values...)
 	if err != nil {
@@ -274,7 +291,7 @@ func isDup(err error) bool {
 
 func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (eventsourcing.Snapshot[K], error) {
 	query := strings.Builder{}
-	query.WriteString("SELECT * FROM snapshots WHERE aggregate_id = ?")
+	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ?", r.snapshotsTable))
 	args := []any{aggregateID.String()}
 
 	metadata := r.metadataMerge(ctx, r.metadata)
@@ -384,7 +401,7 @@ func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, x sqlExecuter, s
 		values = append(values, v)
 	}
 
-	query := fmt.Sprintf("INSERT INTO snapshots (%s) VALUES (%s)", strings.Join(columns, ", "), strings.Join(vars, ", "))
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", r.snapshotsTable, strings.Join(columns, ", "), strings.Join(vars, ", "))
 
 	// TODO instead of adding we could replace UPDATE/INSERT
 	_, err := x.ExecContext(ctx, query, values...)
@@ -393,7 +410,7 @@ func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, x sqlExecuter, s
 
 func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
 	var query strings.Builder
-	query.WriteString("SELECT * FROM events WHERE aggregate_id = ? AND migration = 0")
+	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ? AND migration = 0", r.eventsTable))
 	args := []interface{}{aggregateID.String()}
 	if snapVersion > -1 {
 		query.WriteString(" AND aggregate_version > ?")
@@ -424,7 +441,8 @@ func TxFromContext(ctx context.Context) *sql.Tx {
 
 func (r *EsRepository[K, PK]) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
 	var exists bool
-	err := r.db.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM events WHERE idempotency_key=? AND migration = 0) AS "EXISTS"`, idempotencyKey)
+	qry := fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE idempotency_key=? AND migration = 0) AS "EXISTS"`, r.eventsTable)
+	err := r.db.GetContext(ctx, &exists, qry, idempotencyKey)
 	if err != nil {
 		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
 	}
@@ -435,7 +453,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.Forg
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
 	query := strings.Builder{}
-	query.WriteString("SELECT * FROM events WHERE aggregate_id = ? AND kind = ?")
+	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ? AND kind = ?", r.eventsTable))
 	args := []any{req.AggregateID.String(), req.EventKind}
 	metadata := r.metadataMerge(ctx, r.metadata)
 	for k, v := range metadata {
@@ -449,29 +467,32 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.Forg
 		return faults.Errorf("getting events for Aggregate '%s' and event kind '%s': %w", req.AggregateID, req.EventKind, err)
 	}
 
+	qry := fmt.Sprintf("UPDATE %s SET body = ? WHERE ID = ?", r.eventsTable)
 	for _, evt := range events {
 		body, err := forget(evt.Kind, evt.Body, false)
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, "UPDATE events SET body = ? WHERE ID = ?", body, evt.ID.String())
+		_, err = r.db.ExecContext(ctx, qry, body, evt.ID.String())
 		if err != nil {
 			return faults.Errorf("forgetting event ID %s: %w", evt.ID, err)
 		}
 	}
 
 	// forget snapshots
-	snaps, err := r.getSnapshots(ctx, "SELECT * FROM snapshots WHERE aggregate_id = ?", req.AggregateID.String())
+	qry = fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ?", r.snapshotsTable)
+	snaps, err := r.getSnapshots(ctx, qry, req.AggregateID.String())
 	if err != nil {
 		return faults.Errorf("getting snapshot for aggregate '%s': %w", req.AggregateID, err)
 	}
 
+	qry = fmt.Sprintf("UPDATE %s SET body = ? WHERE ID = ?", r.snapshotsTable)
 	for _, snap := range snaps {
 		body, err := forget(snap.AggregateKind, snap.Body, true)
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, "UPDATE snapshots SET body = ? WHERE ID = ?", body, snap.ID.String())
+		_, err = r.db.ExecContext(ctx, qry, body, snap.ID.String())
 		if err != nil {
 			return faults.Errorf("forgetting snapshot ID %s: %w", snap.ID, err)
 		}
@@ -481,8 +502,8 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.Forg
 }
 
 func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
-	var query bytes.Buffer
-	query.WriteString("SELECT * FROM events WHERE id > ? AND id <= ? AND migration = 0")
+	var query strings.Builder
+	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE id > ? AND id <= ? AND migration = 0", r.eventsTable))
 	args := []interface{}{after.String(), until.String()}
 	metadata := r.metadataMerge(ctx, r.metadata)
 	args = buildFilter(&query, " AND ", metadata, filter, args)
@@ -503,7 +524,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(qry *bytes.Buffer, prefix string, metadata eventsourcing.Metadata, filter store.Filter, args []interface{}) []interface{} {
+func buildFilter(qry *strings.Builder, prefix string, metadata eventsourcing.Metadata, filter store.Filter, args []interface{}) []interface{} {
 	var conditions []string
 	if len(filter.AggregateKinds) > 0 {
 		var query strings.Builder
@@ -653,7 +674,7 @@ func toEventSourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 }
 
 func (r *EsRepository[K, PK]) GetEventsByRawIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
-	qry, args, err := sqlx.In("SELECT * FROM events WHERE id IN (?) ORDER BY id ASC", ids) // the query must use the '?' bind var
+	qry, args, err := sqlx.In(fmt.Sprintf("SELECT * FROM %s WHERE id IN (?) ORDER BY id ASC", r.eventsTable), ids) // the query must use the '?' bind var
 	if err != nil {
 		return nil, faults.Errorf("getting pending events (IDs=%+v): %w", ids, err)
 	}

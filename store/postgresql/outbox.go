@@ -1,7 +1,6 @@
 package postgresql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -49,7 +48,7 @@ func NewOutboxStore[K eventsourcing.ID](db *sql.DB, tableName string, eventsRepo
 }
 
 func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
-	var query bytes.Buffer
+	var query strings.Builder
 	query.WriteString(fmt.Sprintf("SELECT id FROM %s", r.tableName))
 	args := buildFilter(&query, " WHERE ", nil, filter, []interface{}{})
 	query.WriteString(" ORDER BY id ASC")

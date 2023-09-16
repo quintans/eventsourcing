@@ -1,11 +1,11 @@
 package mysql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/quintans/faults"
@@ -68,9 +68,9 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 	}
 
 	args := []interface{}{aggregateKind}
-	var subquery bytes.Buffer
+	var subquery strings.Builder
 	// get the id of the aggregate
-	subquery.WriteString("SELECT aggregate_id FROM events WHERE aggregate_kind = ? AND migration = 0 AND (")
+	subquery.WriteString(fmt.Sprintf("SELECT aggregate_id FROM %s WHERE aggregate_kind = ? AND migration = 0 AND (", r.eventsTable))
 	for k, v := range eventTypeCriteria {
 		if k > 0 {
 			subquery.WriteString(" OR ")
@@ -81,7 +81,7 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 	subquery.WriteString(") ORDER BY id ASC LIMIT 1")
 
 	// get all events for the aggregate id returned by the subquery
-	query := fmt.Sprintf("SELECT * FROM events WHERE aggregate_id = (%s) AND migration = 0 ORDER BY aggregate_version ASC", subquery.String())
+	query := fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = (%s) AND migration = 0 ORDER BY aggregate_version ASC", r.eventsTable, subquery.String())
 	events, err := r.queryEvents(ctx, query, args...)
 
 	return events, faults.Wrapf(err, "retrieving events for migration")
@@ -121,13 +121,15 @@ func (r *EsRepository[K, PK]) saveMigration(
 		}
 
 		// invalidate all active events
-		_, err = tx.ExecContext(c, "UPDATE events SET migration = ? WHERE aggregate_id = ? AND migration = 0", revision, last.AggregateID.String())
+		qry := fmt.Sprintf("UPDATE %s SET migration = ? WHERE aggregate_id = ? AND migration = 0", r.eventsTable)
+		_, err = tx.ExecContext(c, qry, revision, last.AggregateID.String())
 		if err != nil {
 			return faults.Errorf("failed to invalidate events: %w", err)
 		}
 
 		// delete snapshots
-		_, err = tx.ExecContext(c, "DELETE FROM snapshots WHERE aggregate_id = ?", last.AggregateID.String())
+		qry = fmt.Sprintf("DELETE FROM %s WHERE aggregate_id = ?", r.snapshotsTable)
+		_, err = tx.ExecContext(c, qry, last.AggregateID.String())
 		if err != nil {
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
 		}

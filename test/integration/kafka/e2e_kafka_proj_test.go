@@ -42,7 +42,7 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := kafka.NewSink[ids.AggID](logger, &integration.MockKVStore{}, topic, uris)
+	sinker, err := kafka.NewSink[ids.AggID](logger, &integration.MockKVStore{}, topic, uris, nil)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
@@ -88,7 +88,7 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := kafka.NewSink[ids.AggID](logger, &integration.MockKVStore{}, topic, uris)
+	sinker, err := kafka.NewSink[ids.AggID](logger, &integration.MockKVStore{}, topic, uris, nil)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
