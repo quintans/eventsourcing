@@ -23,7 +23,7 @@ type Balance struct {
 
 type ProjectionMock[K eventsourcing.ID] struct {
 	name  string
-	codec *jsoncodec.Codec
+	codec *jsoncodec.Codec[K]
 
 	mu               sync.Mutex
 	balances         map[K]Balance
@@ -31,11 +31,11 @@ type ProjectionMock[K eventsourcing.ID] struct {
 	events           []*sink.Message[K]
 }
 
-func NewProjectionMock[K eventsourcing.ID](name string) *ProjectionMock[K] {
+func NewProjectionMock[K eventsourcing.ID](name string, codec *jsoncodec.Codec[K]) *ProjectionMock[K] {
 	return &ProjectionMock[K]{
 		name:             name,
 		balances:         map[K]Balance{},
-		codec:            test.NewJSONCodec(),
+		codec:            codec,
 		aggregateVersion: map[K]uint32{},
 	}
 }
@@ -59,7 +59,7 @@ func (p *ProjectionMock[K]) Handle(ctx context.Context, e *sink.Message[K]) erro
 		return nil
 	}
 
-	k, err := p.codec.Decode(e.Body, e.Kind)
+	k, err := p.codec.Decode(e.Body, eventsourcing.DecoderMeta[K]{Kind: e.Kind})
 	if err != nil {
 		return faults.Wrap(err)
 	}

@@ -18,40 +18,43 @@ func init() {
 	})
 }
 
-type Upcaster func(t eventsourcing.Kinder) (eventsourcing.Kinder, error)
+type (
+	Factory[K eventsourcing.ID] func(id K) eventsourcing.Kinder
+	Upcaster                    func(t eventsourcing.Kinder) (eventsourcing.Kinder, error)
+)
 
-func New() *Codec {
-	return &Codec{
-		factories: map[eventsourcing.Kind]func() eventsourcing.Kinder{},
+func New[K eventsourcing.ID]() *Codec[K] {
+	return &Codec[K]{
+		factories: map[eventsourcing.Kind]Factory[K]{},
 		upcasters: map[eventsourcing.Kind]Upcaster{},
 	}
 }
 
-type Codec struct {
-	factories map[eventsourcing.Kind]func() eventsourcing.Kinder
+type Codec[K eventsourcing.ID] struct {
+	factories map[eventsourcing.Kind]Factory[K]
 	upcasters map[eventsourcing.Kind]Upcaster
 }
 
-func (j *Codec) RegisterFactory(kind eventsourcing.Kind, factory func() eventsourcing.Kinder) {
+func (j *Codec[K]) RegisterFactory(kind eventsourcing.Kind, factory Factory[K]) {
 	j.factories[kind] = factory
 }
 
-func (j *Codec) RegisterUpcaster(kind eventsourcing.Kind, upcaster Upcaster) {
+func (j *Codec[K]) RegisterUpcaster(kind eventsourcing.Kind, upcaster Upcaster) {
 	j.upcasters[kind] = upcaster
 }
 
-func (Codec) Encode(v eventsourcing.Kinder) ([]byte, error) {
+func (Codec[K]) Encode(v eventsourcing.Kinder) ([]byte, error) {
 	b, err := jsoniter.Marshal(v)
 	return b, faults.Wrap(err)
 }
 
-func (j Codec) Decode(data []byte, kind eventsourcing.Kind) (eventsourcing.Kinder, error) {
-	factory := j.factories[kind]
+func (j Codec[K]) Decode(data []byte, meta eventsourcing.DecoderMeta[K]) (eventsourcing.Kinder, error) {
+	factory := j.factories[meta.Kind]
 	if factory == nil {
-		return nil, faults.Errorf("no factory registered for kind '%s'", kind)
+		return nil, faults.Errorf("no factory registered for kind '%s'", meta.Kind)
 	}
 
-	target := factory()
+	target := factory(meta.AggregateID)
 
 	if len(data) == 0 {
 		return target, nil
@@ -62,7 +65,7 @@ func (j Codec) Decode(data []byte, kind eventsourcing.Kind) (eventsourcing.Kinde
 		return nil, faults.Wrap(err)
 	}
 
-	k := kind
+	k := meta.Kind
 	upcaster := j.upcasters[k]
 	for upcaster != nil {
 		target, err = upcaster(target)

@@ -47,7 +47,6 @@ func (n NameVO) LastName() string {
 }
 
 type AccountCreatedV2 struct {
-	Id    ids.AggID
 	Money int64
 	Owner NameVO
 }
@@ -64,15 +63,14 @@ func (e OwnerUpdatedV2) GetKind() eventsourcing.Kind {
 	return KindOwnerUpdatedV2
 }
 
-func NewJSONCodecWithUpcaster() *jsoncodec.Codec {
-	c := jsoncodec.New()
-	c.RegisterFactory(KindAccount, func() eventsourcing.Kinder {
-		return DehydratedAccount()
+func NewJSONCodecWithUpcaster() *jsoncodec.Codec[ids.AggID] {
+	c := jsoncodec.New[ids.AggID]()
+	c.RegisterFactory(KindAccount, func(id ids.AggID) eventsourcing.Kinder {
+		return DehydratedAccount(id)
 	})
 	c.RegisterUpcaster(KindAccount, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		acc := t.(*Account)
-		acc2 := DehydratedAccountV2()
-		acc2.id = acc.id
+		acc2 := DehydratedAccountV2(acc.id)
 		acc2.status = acc.status
 		acc2.balance = acc.balance
 		owner, err := toNameVO(acc.owner)
@@ -82,45 +80,44 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec {
 		acc2.owner = owner
 		return acc2, nil
 	})
-	c.RegisterFactory(KindAccountV2, func() eventsourcing.Kinder {
-		return DehydratedAccountV2()
+	c.RegisterFactory(KindAccountV2, func(id ids.AggID) eventsourcing.Kinder {
+		return DehydratedAccountV2(id)
 	})
 
-	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindAccountCreated, func(_ ids.AggID) eventsourcing.Kinder {
 		return &AccountCreated{}
 	})
 	c.RegisterUpcaster(KindAccountCreated, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		created := t.(*AccountCreated)
 		return migrateAccountCreated(*created)
 	})
-	c.RegisterFactory(KindAccountCreatedV2, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindAccountCreatedV2, func(_ ids.AggID) eventsourcing.Kinder {
 		return &AccountCreatedV2{}
 	})
 
-	c.RegisterFactory(KindMoneyDeposited, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindMoneyDeposited, func(_ ids.AggID) eventsourcing.Kinder {
 		return &MoneyDeposited{}
 	})
-	c.RegisterFactory(KindMoneyWithdrawn, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindMoneyWithdrawn, func(_ ids.AggID) eventsourcing.Kinder {
 		return &MoneyWithdrawn{}
 	})
 
-	c.RegisterFactory(KindOwnerUpdated, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindOwnerUpdated, func(_ ids.AggID) eventsourcing.Kinder {
 		return &OwnerUpdated{}
 	})
 	c.RegisterUpcaster(KindOwnerUpdated, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		created := t.(*OwnerUpdated)
 		return migrateOwnerUpdated(*created)
 	})
-	c.RegisterFactory(KindOwnerUpdatedV2, func() eventsourcing.Kinder {
+	c.RegisterFactory(KindOwnerUpdatedV2, func(_ ids.AggID) eventsourcing.Kinder {
 		return &OwnerUpdatedV2{}
 	})
 	return c
 }
 
 func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
-	a := DehydratedAccountV2()
+	a := DehydratedAccountV2(ids.New())
 	if err := a.root.ApplyChange(&AccountCreatedV2{
-		Id:    ids.New(),
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -129,8 +126,10 @@ func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
 	return a, nil
 }
 
-func DehydratedAccountV2() *AccountV2 {
-	a := &AccountV2{}
+func DehydratedAccountV2(id ids.AggID) *AccountV2 {
+	a := &AccountV2{
+		id: id,
+	}
 	a.root = eventsourcing.NewRootAggregate(a)
 	return a
 }
@@ -149,10 +148,6 @@ func (a *AccountV2) PopEvents() []eventsourcing.Eventer {
 }
 
 func (a *AccountV2) GetID() ids.AggID {
-	return a.id
-}
-
-func (a *AccountV2) ID() ids.AggID {
 	return a.id
 }
 
@@ -207,7 +202,6 @@ func (a *AccountV2) HandleEvent(event eventsourcing.Eventer) error {
 }
 
 func (a *AccountV2) HandleAccountCreatedV2(event AccountCreatedV2) {
-	a.id = event.Id
 	a.balance = event.Money
 	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events
@@ -226,9 +220,11 @@ func (a *AccountV2) HandleOwnerUpdatedV2(event OwnerUpdatedV2) {
 	a.owner = event.Owner
 }
 
-func MigrateAccountCreated[K eventsourcing.ID](e *eventsourcing.Event[K], codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
+func MigrateAccountCreated[K eventsourcing.ID](e *eventsourcing.Event[K], codec eventsourcing.Codec[K]) (*eventsourcing.EventMigration, error) {
 	// will upcast
-	event, err := codec.Decode(e.Body, e.Kind)
+	event, err := codec.Decode(e.Body, eventsourcing.DecoderMeta[K]{
+		Kind: e.Kind,
+	})
 	if err != nil {
 		return nil, faults.Errorf("failed do decode '%s': %w", e.AggregateKind, err)
 	}
@@ -244,9 +240,11 @@ func MigrateAccountCreated[K eventsourcing.ID](e *eventsourcing.Event[K], codec 
 	return m, nil
 }
 
-func MigrateOwnerUpdated[K eventsourcing.ID](e *eventsourcing.Event[K], codec eventsourcing.Codec) (*eventsourcing.EventMigration, error) {
+func MigrateOwnerUpdated[K eventsourcing.ID](e *eventsourcing.Event[K], codec eventsourcing.Codec[K]) (*eventsourcing.EventMigration, error) {
 	// will upcast
-	event, err := codec.Decode(e.Body, e.Kind)
+	event, err := codec.Decode(e.Body, eventsourcing.DecoderMeta[K]{
+		Kind: e.Kind,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +266,6 @@ func migrateAccountCreated(oldEvent AccountCreated) (AccountCreatedV2, error) {
 		return AccountCreatedV2{}, err
 	}
 	return AccountCreatedV2{
-		Id:    oldEvent.Id,
 		Money: oldEvent.Money,
 		Owner: owner,
 	}, nil

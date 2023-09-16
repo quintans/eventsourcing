@@ -22,17 +22,22 @@ var (
 	ErrUnknownAggregateID     = errors.New("unknown aggregate ID")
 )
 
-type Codec interface {
+type Codec[K ID] interface {
 	Encoder
-	Decoder
+	Decoder[K]
 }
 
 type Encoder interface {
 	Encode(v Kinder) ([]byte, error)
 }
 
-type Decoder interface {
-	Decode(data []byte, kind Kind) (Kinder, error)
+type Decoder[K ID] interface {
+	Decode(data []byte, meta DecoderMeta[K]) (Kinder, error)
+}
+
+type DecoderMeta[K ID] struct {
+	Kind        Kind
+	AggregateID K
 }
 
 type ID interface {
@@ -87,13 +92,13 @@ type EsRepository[K ID] interface {
 	SaveSnapshot(ctx context.Context, snapshot *Snapshot[K]) error
 	GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*Event[K], error)
 	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
-	Forget(ctx context.Context, request ForgetRequest[K], forget func(kind Kind, body []byte, snapshot bool) ([]byte, error)) error
+	Forget(ctx context.Context, request ForgetRequest[K], forget func(kind Kind, body []byte) ([]byte, error)) error
 	MigrateInPlaceCopyReplace(
 		ctx context.Context,
 		revision int,
 		snapshotThreshold uint32,
 		rehydrateFunc func(Aggregater[K], *Event[K]) error, // called only if snapshot threshold is reached
-		codec Codec,
+		codec Codec[K],
 		handler MigrationHandler[K],
 		targetAggregateKind Kind,
 		aggregateKind Kind,
@@ -178,11 +183,11 @@ type EsOptions struct {
 type EventStore[T Aggregater[K], K ID, PK IDPt[K]] struct {
 	store             EsRepository[K]
 	snapshotThreshold uint32
-	codec             Codec
+	codec             Codec[K]
 }
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore[T Aggregater[K], K ID, PK IDPt[K]](repo EsRepository[K], codec Codec, options *EsOptions) EventStore[T, K, PK] {
+func NewEventStore[T Aggregater[K], K ID, PK IDPt[K]](repo EsRepository[K], codec Codec[K], options *EsOptions) EventStore[T, K, PK] {
 	es := EventStore[T, K, PK]{
 		store:             repo,
 		snapshotThreshold: 100,
@@ -232,7 +237,7 @@ func (es EventStore[T, K, PK]) retrieve(ctx context.Context, aggregateID K) (T, 
 	var aggregateVersion uint32
 	var updatedAt time.Time
 	if len(snap.Body) != 0 {
-		aggregate, err = es.RehydrateAggregate(snap.AggregateKind, snap.Body)
+		aggregate, err = es.RehydrateAggregate(snap.AggregateKind, aggregateID, snap.Body)
 		if err != nil {
 			return zero, 0, time.Time{}, 0, err
 		}
@@ -255,7 +260,7 @@ func (es EventStore[T, K, PK]) retrieve(ctx context.Context, aggregateID K) (T, 
 	for _, event := range events {
 		// if the aggregate was not instantiated because the snap was not found
 		if aggregate.GetID() == zeroID {
-			aggregate, err = es.RehydrateAggregate(event.AggregateKind, nil)
+			aggregate, err = es.RehydrateAggregate(event.AggregateKind, aggregateID, nil)
 			if err != nil {
 				return zero, 0, time.Time{}, 0, err
 			}
@@ -283,12 +288,27 @@ func (es EventStore[T, K, PK]) ApplyChangeFromHistory(agg Aggregater[K], e *Even
 	return agg.HandleEvent(evt)
 }
 
-func (es EventStore[T, K, PK]) RehydrateAggregate(aggregateKind Kind, body []byte) (T, error) {
-	return RehydrateAggregate[T](es.codec, aggregateKind, body)
+func (es EventStore[T, K, PK]) RehydrateAggregate(aggregateKind Kind, id K, body []byte) (T, error) {
+	a, err := es.codec.Decode(body, DecoderMeta[K]{
+		Kind:        aggregateKind,
+		AggregateID: id,
+	})
+	if err != nil {
+		var zero T
+		return zero, faults.Errorf("decoding kind '%s' into %T: %w", aggregateKind, a, err)
+	}
+	return a.(T), nil
 }
 
 func (es EventStore[T, K, PK]) RehydrateEvent(kind Kind, body []byte) (Kinder, error) {
-	return RehydrateEvent(es.codec, kind, body)
+	e, err := es.codec.Decode(body, DecoderMeta[K]{
+		Kind: kind,
+	})
+	if err != nil {
+		return nil, faults.Errorf("decoding kind '%s' into %T: %w", kind, e, err)
+	}
+
+	return e, nil
 }
 
 // Create saves the events of the aggregater into the event store
@@ -383,8 +403,11 @@ type ForgetRequest[K ID] struct {
 }
 
 func (es EventStore[T, K, PK]) Forget(ctx context.Context, request ForgetRequest[K], forget func(Kinder) (Kinder, error)) error {
-	fun := func(kind Kind, body []byte, snapshot bool) ([]byte, error) {
-		k, err := es.codec.Decode(body, kind)
+	fun := func(kind Kind, body []byte) ([]byte, error) {
+		k, err := es.codec.Decode(body, DecoderMeta[K]{
+			Kind:        kind,
+			AggregateID: request.AggregateID,
+		})
 		if err != nil {
 			return nil, err
 		}

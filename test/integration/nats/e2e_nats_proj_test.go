@@ -181,7 +181,7 @@ func runNatsContainer(t *testing.T) string {
 
 func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID]) *integration.ProjectionMock[ids.AggID] {
 	// create projection
-	proj := integration.NewProjectionMock[ids.AggID]("balances")
+	proj := integration.NewProjectionMock[ids.AggID]("balances", test.NewJSONCodec())
 
 	topic := projection.ConsumerTopic{
 		Topic:      "accounts",
