@@ -70,7 +70,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec[ids.AggID] {
 	})
 	c.RegisterUpcaster(KindAccount, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		acc := t.(*Account)
-		acc2 := DehydratedAccountV2(acc.id)
+		acc2 := DehydratedAccountV2(acc.GetID())
 		acc2.status = acc.status
 		acc2.balance = acc.balance
 		owner, err := toNameVO(acc.owner)
@@ -117,7 +117,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec[ids.AggID] {
 
 func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
 	a := DehydratedAccountV2(ids.New())
-	if err := a.root.ApplyChange(&AccountCreatedV2{
+	if err := a._root.ApplyChange(&AccountCreatedV2{
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -127,28 +127,25 @@ func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
 }
 
 func DehydratedAccountV2(id ids.AggID) *AccountV2 {
-	a := &AccountV2{
-		id: id,
-	}
-	a.root = eventsourcing.NewRootAggregate(a)
+	a := &AccountV2{}
+	a._root = eventsourcing.NewRootAggregate(a, id)
 	return a
 }
 
 type AccountV2 struct {
-	root eventsourcing.RootAggregate `json:"-"`
+	_root eventsourcing.RootAggregate[ids.AggID]
 
-	id      ids.AggID
 	status  Status
 	balance int64
 	owner   NameVO
 }
 
 func (a *AccountV2) PopEvents() []eventsourcing.Eventer {
-	return a.root.PopEvents()
+	return a._root.PopEvents()
 }
 
 func (a *AccountV2) GetID() ids.AggID {
-	return a.id
+	return a._root.GetID()
 }
 
 func (a *AccountV2) Status() Status {
@@ -169,7 +166,7 @@ func (a *AccountV2) GetKind() eventsourcing.Kind {
 
 func (a *AccountV2) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		if err := a.root.ApplyChange(&MoneyWithdrawn{Money: money}); err != nil {
+		if err := a._root.ApplyChange(&MoneyWithdrawn{Money: money}); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -178,11 +175,11 @@ func (a *AccountV2) Withdraw(money int64) (bool, error) {
 }
 
 func (a *AccountV2) Deposit(money int64) error {
-	return a.root.ApplyChange(&MoneyDeposited{Money: money})
+	return a._root.ApplyChange(&MoneyDeposited{Money: money})
 }
 
 func (a *AccountV2) UpdateOwner(owner string) error {
-	return a.root.ApplyChange(&OwnerUpdated{Owner: owner})
+	return a._root.ApplyChange(&OwnerUpdated{Owner: owner})
 }
 
 func (a *AccountV2) HandleEvent(event eventsourcing.Eventer) error {

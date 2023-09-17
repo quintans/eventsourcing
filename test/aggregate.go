@@ -79,12 +79,8 @@ func NewJSONCodec() *jsoncodec.Codec[ids.AggID] {
 }
 
 func NewAccount(owner string, money int64) (*Account, error) {
-	return NewAccountWithID(owner, ids.New(), money)
-}
-
-func NewAccountWithID(owner string, id ids.AggID, money int64) (*Account, error) {
-	a := DehydratedAccount(id)
-	if err := a.root.ApplyChange(&AccountCreated{
+	a := DehydratedAccount(ids.New())
+	if err := a._root.ApplyChange(&AccountCreated{
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -94,31 +90,25 @@ func NewAccountWithID(owner string, id ids.AggID, money int64) (*Account, error)
 }
 
 func DehydratedAccount(id ids.AggID) *Account {
-	a := &Account{
-		id: id,
-	}
-	a.root = eventsourcing.NewRootAggregate(a)
+	a := &Account{}
+	a._root = eventsourcing.NewRootAggregate(a, id)
 	return a
 }
 
 type Account struct {
-	root eventsourcing.RootAggregate `json:"-"`
+	_root eventsourcing.RootAggregate[ids.AggID]
 
-	id      ids.AggID
 	status  Status
 	balance int64
 	owner   string
 }
 
-func (a *Account) PopEvents() []eventsourcing.Eventer {
-	return a.root.PopEvents()
+func (a *Account) GetID() ids.AggID {
+	return a._root.GetID()
 }
 
-func (a *Account) GetID() ids.AggID {
-	if a == nil {
-		return ids.AggID{}
-	}
-	return a.id
+func (a *Account) PopEvents() []eventsourcing.Eventer {
+	return a._root.PopEvents()
 }
 
 func (a *Account) Status() Status {
@@ -143,7 +133,7 @@ func (a *Account) GetKind() eventsourcing.Kind {
 
 func (a *Account) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		err := a.root.ApplyChange(&MoneyWithdrawn{Money: money})
+		err := a._root.ApplyChange(&MoneyWithdrawn{Money: money})
 		if err != nil {
 			return false, err
 		}
@@ -153,11 +143,11 @@ func (a *Account) Withdraw(money int64) (bool, error) {
 }
 
 func (a *Account) Deposit(money int64) error {
-	return a.root.ApplyChange(&MoneyDeposited{Money: money})
+	return a._root.ApplyChange(&MoneyDeposited{Money: money})
 }
 
 func (a *Account) UpdateOwner(owner string) error {
-	return a.root.ApplyChange(&OwnerUpdated{Owner: owner})
+	return a._root.ApplyChange(&OwnerUpdated{Owner: owner})
 }
 
 func (a *Account) HandleEvent(event eventsourcing.Eventer) error {

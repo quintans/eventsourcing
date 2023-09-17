@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -524,8 +523,8 @@ func TestMigration(t *testing.T) {
 	defer r.Close(context.Background())
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := ids.AggID(ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ"))
-	acc, err := test.NewAccountWithID("Paulo Pereira", id, 100)
+	acc, err := test.NewAccount("Paulo Pereira", 100)
+	id := acc.GetID()
 	require.NoError(t, err)
 	acc.Deposit(20)
 	acc.Withdraw(15)
@@ -576,7 +575,8 @@ func TestMigration(t *testing.T) {
 	snap := snaps[0]
 	assert.Equal(t, "Account_V2", snap.AggregateKind.String())
 	assert.Equal(t, 9, int(snap.AggregateVersion))
-	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","status":"OPEN","balance":105,"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(snap.Body))
+	assert.Equal(t, `{"status":"OPEN","balance":105,"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(snap.Body))
+	assert.Equal(t, id.String(), snap.AggregateID)
 
 	evts, err := getEvents(ctx, dbConfig, id)
 	require.NoError(t, err)
