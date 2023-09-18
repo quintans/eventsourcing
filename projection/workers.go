@@ -2,58 +2,14 @@ package projection
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/worker"
 )
-
-type TaskerFactory func(partitionLow, partitionHi uint32) worker.Task
-
-// PartitionedEventForwarderWorkers create workers responsible to forward events to their managed topic partition
-// each worker is responsible to forward a range of partitions
-func PartitionedEventForwarderWorkers(logger *slog.Logger, name string, lockerFactory LockerFactory, taskerFactory TaskerFactory, partitionSlots []worker.PartitionSlot) []worker.Worker {
-	workers := make([]worker.Worker, len(partitionSlots))
-	for i, v := range partitionSlots {
-		slotsName := fmt.Sprintf("%d-%d", v.From, v.To)
-
-		var locker lock.Locker
-		if lockerFactory != nil {
-			locker = lockerFactory(name + "-lock-" + slotsName)
-		}
-
-		workers[i] = worker.NewRunWorker(
-			logger,
-			name+"-"+slotsName,
-			name,
-			locker,
-			taskerFactory(v.From, v.To),
-		)
-	}
-
-	return workers
-}
-
-// EventForwarderWorker creates a single worker responsible of forwarding
-func EventForwarderWorker(logger *slog.Logger, name string, lockerFactory LockerFactory, task worker.Task) worker.Worker {
-	var locker lock.Locker
-	if lockerFactory != nil {
-		locker = lockerFactory(name + "-lock")
-	}
-
-	return worker.NewRunWorker(
-		logger,
-		name,
-		name,
-		locker,
-		task,
-	)
-}
 
 type SubscriberFactory[K eventsourcing.ID] func(context.Context, ResumeKey) Consumer[K]
 

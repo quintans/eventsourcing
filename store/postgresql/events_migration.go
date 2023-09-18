@@ -13,7 +13,7 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util/ids"
+	"github.com/quintans/eventsourcing/util"
 )
 
 func (r *EsRepository[K, PK]) MigrateInPlaceCopyReplace(
@@ -109,7 +109,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 		err := r.saveEvent(c, tx, &Event{
 			ID:               id,
 			AggregateID:      last.AggregateID.String(),
-			AggregateIDHash:  ids.Int32ring(last.AggregateIDHash),
+			AggregateIDHash:  util.Int32ring(last.AggregateIDHash),
 			AggregateVersion: version,
 			AggregateKind:    last.AggregateKind,
 			Kind:             eventsourcing.InvalidatedKind,
@@ -157,7 +157,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			event := &Event{
 				ID:               lastID,
 				AggregateID:      last.AggregateID.String(),
-				AggregateIDHash:  ids.Int32ring(last.AggregateIDHash),
+				AggregateIDHash:  util.Int32ring(last.AggregateIDHash),
 				AggregateVersion: version,
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,

@@ -179,7 +179,7 @@ func dumpRunningTasks() {
 }
 
 func NewRunner(name, tag string) *worker.RunWorker {
-	return worker.NewRunWorker(logger, name, "workers", lockerPool.NewLock(name), func(ctx context.Context) error {
+	return worker.NewRun(logger, name, "workers", lockerPool.NewLock(name), func(ctx context.Context) error {
 		runningTasks.Store(name, true)
 		fmt.Printf("starting ✅ %s\n", tag)
 		go func() {

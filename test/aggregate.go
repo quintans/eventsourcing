@@ -1,8 +1,6 @@
 package test
 
 import (
-	"github.com/quintans/faults"
-
 	"github.com/quintans/eventsourcing/encoding/jsoncodec"
 	"github.com/quintans/eventsourcing/util/ids"
 
@@ -30,7 +28,7 @@ type AccountCreated struct {
 	Owner string
 }
 
-func (e AccountCreated) GetKind() eventsourcing.Kind {
+func (e *AccountCreated) GetKind() eventsourcing.Kind {
 	return KindAccountCreated
 }
 
@@ -38,7 +36,7 @@ type MoneyWithdrawn struct {
 	Money int64
 }
 
-func (e MoneyWithdrawn) GetKind() eventsourcing.Kind {
+func (e *MoneyWithdrawn) GetKind() eventsourcing.Kind {
 	return KindMoneyWithdrawn
 }
 
@@ -46,7 +44,7 @@ type MoneyDeposited struct {
 	Money int64
 }
 
-func (e MoneyDeposited) GetKind() eventsourcing.Kind {
+func (e *MoneyDeposited) GetKind() eventsourcing.Kind {
 	return KindMoneyDeposited
 }
 
@@ -54,7 +52,7 @@ type OwnerUpdated struct {
 	Owner string
 }
 
-func (e OwnerUpdated) GetKind() eventsourcing.Kind {
+func (e *OwnerUpdated) GetKind() eventsourcing.Kind {
 	return KindOwnerUpdated
 }
 
@@ -79,12 +77,8 @@ func NewJSONCodec() *jsoncodec.Codec[ids.AggID] {
 }
 
 func NewAccount(owner string, money int64) (*Account, error) {
-	return NewAccountWithID(owner, ids.New(), money)
-}
-
-func NewAccountWithID(owner string, id ids.AggID, money int64) (*Account, error) {
-	a := DehydratedAccount(id)
-	if err := a.root.ApplyChange(&AccountCreated{
+	a := DehydratedAccount(ids.New())
+	if err := a.ApplyChange(&AccountCreated{
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -95,30 +89,21 @@ func NewAccountWithID(owner string, id ids.AggID, money int64) (*Account, error)
 
 func DehydratedAccount(id ids.AggID) *Account {
 	a := &Account{
-		id: id,
+		RootAggregate: eventsourcing.NewRootAggregate(id),
 	}
-	a.root = eventsourcing.NewRootAggregate(a)
+	eventsourcing.EventHandler(a, a.handleAccountCreated)
+	eventsourcing.EventHandler(a, a.handleMoneyDeposited)
+	eventsourcing.EventHandler(a, a.handleMoneyWithdrawn)
+	eventsourcing.EventHandler(a, a.handleOwnerUpdated)
 	return a
 }
 
 type Account struct {
-	root eventsourcing.RootAggregate `json:"-"`
+	eventsourcing.RootAggregate[ids.AggID]
 
-	id      ids.AggID
 	status  Status
 	balance int64
 	owner   string
-}
-
-func (a *Account) PopEvents() []eventsourcing.Eventer {
-	return a.root.PopEvents()
-}
-
-func (a *Account) GetID() ids.AggID {
-	if a == nil {
-		return ids.AggID{}
-	}
-	return a.id
 }
 
 func (a *Account) Status() Status {
@@ -143,7 +128,7 @@ func (a *Account) GetKind() eventsourcing.Kind {
 
 func (a *Account) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		err := a.root.ApplyChange(&MoneyWithdrawn{Money: money})
+		err := a.ApplyChange(&MoneyWithdrawn{Money: money})
 		if err != nil {
 			return false, err
 		}
@@ -153,44 +138,28 @@ func (a *Account) Withdraw(money int64) (bool, error) {
 }
 
 func (a *Account) Deposit(money int64) error {
-	return a.root.ApplyChange(&MoneyDeposited{Money: money})
+	return a.ApplyChange(&MoneyDeposited{Money: money})
 }
 
 func (a *Account) UpdateOwner(owner string) error {
-	return a.root.ApplyChange(&OwnerUpdated{Owner: owner})
+	return a.ApplyChange(&OwnerUpdated{Owner: owner})
 }
 
-func (a *Account) HandleEvent(event eventsourcing.Eventer) error {
-	switch t := event.(type) {
-	case *AccountCreated:
-		a.HandleAccountCreated(*t)
-	case *MoneyDeposited:
-		a.HandleMoneyDeposited(*t)
-	case *MoneyWithdrawn:
-		a.HandleMoneyWithdrawn(*t)
-	case *OwnerUpdated:
-		a.HandleOwnerUpdated(*t)
-	default:
-		return faults.Errorf("unknown event '%s' for '%s'", event.GetKind(), a.GetKind())
-	}
-	return nil
-}
-
-func (a *Account) HandleAccountCreated(event AccountCreated) {
+func (a *Account) handleAccountCreated(event *AccountCreated) {
 	a.balance = event.Money
 	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events
 	a.status = OPEN
 }
 
-func (a *Account) HandleMoneyDeposited(event MoneyDeposited) {
+func (a *Account) handleMoneyDeposited(event *MoneyDeposited) {
 	a.balance += event.Money
 }
 
-func (a *Account) HandleMoneyWithdrawn(event MoneyWithdrawn) {
+func (a *Account) handleMoneyWithdrawn(event *MoneyWithdrawn) {
 	a.balance -= event.Money
 }
 
-func (a *Account) HandleOwnerUpdated(event OwnerUpdated) {
+func (a *Account) handleOwnerUpdated(event *OwnerUpdated) {
 	a.owner = event.Owner
 }

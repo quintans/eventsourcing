@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store/mysql"
 	shared "github.com/quintans/eventsourcing/test/mysql"
@@ -31,6 +30,6 @@ func EventForwarderWorker(t *testing.T, ctx context.Context, logger *slog.Logger
 	// setting nil for the locker factory means no lock will be used.
 	// when we have multiple replicas/processes forwarding events to the message queue,
 	// we need to use a distributed lock.
-	forwarder := projection.EventForwarderWorker(logger, "account-forwarder", nil, feed.Run)
+	forwarder := worker.EventForwarder(logger, "account-forwarder", nil, feed.Run)
 	worker.RunSingleBalancer(ctx, logger, forwarder, 5*time.Second)
 }

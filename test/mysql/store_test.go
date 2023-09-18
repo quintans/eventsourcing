@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -104,10 +103,17 @@ func TestSaveAndGet(t *testing.T) {
 
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
-	count := 0
-	err = db.Get(&count, "SELECT count(*) FROM snapshots WHERE aggregate_id = ?", id.String())
+
+	snaps := []Snapshot{}
+	err = db.Select(&snaps, "SELECT * FROM snapshots WHERE aggregate_id = ? ORDER by id ASC", id.String())
 	require.NoError(t, err)
-	require.Equal(t, 1, count)
+	require.Equal(t, 1, len(snaps))
+
+	snap := snaps[0]
+	assert.Equal(t, "Account", snap.AggregateKind.String())
+	assert.Equal(t, 3, int(snap.AggregateVersion))
+	assert.Equal(t, `{"status":"OPEN","balance":130,"owner":"Paulo"}`, string(snap.Body))
+	assert.Equal(t, id.String(), snap.AggregateID)
 
 	evts := []Event{}
 	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id.String())
@@ -470,8 +476,8 @@ func TestMigration(t *testing.T) {
 	require.NoError(t, err)
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	id := ids.AggID(ulid.MustParse("014KG56DC01GG4TEB01ZEX7WFJ"))
-	acc, err := test.NewAccountWithID("Paulo Pereira", id, 100)
+	acc, err := test.NewAccount("Paulo Pereira", 100)
+	id := acc.GetID()
 	require.NoError(t, err)
 	acc.Deposit(20)
 	acc.Withdraw(15)
@@ -526,7 +532,8 @@ func TestMigration(t *testing.T) {
 	snap := snaps[0]
 	assert.Equal(t, "Account_V2", snap.AggregateKind.String())
 	assert.Equal(t, 9, int(snap.AggregateVersion))
-	assert.Equal(t, `{"id":"014KG56DC01GG4TEB01ZEX7WFJ","status":"OPEN","balance":105,"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(snap.Body))
+	assert.Equal(t, `{"status":"OPEN","balance":105,"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(snap.Body))
+	assert.Equal(t, id.String(), snap.AggregateID)
 
 	evts := []Event{}
 	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id.String())

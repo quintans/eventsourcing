@@ -51,7 +51,7 @@ type AccountCreatedV2 struct {
 	Owner NameVO
 }
 
-func (e AccountCreatedV2) GetKind() eventsourcing.Kind {
+func (e *AccountCreatedV2) GetKind() eventsourcing.Kind {
 	return KindAccountCreatedV2
 }
 
@@ -59,7 +59,7 @@ type OwnerUpdatedV2 struct {
 	Owner NameVO
 }
 
-func (e OwnerUpdatedV2) GetKind() eventsourcing.Kind {
+func (e *OwnerUpdatedV2) GetKind() eventsourcing.Kind {
 	return KindOwnerUpdatedV2
 }
 
@@ -70,7 +70,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec[ids.AggID] {
 	})
 	c.RegisterUpcaster(KindAccount, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		acc := t.(*Account)
-		acc2 := DehydratedAccountV2(acc.id)
+		acc2 := DehydratedAccountV2(acc.GetID())
 		acc2.status = acc.status
 		acc2.balance = acc.balance
 		owner, err := toNameVO(acc.owner)
@@ -89,7 +89,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec[ids.AggID] {
 	})
 	c.RegisterUpcaster(KindAccountCreated, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		created := t.(*AccountCreated)
-		return migrateAccountCreated(*created)
+		return migrateAccountCreated(created)
 	})
 	c.RegisterFactory(KindAccountCreatedV2, func(_ ids.AggID) eventsourcing.Kinder {
 		return &AccountCreatedV2{}
@@ -107,7 +107,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec[ids.AggID] {
 	})
 	c.RegisterUpcaster(KindOwnerUpdated, func(t eventsourcing.Kinder) (eventsourcing.Kinder, error) {
 		created := t.(*OwnerUpdated)
-		return migrateOwnerUpdated(*created)
+		return migrateOwnerUpdated(created)
 	})
 	c.RegisterFactory(KindOwnerUpdatedV2, func(_ ids.AggID) eventsourcing.Kinder {
 		return &OwnerUpdatedV2{}
@@ -117,7 +117,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec[ids.AggID] {
 
 func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
 	a := DehydratedAccountV2(ids.New())
-	if err := a.root.ApplyChange(&AccountCreatedV2{
+	if err := a.ApplyChange(&AccountCreatedV2{
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -128,27 +128,21 @@ func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
 
 func DehydratedAccountV2(id ids.AggID) *AccountV2 {
 	a := &AccountV2{
-		id: id,
+		RootAggregate: eventsourcing.NewRootAggregate(id),
 	}
-	a.root = eventsourcing.NewRootAggregate(a)
+	eventsourcing.EventHandler(a, a.handleAccountCreatedV2)
+	eventsourcing.EventHandler(a, a.handleMoneyDeposited)
+	eventsourcing.EventHandler(a, a.handleMoneyWithdrawn)
+	eventsourcing.EventHandler(a, a.handleOwnerUpdatedV2)
 	return a
 }
 
 type AccountV2 struct {
-	root eventsourcing.RootAggregate `json:"-"`
+	eventsourcing.RootAggregate[ids.AggID]
 
-	id      ids.AggID
 	status  Status
 	balance int64
 	owner   NameVO
-}
-
-func (a *AccountV2) PopEvents() []eventsourcing.Eventer {
-	return a.root.PopEvents()
-}
-
-func (a *AccountV2) GetID() ids.AggID {
-	return a.id
 }
 
 func (a *AccountV2) Status() Status {
@@ -169,7 +163,7 @@ func (a *AccountV2) GetKind() eventsourcing.Kind {
 
 func (a *AccountV2) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		if err := a.root.ApplyChange(&MoneyWithdrawn{Money: money}); err != nil {
+		if err := a.ApplyChange(&MoneyWithdrawn{Money: money}); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -178,45 +172,29 @@ func (a *AccountV2) Withdraw(money int64) (bool, error) {
 }
 
 func (a *AccountV2) Deposit(money int64) error {
-	return a.root.ApplyChange(&MoneyDeposited{Money: money})
+	return a.ApplyChange(&MoneyDeposited{Money: money})
 }
 
 func (a *AccountV2) UpdateOwner(owner string) error {
-	return a.root.ApplyChange(&OwnerUpdated{Owner: owner})
+	return a.ApplyChange(&OwnerUpdated{Owner: owner})
 }
 
-func (a *AccountV2) HandleEvent(event eventsourcing.Eventer) error {
-	switch t := event.(type) {
-	case *AccountCreatedV2:
-		a.HandleAccountCreatedV2(*t)
-	case *MoneyDeposited:
-		a.HandleMoneyDeposited(*t)
-	case *MoneyWithdrawn:
-		a.HandleMoneyWithdrawn(*t)
-	case *OwnerUpdatedV2:
-		a.HandleOwnerUpdatedV2(*t)
-	default:
-		return faults.Errorf("unknown event '%s' for '%s'", event.GetKind(), a.GetKind())
-	}
-	return nil
-}
-
-func (a *AccountV2) HandleAccountCreatedV2(event AccountCreatedV2) {
+func (a *AccountV2) handleAccountCreatedV2(event *AccountCreatedV2) {
 	a.balance = event.Money
 	a.owner = event.Owner
 	// this reflects that we are handling domain events and NOT property events
 	a.status = OPEN
 }
 
-func (a *AccountV2) HandleMoneyDeposited(event MoneyDeposited) {
+func (a *AccountV2) handleMoneyDeposited(event *MoneyDeposited) {
 	a.balance += event.Money
 }
 
-func (a *AccountV2) HandleMoneyWithdrawn(event MoneyWithdrawn) {
+func (a *AccountV2) handleMoneyWithdrawn(event *MoneyWithdrawn) {
 	a.balance -= event.Money
 }
 
-func (a *AccountV2) HandleOwnerUpdatedV2(event OwnerUpdatedV2) {
+func (a *AccountV2) handleOwnerUpdatedV2(event *OwnerUpdatedV2) {
 	a.owner = event.Owner
 }
 
@@ -260,23 +238,23 @@ func MigrateOwnerUpdated[K eventsourcing.ID](e *eventsourcing.Event[K], codec ev
 	return m, nil
 }
 
-func migrateAccountCreated(oldEvent AccountCreated) (AccountCreatedV2, error) {
+func migrateAccountCreated(oldEvent *AccountCreated) (*AccountCreatedV2, error) {
 	owner, err := toNameVO(oldEvent.Owner)
 	if err != nil {
-		return AccountCreatedV2{}, err
+		return nil, err
 	}
-	return AccountCreatedV2{
+	return &AccountCreatedV2{
 		Money: oldEvent.Money,
 		Owner: owner,
 	}, nil
 }
 
-func migrateOwnerUpdated(oldEvent OwnerUpdated) (OwnerUpdatedV2, error) {
+func migrateOwnerUpdated(oldEvent *OwnerUpdated) (*OwnerUpdatedV2, error) {
 	owner, err := toNameVO(oldEvent.Owner)
 	if err != nil {
-		return OwnerUpdatedV2{}, err
+		return nil, err
 	}
-	return OwnerUpdatedV2{
+	return &OwnerUpdatedV2{
 		Owner: owner,
 	}, nil
 }

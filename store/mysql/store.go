@@ -18,7 +18,6 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
-	"github.com/quintans/eventsourcing/util/ids"
 )
 
 const (
@@ -196,7 +195,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			err = r.saveEvent(c, tx, &Event{
 				ID:               id,
 				AggregateID:      aggIDStr,
-				AggregateIDHash:  ids.HashToInt(aggIDStr),
+				AggregateIDHash:  util.HashToInt(aggIDStr),
 				AggregateVersion: version,
 				AggregateKind:    eRec.AggregateKind,
 				Kind:             e.Kind,
