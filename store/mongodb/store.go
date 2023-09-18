@@ -19,7 +19,6 @@ import (
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
-	"github.com/quintans/eventsourcing/util/ids"
 )
 
 const (
@@ -215,7 +214,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 				&Event{
 					ID:               id.String(),
 					AggregateID:      aggIDStr,
-					AggregateIDHash:  ids.HashToInt(aggIDStr),
+					AggregateIDHash:  util.HashToInt(aggIDStr),
 					AggregateKind:    eRec.AggregateKind,
 					Kind:             e.Kind,
 					Body:             e.Body,

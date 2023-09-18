@@ -259,7 +259,7 @@ func (es EventStore[T, K, PK]) retrieve(ctx context.Context, aggregateID K) (T, 
 	var eventsCounter uint32
 	for _, event := range events {
 		// if the aggregate was not instantiated because the snap was not found
-		if aggregate.GetID() == zeroID {
+		if aggregateVersion == 0 {
 			aggregate, err = es.RehydrateAggregate(event.AggregateKind, aggregateID, nil)
 			if err != nil {
 				return zero, 0, time.Time{}, 0, err
@@ -273,7 +273,7 @@ func (es EventStore[T, K, PK]) retrieve(ctx context.Context, aggregateID K) (T, 
 		eventsCounter++
 	}
 
-	if aggregate.GetID() == zeroID {
+	if aggregateVersion == 0 {
 		return zero, 0, time.Time{}, 0, ErrUnknownAggregateID
 	}
 

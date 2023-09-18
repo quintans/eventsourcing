@@ -1,82 +1,74 @@
-package eventsourcing_test
+package eventsourcing
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/quintans/eventsourcing"
 	"github.com/stretchr/testify/assert"
 )
 
 type Created struct{}
 
-func (Created) GetKind() eventsourcing.Kind {
-	return ""
+func (Created) GetKind() Kind {
+	return "created"
 }
 
 type Updated struct{}
 
-func (Updated) GetKind() eventsourcing.Kind {
-	return ""
+func (Updated) GetKind() Kind {
+	return "updated"
 }
 
 type Unmapped struct{}
 
-func (Unmapped) GetKind() eventsourcing.Kind {
-	return ""
+func (Unmapped) GetKind() Kind {
+	return "unmapped"
 }
 
-type Foo struct{}
+type Foo struct {
+	RootAggregate[uuid.UUID]
+}
 
 func (Foo) GetID() uuid.UUID {
 	return uuid.UUID{}
 }
 
-func (*Foo) PopEvents() []eventsourcing.Eventer {
+func (*Foo) PopEvents() []Eventer {
 	return nil
 }
 
-func (*Foo) HandleEvent(eventsourcing.Eventer) error {
+func (*Foo) HandleEvent(Eventer) error {
 	return nil
 }
 
-func (Foo) GetKind() eventsourcing.Kind {
-	return ""
+func (Foo) GetKind() Kind {
+	return "foo"
 }
 
-func (*Foo) HandleCreated(Created) error {
-	return nil
+func (*Foo) HandleCreated(Created) {
 }
 
-var myError = errors.New("ERROR!")
-
-func (*Foo) HandleUpdated(Updated) error {
-	return myError
+func (*Foo) HandleUpdated(Updated) {
 }
 
 func TestHandlerCall(t *testing.T) {
 	tcs := map[string]struct {
-		event eventsourcing.Eventer
+		event Eventer
 		err   error
 	}{
 		"golden": {
 			event: Created{},
 		},
-		"returning_error": {
-			event: Updated{},
-			err:   myError,
-		},
 		"no_handler": {
 			event: Unmapped{},
-			err:   eventsourcing.ErrHandlerNotFound,
+			err:   ErrHandlerNotFound,
 		},
 	}
 
 	for name, tc := range tcs {
 		t.Run(name, func(t *testing.T) {
 			f := &Foo{}
-			err := eventsourcing.HandlerCall[uuid.UUID](f, tc.event)
+			err := HandlerCall[uuid.UUID](f, tc.event)
 			if tc.err != nil {
 				assert.ErrorIs(t, err, tc.err)
 			} else {

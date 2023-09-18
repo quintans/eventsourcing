@@ -31,7 +31,7 @@ type RunWorker struct {
 	mu         sync.RWMutex
 }
 
-func NewRunWorker(logger *slog.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
+func NewRun(logger *slog.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
 	return newRunWorker(logger, name, group, locker, task)
 }
 

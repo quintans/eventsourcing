@@ -61,7 +61,7 @@ func Project[K eventsourcing.ID](
 		"projection", projection.Name(),
 	)
 
-	return worker.NewRunWorker(
+	return worker.NewRun(
 		logger,
 		name,
 		projection.Name(),

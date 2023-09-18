@@ -17,7 +17,7 @@ import (
 	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/store"
-	"github.com/quintans/eventsourcing/util/ids"
+	"github.com/quintans/eventsourcing/util"
 )
 
 const retries = 3
@@ -227,7 +227,7 @@ func (r *EsRepository[K, PK]) addNoOp(ctx context.Context, metadata store.Aggreg
 	err := r.saveEvent(ctx, tx, &Event{
 		ID:               id,
 		AggregateID:      aggID,
-		AggregateIDHash:  ids.HashToInt(aggID),
+		AggregateIDHash:  util.HashToInt(aggID),
 		AggregateVersion: ver,
 		AggregateKind:    metadata.Type,
 		Kind:             eventsourcing.KindNoOpEvent,
