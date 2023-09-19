@@ -94,6 +94,12 @@ func WithMetadataHook[K eventsourcing.ID, PK eventsourcing.IDPt[K]](fn store.Met
 	}
 }
 
+func WithSkipSchemaCreation[K eventsourcing.ID, PK eventsourcing.IDPt[K]](skip bool) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
+		r.skipSchemaCreation = skip
+	}
+}
+
 type Repository struct {
 	client *mongo.Client
 }
@@ -142,10 +148,12 @@ type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	snapshotsCollectionName string
 	metadata                eventsourcing.Metadata
 	metadataHook            store.MetadataHook[K]
+	skipSchemaCreation      bool
+	postSchemaCreation      func(Schema) []bson.D
 }
 
 // NewStoreWithURI creates a new instance of MongoEsRepository
-func NewStoreWithURI[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString, database string, opts ...Option[K, PK]) (*EsRepository[K, PK], error) {
+func NewStoreWithURI[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.Context, connString, database string, opts ...Option[K, PK]) (*EsRepository[K, PK], error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -154,11 +162,11 @@ func NewStoreWithURI[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString, d
 		return nil, faults.Wrap(err)
 	}
 
-	return NewStore[K, PK](client, database, opts...), nil
+	return NewStore[K, PK](ctx, client, database, opts...)
 }
 
 // NewStore creates a new instance of MongoEsRepository
-func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](client *mongo.Client, database string, opts ...Option[K, PK]) *EsRepository[K, PK] {
+func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.Context, client *mongo.Client, database string, opts ...Option[K, PK]) (*EsRepository[K, PK], error) {
 	r := &EsRepository[K, PK]{
 		Repository: Repository{
 			client: client,
@@ -172,7 +180,16 @@ func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](client *mongo.Client
 		o(r)
 	}
 
-	return r
+	if r.skipSchemaCreation {
+		return r, nil
+	}
+
+	err := r.createSchema(ctx)
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
+
+	return r, nil
 }
 
 func (r *EsRepository[K, PK]) Client() *mongo.Client {

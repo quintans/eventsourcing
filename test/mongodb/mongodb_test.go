@@ -55,7 +55,7 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI[ids.AggID](dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI[ids.AggID](ctx, dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
@@ -173,9 +173,13 @@ func TestPollListener(t *testing.T) {
 
 	ctx := context.Background()
 	r, err := mongodb.NewStoreWithURI(
+		ctx,
 		dbConfig.URL(),
 		dbConfig.Database,
 		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
+		mongodb.WithPostSchemaCreation[ids.AggID](func(_ mongodb.Schema) []bson.D {
+			return []bson.D{{{"create", "outbox"}}}
+		}),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
@@ -235,9 +239,13 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	ctx := context.Background()
 	r, err := mongodb.NewStoreWithURI(
+		ctx,
 		dbConfig.URL(),
 		dbConfig.Database,
 		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
+		mongodb.WithPostSchemaCreation[ids.AggID](func(_ mongodb.Schema) []bson.D {
+			return []bson.D{{{"create", "outbox"}}}
+		}),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
@@ -297,9 +305,13 @@ func TestListenerWithMetadata(t *testing.T) {
 
 	key := "tenant"
 	r, err := mongodb.NewStoreWithURI(
+		context.Background(),
 		dbConfig.URL(),
 		dbConfig.Database,
 		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
+		mongodb.WithPostSchemaCreation[ids.AggID](func(_ mongodb.Schema) []bson.D {
+			return []bson.D{{{"create", "outbox"}}}
+		}),
 		mongodb.WithMetadataHook[ids.AggID](func(ctx context.Context) eventsourcing.Metadata {
 			val := ctx.Value(key).(string)
 			return eventsourcing.Metadata{key: val}
@@ -376,7 +388,7 @@ func TestForget(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI[ids.AggID](dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI[ids.AggID](ctx, dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -518,7 +530,7 @@ func TestMigration(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI[ids.AggID](dbConfig.URL(), dbConfig.Database)
+	r, err := mongodb.NewStoreWithURI[ids.AggID](ctx, dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
