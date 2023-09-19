@@ -23,17 +23,16 @@ type Eventer interface {
 
 type Handler[E any] func(E)
 
-func NewRootAggregate[K ID](id K) RootAggregate[K] {
-	return RootAggregate[K]{
-		_id:       id,
-		_registry: map[Kind]func(Eventer){},
-	}
-}
-
 type RootAggregate[K ID] struct {
 	_id       K
-	_events   []Eventer
-	_registry map[Kind]func(Eventer)
+	_registry *Registry
+}
+
+func NewRootAggregate[K ID](registry *Registry, id K) RootAggregate[K] {
+	return RootAggregate[K]{
+		_id:       id,
+		_registry: registry,
+	}
 }
 
 func (a *RootAggregate[K]) GetID() K {
@@ -45,9 +44,11 @@ func (a *RootAggregate[K]) GetID() K {
 }
 
 func (a *RootAggregate[K]) PopEvents() []Eventer {
-	evs := a._events
-	a._events = nil
-	return evs
+	return a._registry.PopEvents()
+}
+
+func (a *RootAggregate[K]) HandleEvent(event Eventer) error {
+	return a._registry.handlerCall(event)
 }
 
 func EventHandler[E Eventer](r EventRegister, handler Handler[E]) {
@@ -57,16 +58,33 @@ func EventHandler[E Eventer](r EventRegister, handler Handler[E]) {
 	})
 }
 
+func (a *Registry) RegisterEvent(kind Kind, handler func(e Eventer)) {
+	a.registry[kind] = handler
+}
+
 type EventRegister interface {
 	RegisterEvent(kind Kind, handler func(e Eventer))
 }
 
-func (a *RootAggregate[K]) RegisterEvent(kind Kind, handler func(e Eventer)) {
-	a._registry[kind] = handler
+type Registry struct {
+	events   []Eventer
+	registry map[Kind]func(Eventer)
 }
 
-func (a *RootAggregate[K]) handlerCall(event Eventer) error {
-	handler := a._registry[event.GetKind()]
+func NewRegistry() *Registry {
+	return &Registry{
+		registry: map[Kind]func(Eventer){},
+	}
+}
+
+func (a *Registry) PopEvents() []Eventer {
+	evs := a.events
+	a.events = nil
+	return evs
+}
+
+func (a *Registry) handlerCall(event Eventer) error {
+	handler := a.registry[event.GetKind()]
 	if handler == nil {
 		return faults.Errorf("handler method found for %s: %w", event.GetKind(), ErrHandlerNotFound)
 	}
@@ -75,17 +93,13 @@ func (a *RootAggregate[K]) handlerCall(event Eventer) error {
 	return nil
 }
 
-func (a *RootAggregate[K]) ApplyChange(event Eventer) error {
+func (a *Registry) ApplyChange(event Eventer) error {
 	if err := a.handlerCall(event); err != nil {
 		return err
 	}
 
-	a._events = append(a._events, event)
+	a.events = append(a.events, event)
 	return nil
-}
-
-func (a *RootAggregate[K]) HandleEvent(event Eventer) error {
-	return a.handlerCall(event)
 }
 
 var (

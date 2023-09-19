@@ -20,8 +20,9 @@ func (*Foo) GetKind() eventsourcing.Kind {
 }
 
 func TestEncode(t *testing.T) {
+	reg := eventsourcing.NewRegistry()
 	f := &Foo{
-		RootAggregate: eventsourcing.NewRootAggregate(uuid.New()),
+		RootAggregate: eventsourcing.NewRootAggregate(reg, uuid.New()),
 		firstName:     "Paulo",
 	}
 

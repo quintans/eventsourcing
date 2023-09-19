@@ -117,7 +117,7 @@ func NewJSONCodecWithUpcaster() *jsoncodec.Codec[ids.AggID] {
 
 func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
 	a := DehydratedAccountV2(ids.New())
-	if err := a.ApplyChange(&AccountCreatedV2{
+	if err := a._reg.ApplyChange(&AccountCreatedV2{
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -127,18 +127,20 @@ func NewAccountV2(owner NameVO, money int64) (*AccountV2, error) {
 }
 
 func DehydratedAccountV2(id ids.AggID) *AccountV2 {
+	reg := eventsourcing.NewRegistry()
 	a := &AccountV2{
-		RootAggregate: eventsourcing.NewRootAggregate(id),
+		RootAggregate: eventsourcing.NewRootAggregate(reg, id),
 	}
-	eventsourcing.EventHandler(a, a.handleAccountCreatedV2)
-	eventsourcing.EventHandler(a, a.handleMoneyDeposited)
-	eventsourcing.EventHandler(a, a.handleMoneyWithdrawn)
-	eventsourcing.EventHandler(a, a.handleOwnerUpdatedV2)
+	eventsourcing.EventHandler(reg, a.handleAccountCreatedV2)
+	eventsourcing.EventHandler(reg, a.handleMoneyDeposited)
+	eventsourcing.EventHandler(reg, a.handleMoneyWithdrawn)
+	eventsourcing.EventHandler(reg, a.handleOwnerUpdatedV2)
 	return a
 }
 
 type AccountV2 struct {
 	eventsourcing.RootAggregate[ids.AggID]
+	_reg *eventsourcing.Registry
 
 	status  Status
 	balance int64
@@ -163,7 +165,7 @@ func (a *AccountV2) GetKind() eventsourcing.Kind {
 
 func (a *AccountV2) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		if err := a.ApplyChange(&MoneyWithdrawn{Money: money}); err != nil {
+		if err := a._reg.ApplyChange(&MoneyWithdrawn{Money: money}); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -172,11 +174,11 @@ func (a *AccountV2) Withdraw(money int64) (bool, error) {
 }
 
 func (a *AccountV2) Deposit(money int64) error {
-	return a.ApplyChange(&MoneyDeposited{Money: money})
+	return a._reg.ApplyChange(&MoneyDeposited{Money: money})
 }
 
 func (a *AccountV2) UpdateOwner(owner string) error {
-	return a.ApplyChange(&OwnerUpdated{Owner: owner})
+	return a._reg.ApplyChange(&OwnerUpdated{Owner: owner})
 }
 
 func (a *AccountV2) handleAccountCreatedV2(event *AccountCreatedV2) {
