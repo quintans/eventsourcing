@@ -28,6 +28,7 @@ const (
 )
 
 type resumeKV struct {
+	consuming bool
 	eventID   eventid.EventID
 	partition uint32
 	sequence  uint64
@@ -93,10 +94,10 @@ func asyncSaveResumes(ctx context.Context, logger *slog.Logger, resumeStore stor
 			}
 
 			var t Token
-			if !kv.eventID.IsZero() {
-				t = NewCatchupToken(kv.eventID)
+			if kv.consuming {
+				t = NewConsumerToken(kv.sequence, kv.eventID)
 			} else {
-				t = NewConsumerToken(kv.sequence)
+				t = NewCatchupToken(kv.eventID)
 			}
 			err := saveResume(ctx, resumeStore, projName, topic, kv.partition, t)
 			if err != nil {
@@ -263,7 +264,7 @@ func startConsuming[K eventsourcing.ID](ctx context.Context, logger *slog.Logger
 			return faults.Wrap(er)
 		}
 
-		checkPointCh <- resumeKV{sequence: seq, partition: partition}
+		checkPointCh <- resumeKV{consuming: true, sequence: seq, partition: partition, eventID: e.ID}
 		return nil
 	}
 	err := subscriber.StartConsumer(ctx, subPos, projection.Name(), handler)

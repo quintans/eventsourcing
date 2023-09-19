@@ -46,11 +46,14 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink[ids.AggID](&integration.MockKVStore{}, logger, topic, 1, uri)
+	kvStoreSink := &integration.MockKVStore{}
+	sinker, err := nats.NewSink[ids.AggID](kvStoreSink, logger, topic, 1, uri)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
-	proj := projectionFromNATS(t, ctx, uri, esRepo)
+	// before data
+	kvStoreProj := &integration.MockKVStore{}
+	proj := projectionFromNATS(t, ctx, uri, esRepo, kvStoreProj)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	require.NoError(t, err)
@@ -73,6 +76,12 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 		Amount: 130,
 	}, balance)
 
+	putsProj := kvStoreProj.Puts()
+	assert.Len(t, putsProj, 3)
+
+	puts := kvStoreSink.Puts()
+	assert.Len(t, puts, 3)
+
 	// shutdown
 	cancel()
 	time.Sleep(time.Second)
@@ -93,7 +102,8 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	sinker, err := nats.NewSink[ids.AggID](&integration.MockKVStore{}, logger, topic, 1, uri)
+	kvStoreSink := &integration.MockKVStore{}
+	sinker, err := nats.NewSink[ids.AggID](kvStoreSink, logger, topic, 1, uri)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
@@ -108,8 +118,9 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	// giving time to forward events
 	time.Sleep(time.Second)
 
-	// replay: start projection after we have some data on the event bus
-	proj := projectionFromNATS(t, ctx, uri, esRepo)
+	// after data (replay): start projection after we have some data on the event bus
+	kvStoreProj := &integration.MockKVStore{}
+	proj := projectionFromNATS(t, ctx, uri, esRepo, kvStoreProj)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -136,6 +147,12 @@ func TestNATSProjectionAfterData(t *testing.T) {
 		Name:   "Paulo",
 		Amount: 115,
 	}, balance)
+
+	putsProj := kvStoreProj.Puts()
+	assert.Len(t, putsProj, 4)
+
+	puts := kvStoreSink.Puts()
+	assert.Len(t, puts, 4)
 
 	// shutdown
 	cancel()
@@ -179,7 +196,7 @@ func runNatsContainer(t *testing.T) string {
 	return fmt.Sprintf("nats://%s:%s", hostIP, mappedPort.Port())
 }
 
-func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID]) *integration.ProjectionMock[ids.AggID] {
+func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID], kvStore *integration.MockKVStore) *integration.ProjectionMock[ids.AggID] {
 	// create projection
 	proj := integration.NewProjectionMock[ids.AggID]("balances", test.NewJSONCodec())
 
@@ -187,7 +204,6 @@ func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *m
 		Topic:      "accounts",
 		Partitions: []uint32{1},
 	}
-	kvStore := &integration.MockKVStore{}
 
 	sub, err := pnats.NewSubscriberWithURL[ids.AggID](ctx, logger, uri, topic)
 	require.NoError(t, err)

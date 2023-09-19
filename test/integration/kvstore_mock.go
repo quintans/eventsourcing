@@ -10,8 +10,15 @@ import (
 
 var _ store.KVRStore = (*MockKVStore)(nil)
 
+type KV struct {
+	Key, Value string
+}
+
 type MockKVStore struct {
 	store sync.Map
+
+	mu   sync.Mutex
+	puts []KV
 }
 
 func (s *MockKVStore) Put(_ context.Context, key, token string) (er error) {
@@ -22,6 +29,11 @@ func (s *MockKVStore) Put(_ context.Context, key, token string) (er error) {
 	}
 
 	s.store.Store(key, token)
+
+	s.mu.Lock()
+	s.puts = append(s.puts, KV{Key: key, Value: token})
+	s.mu.Unlock()
+
 	return nil
 }
 
@@ -46,4 +58,16 @@ func (s *MockKVStore) Data() map[string]string {
 		return true
 	})
 	return data
+}
+
+func (s *MockKVStore) Puts() []KV {
+	kvs := []KV{}
+
+	s.mu.Lock()
+	for _, v := range s.puts {
+		kvs = append(kvs, v)
+	}
+	s.mu.Unlock()
+
+	return kvs
 }

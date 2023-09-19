@@ -54,6 +54,9 @@ func (r KVStore) Get(ctx context.Context, key string) (string, error) {
 }
 
 func (m KVStore) Put(ctx context.Context, key string, value string) error {
+	if value == "" {
+		return nil
+	}
 	return m.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s(id, value) VALUES(?, ?) ON DUPLICATE KEY UPDATE value = ?", m.table), key, value, value)
 		return faults.Wrapf(err, "setting value '%s' for key '%s': %w", value, key, err)
