@@ -43,7 +43,7 @@ func NewKVStore(db *sql.DB, table string) KVStore {
 
 func (r KVStore) Get(ctx context.Context, key string) (string, error) {
 	row := kvStoreRow{}
-	if err := r.db.GetContext(ctx, &row, fmt.Sprintf("SELECT value FROM %s WHERE key = ?", r.table), key); err != nil {
+	if err := r.db.GetContext(ctx, &row, fmt.Sprintf("SELECT value FROM %s WHERE id = ?", r.table), key); err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil
 		}
@@ -55,7 +55,7 @@ func (r KVStore) Get(ctx context.Context, key string) (string, error) {
 
 func (m KVStore) Put(ctx context.Context, key string, value string) error {
 	return m.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s SET value = ? WHERE key = ?", m.table), value, key)
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s(id, value) VALUES(?, ?) ON DUPLICATE KEY UPDATE value = ?", m.table), key, value, value)
 		return faults.Wrapf(err, "setting value '%s' for key '%s': %w", value, key, err)
 	})
 }

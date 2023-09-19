@@ -132,7 +132,11 @@ func dbSchema(dbURL string) error {
 			aggregate_kind VARCHAR (50) NOT NULL,
 			kind VARCHAR (50) NOT NULL,
 			meta_tenant VARCHAR (50) NULL
-		);`,
+		)ENGINE=innodb;`,
+		`CREATE TABLE IF NOT EXISTS keyvalue(
+			id VARCHAR(50) PRIMARY KEY,
+			value VARCHAR (256) NOT NULL
+		)ENGINE=innodb;`,
 	}
 
 	for _, cmd := range cmds {

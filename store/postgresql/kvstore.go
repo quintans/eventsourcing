@@ -55,7 +55,7 @@ func (r KVStore) Get(ctx context.Context, key string) (string, error) {
 
 func (m KVStore) Put(ctx context.Context, key string, value string) error {
 	return m.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s SET value = $1 WHERE key = $2", m.table), value, key)
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s(key, value) VALUES($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", m.table), key, value)
 		return faults.Wrapf(err, "setting value '%s' for key '%s': %w", value, key, err)
 	})
 }
