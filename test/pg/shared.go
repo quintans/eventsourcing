@@ -154,6 +154,11 @@ func dbSchema(dbConfig DBConfig) error {
 		kind VARCHAR (50) NOT NULL,
 		meta_tenant VARCHAR (50) NULL
 	);
+
+	CREATE TABLE IF NOT EXISTS keyvalue(
+		key VARCHAR PRIMARY KEY,
+		value VARCHAR NOT NULL
+	);
 	`)
 
 	return nil

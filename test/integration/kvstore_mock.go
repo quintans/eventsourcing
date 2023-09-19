@@ -38,3 +38,12 @@ func (s *MockKVStore) Get(_ context.Context, key string) (_ string, er error) {
 	}
 	return v.(string), nil
 }
+
+func (s *MockKVStore) Data() map[string]string {
+	data := map[string]string{}
+	s.store.Range(func(key, value any) bool {
+		data[key.(string)] = value.(string)
+		return true
+	})
+	return data
+}
