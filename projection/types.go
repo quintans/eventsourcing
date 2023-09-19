@@ -155,10 +155,11 @@ type Token struct {
 	sequence uint64
 }
 
-func NewConsumerToken(sequence uint64) Token {
+func NewConsumerToken(sequence uint64, eventID eventid.EventID) Token {
 	return Token{
 		kind:     ConsumerToken,
 		sequence: sequence,
+		eventID:  eventID,
 	}
 }
 

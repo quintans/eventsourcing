@@ -60,6 +60,9 @@ func (m KVStore) Get(ctx context.Context, key string) (string, error) {
 }
 
 func (m KVStore) Put(ctx context.Context, key string, value string) error {
+	if value == "" {
+		return nil
+	}
 	return m.WithTx(ctx, func(ctx context.Context) error {
 		opts := options.Update().SetUpsert(true)
 		_, err := m.collection.UpdateOne(

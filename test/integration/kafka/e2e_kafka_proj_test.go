@@ -42,13 +42,14 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	kvStore := &integration.MockKVStore{}
-	sinker, err := kafka.NewSink[ids.AggID](logger, kvStore, topic, uris, nil)
+	kvStoreSink := &integration.MockKVStore{}
+	sinker, err := kafka.NewSink[ids.AggID](logger, kvStoreSink, topic, uris, nil)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
 	// before data
-	proj := projectionFromKafka(t, ctx, uris, esRepo)
+	kvStoreProj := &integration.MockKVStore{}
+	proj := projectionFromKafka(t, ctx, uris, esRepo, kvStoreProj)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	require.NoError(t, err)
@@ -71,7 +72,11 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 		Amount: 130,
 	}, balance)
 
-	assert.Len(t, kvStore.Data(), 1)
+	putsProj := kvStoreProj.Puts()
+	assert.Len(t, putsProj, 3)
+
+	puts := kvStoreSink.Puts()
+	assert.Len(t, puts, 3)
 
 	// shutdown
 	cancel()
@@ -91,8 +96,8 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
-	kvStore := &integration.MockKVStore{}
-	sinker, err := kafka.NewSink[ids.AggID](logger, kvStore, topic, uris, nil)
+	kvStoreSink := &integration.MockKVStore{}
+	sinker, err := kafka.NewSink[ids.AggID](logger, kvStoreSink, topic, uris, nil)
 	require.NoError(t, err)
 	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
 
@@ -108,7 +113,8 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	time.Sleep(time.Second)
 
 	// after data (replay): start projection after we have some data on the event bus
-	proj := projectionFromKafka(t, ctx, uris, esRepo)
+	kvStoreProj := &integration.MockKVStore{}
+	proj := projectionFromKafka(t, ctx, uris, esRepo, kvStoreProj)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -136,7 +142,11 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 		Amount: 115,
 	}, balance)
 
-	assert.Len(t, kvStore.Data(), 1)
+	putsProj := kvStoreProj.Puts()
+	assert.Len(t, putsProj, 4)
+
+	puts := kvStoreSink.Puts()
+	assert.Len(t, puts, 4)
 
 	// shutdown
 	cancel()
@@ -156,11 +166,9 @@ func runKafkaContainer(t *testing.T) []string {
 	return []string{"localhost:29092"}
 }
 
-func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID]) *integration.ProjectionMock[ids.AggID] {
+func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID], kvStore *integration.MockKVStore) *integration.ProjectionMock[ids.AggID] {
 	// create projection
 	proj := integration.NewProjectionMock[ids.AggID]("balances", test.NewJSONCodec())
-
-	kvStore := &integration.MockKVStore{}
 
 	sub, err := pkafka.NewSubscriberWithBrokers[ids.AggID](ctx, logger, uri, "accounts", nil)
 	require.NoError(t, err)
