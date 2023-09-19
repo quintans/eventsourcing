@@ -78,7 +78,7 @@ func NewJSONCodec() *jsoncodec.Codec[ids.AggID] {
 
 func NewAccount(owner string, money int64) (*Account, error) {
 	a := DehydratedAccount(ids.New())
-	if err := a.ApplyChange(&AccountCreated{
+	if err := a._reg.ApplyChange(&AccountCreated{
 		Money: money,
 		Owner: owner,
 	}); err != nil {
@@ -88,18 +88,21 @@ func NewAccount(owner string, money int64) (*Account, error) {
 }
 
 func DehydratedAccount(id ids.AggID) *Account {
+	reg := eventsourcing.NewRegistry()
 	a := &Account{
-		RootAggregate: eventsourcing.NewRootAggregate(id),
+		RootAggregate: eventsourcing.NewRootAggregate(reg, id),
+		_reg:          reg,
 	}
-	eventsourcing.EventHandler(a, a.handleAccountCreated)
-	eventsourcing.EventHandler(a, a.handleMoneyDeposited)
-	eventsourcing.EventHandler(a, a.handleMoneyWithdrawn)
-	eventsourcing.EventHandler(a, a.handleOwnerUpdated)
+	eventsourcing.EventHandler(reg, a.handleAccountCreated)
+	eventsourcing.EventHandler(reg, a.handleMoneyDeposited)
+	eventsourcing.EventHandler(reg, a.handleMoneyWithdrawn)
+	eventsourcing.EventHandler(reg, a.handleOwnerUpdated)
 	return a
 }
 
 type Account struct {
 	eventsourcing.RootAggregate[ids.AggID]
+	_reg *eventsourcing.Registry
 
 	status  Status
 	balance int64
@@ -128,7 +131,7 @@ func (a *Account) GetKind() eventsourcing.Kind {
 
 func (a *Account) Withdraw(money int64) (bool, error) {
 	if a.balance >= money {
-		err := a.ApplyChange(&MoneyWithdrawn{Money: money})
+		err := a._reg.ApplyChange(&MoneyWithdrawn{Money: money})
 		if err != nil {
 			return false, err
 		}
@@ -138,11 +141,11 @@ func (a *Account) Withdraw(money int64) (bool, error) {
 }
 
 func (a *Account) Deposit(money int64) error {
-	return a.ApplyChange(&MoneyDeposited{Money: money})
+	return a._reg.ApplyChange(&MoneyDeposited{Money: money})
 }
 
 func (a *Account) UpdateOwner(owner string) error {
-	return a.ApplyChange(&OwnerUpdated{Owner: owner})
+	return a._reg.ApplyChange(&OwnerUpdated{Owner: owner})
 }
 
 func (a *Account) handleAccountCreated(event *AccountCreated) {
