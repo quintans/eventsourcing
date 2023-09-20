@@ -61,7 +61,10 @@ func TestSaveAndGet(t *testing.T) {
 
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	acc, err := test.NewAccount("Paulo", 100)
+	acc, err := es.Retrieve(ctx, ids.New())
+	require.ErrorIs(t, err, eventsourcing.ErrUnknownAggregateID)
+
+	acc, err = test.NewAccount("Paulo", 100)
 	id := acc.GetID()
 	require.NoError(t, err)
 	acc.Deposit(10)
