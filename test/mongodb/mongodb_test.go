@@ -19,6 +19,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/sink/poller"
+	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/util/ids"
@@ -315,7 +316,8 @@ func TestListenerWithMetadata(t *testing.T) {
 		mongodb.WithPostSchemaCreation[ids.AggID](func(_ mongodb.Schema) []bson.D {
 			return []bson.D{{{"create", "outbox"}}}
 		}),
-		mongodb.WithMetadataHook[ids.AggID](func(ctx context.Context) eventsourcing.Metadata {
+		mongodb.WithMetadataHook[ids.AggID](func(c *store.MetadataHookContext) eventsourcing.Metadata {
+			ctx := c.Context()
 			val := ctx.Value(key).(string)
 			return eventsourcing.Metadata{key: val}
 		}),

@@ -108,12 +108,14 @@ func (r *OutboxRepository[K]) collection() *mongo.Collection {
 }
 
 func OutboxInsertHandler[K eventsourcing.ID](database, collName string) store.InTxHandler[K] {
-	return func(ctx context.Context, event *eventsourcing.Event[K]) error {
+	return func(c *store.InTxHandlerContext[K]) error {
+		ctx := c.Context()
 		sess := mongo.SessionFromContext(ctx)
 		if sess == nil {
 			return faults.Errorf("no session in context")
 		}
 
+		event := c.Event()
 		coll := sess.Client().Database(database).Collection(collName)
 		_, err := coll.InsertOne(ctx, Outbox{
 			ID:              event.ID.String(),

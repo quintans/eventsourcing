@@ -27,6 +27,28 @@ const (
 	defaultSnapshotsCollection = "snapshots"
 )
 
+type InTxHandler[K eventsourcing.ID] func(*InTxHandlerContext[K]) error
+
+type InTxHandlerContext[K eventsourcing.ID] struct {
+	ctx   context.Context
+	event *eventsourcing.Event[K]
+}
+
+func NewInTxHandlerContext[K eventsourcing.ID](ctx context.Context, event *eventsourcing.Event[K]) *InTxHandlerContext[K] {
+	return &InTxHandlerContext[K]{
+		ctx:   ctx,
+		event: event,
+	}
+}
+
+func (c *InTxHandlerContext[K]) Context() context.Context {
+	return c.ctx
+}
+
+func (c *InTxHandlerContext[K]) Event() *eventsourcing.Event[K] {
+	return c.event
+}
+
 // Event is the event data stored in the database
 type Event struct {
 	ID               string             `bson:"_id,omitempty"`
@@ -225,7 +247,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			version++
 			id = e.ID
 			aggIDStr := eRec.AggregateID.String()
-			metadata := r.metadataMerge(ctx, r.metadata)
+			metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
 			err := r.saveEvent(
 				ctx,
 				&Event{
@@ -261,11 +283,11 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 	return id, version, nil
 }
 
-func (r *EsRepository[K, PK]) metadataMerge(ctx context.Context, metadata eventsourcing.Metadata) eventsourcing.Metadata {
+func (r *EsRepository[K, PK]) metadataMerge(ctx context.Context, metadata eventsourcing.Metadata, kind store.MetadataHookKind) eventsourcing.Metadata {
 	if r.metadataHook == nil {
 		return metadata
 	}
-	meta := r.metadataHook(ctx)
+	meta := r.metadataHook(store.NewMetadataHookContext(ctx, kind))
 	return util.MapMerge(metadata, meta)
 }
 
@@ -289,7 +311,7 @@ func (r *EsRepository[K, PK]) applyTxHandlers(ctx context.Context, doc *Event, i
 		return err
 	}
 	for _, handler := range r.txHandlers {
-		err := handler(ctx, e)
+		err := handler(store.NewInTxHandlerContext(ctx, e))
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -316,13 +338,13 @@ func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (e
 	opts.SetSort(bson.D{{"aggregate_version", -1}})
 	filter := bson.D{{"aggregate_id", aggregateID.String()}}
 
-	metadata := r.metadataMerge(ctx, r.metadata)
+	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
 	for k, v := range metadata {
 		filter = append(filter, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
 	}
 
 	if err := r.snapshotCollection().FindOne(ctx, filter, opts).Decode(&snap); err != nil {
-		if err == mongo.ErrNoDocuments {
+		if errors.Is(err, mongo.ErrNoDocuments) {
 			return eventsourcing.Snapshot[K]{}, nil
 		}
 		return eventsourcing.Snapshot[K]{}, faults.Errorf("unable to get snapshot for aggregate '%s': %w", aggregateID, err)
@@ -344,7 +366,7 @@ func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (e
 }
 
 func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
-	metadata := r.metadataMerge(ctx, r.metadata)
+	metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
 	return r.saveSnapshot(ctx, &Snapshot{
 		ID:               snapshot.ID.String(),
 		AggregateID:      snapshot.AggregateID.String(),
@@ -372,7 +394,7 @@ func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateI
 		filter = append(filter, bson.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
 	}
 
-	metadata := r.metadataMerge(ctx, r.metadata)
+	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
 	for k, v := range metadata {
 		filter = append(filter, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
 	}
@@ -412,10 +434,6 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 	filter := bson.D{
 		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
 		{"kind", bson.D{{"$eq", request.EventKind}}},
-	}
-	metadata := r.metadataMerge(ctx, r.metadata)
-	for k, v := range metadata {
-		filter = append(filter, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
 	}
 	cursor, err := r.eventsCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
@@ -485,7 +503,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 		{"migration", bson.D{{"$eq", 0}}},
 	}
 
-	metadata := r.metadataMerge(ctx, r.metadata)
+	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
 	flt = buildFilter(metadata, filter, flt)
 
 	opts := options.Find().SetSort(bson.D{{"_id", 1}})

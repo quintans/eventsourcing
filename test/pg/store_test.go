@@ -280,7 +280,8 @@ func TestListenerWithMetadata(t *testing.T) {
 	r, err := postgresql.NewStoreWithURL(
 		dbConfig.URL(),
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
-		postgresql.WithMetadataHook[ids.AggID](func(ctx context.Context) eventsourcing.Metadata {
+		postgresql.WithMetadataHook[ids.AggID](func(c *store.MetadataHookContext) eventsourcing.Metadata {
+			ctx := c.Context()
 			val := ctx.Value(key).(string)
 			return eventsourcing.Metadata{key: val}
 		}),

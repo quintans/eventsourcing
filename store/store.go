@@ -11,9 +11,56 @@ import (
 
 const MetaColumnPrefix = "meta_"
 
+type InTxHandlerContext[K eventsourcing.ID] struct {
+	ctx   context.Context
+	event *eventsourcing.Event[K]
+}
+
+func NewInTxHandlerContext[K eventsourcing.ID](ctx context.Context, event *eventsourcing.Event[K]) *InTxHandlerContext[K] {
+	return &InTxHandlerContext[K]{
+		ctx:   ctx,
+		event: event,
+	}
+}
+
+func (c *InTxHandlerContext[K]) Context() context.Context {
+	return c.ctx
+}
+
+func (c *InTxHandlerContext[K]) Event() *eventsourcing.Event[K] {
+	return c.event
+}
+
+type MetadataHookKind string
+
+const (
+	OnPersist  = MetadataHookKind("persist")
+	OnRetrieve = MetadataHookKind("retrieve")
+)
+
+type MetadataHookContext struct {
+	ctx  context.Context
+	kind MetadataHookKind
+}
+
+func NewMetadataHookContext(ctx context.Context, kind MetadataHookKind) *MetadataHookContext {
+	return &MetadataHookContext{
+		ctx:  ctx,
+		kind: kind,
+	}
+}
+
+func (c *MetadataHookContext) Context() context.Context {
+	return c.ctx
+}
+
+func (c *MetadataHookContext) Kind() MetadataHookKind {
+	return c.kind
+}
+
 type (
-	InTxHandler[K eventsourcing.ID]  func(context.Context, *eventsourcing.Event[K]) error
-	MetadataHook[K eventsourcing.ID] func(context.Context) eventsourcing.Metadata
+	InTxHandler[K eventsourcing.ID]  func(*InTxHandlerContext[K]) error
+	MetadataHook[K eventsourcing.ID] func(*MetadataHookContext) eventsourcing.Metadata
 )
 
 type Filter struct {

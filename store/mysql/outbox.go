@@ -83,13 +83,14 @@ func (r *OutboxRepository[K]) AfterSink(ctx context.Context, eID eventid.EventID
 }
 
 func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler[K] {
-	return func(ctx context.Context, event *eventsourcing.Event[K]) error {
+	return func(c *store.InTxHandlerContext[K]) error {
+		ctx := c.Context()
 		tx := TxFromContext(ctx)
 		if tx == nil {
 			return faults.Errorf("no transaction in context")
 		}
 
-		columns := []string{coreOutboxCols}
+		event := c.Event()
 		values := []any{
 			event.ID.String(),
 			event.AggregateID.String(),
@@ -97,6 +98,7 @@ func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler
 			event.Kind,
 			event.AggregateIDHash,
 		}
+		columns := []string{coreOutboxCols}
 		vars := []string{coreOutboxVars}
 		for k, v := range event.Metadata {
 			columns = append(columns, store.MetaColumnPrefix+k)
