@@ -292,7 +292,8 @@ func TestListenerWithMetadata(t *testing.T) {
 	r, err := mysql.NewStoreWithURL(
 		dbConfig.URL(),
 		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
-		mysql.WithMetadataHook[ids.AggID](func(ctx context.Context) eventsourcing.Metadata {
+		mysql.WithMetadataHook[ids.AggID](func(c *store.MetadataHookContext) eventsourcing.Metadata {
+			ctx := c.Context()
 			val := ctx.Value(key).(string)
 			return eventsourcing.Metadata{key: val}
 		}),

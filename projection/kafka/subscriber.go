@@ -195,9 +195,6 @@ func (s *Subscriber[K]) StartConsumer(ctx context.Context, subPos map[uint32]pro
 		v(&opts)
 	}
 
-	config := sarama.NewConfig()
-	config.Consumer.Return.Errors = true
-
 	s.client.Closed()
 
 	gID := groupID(projName, s.topic)
@@ -354,7 +351,7 @@ func (c *Consumer[K]) ConsumeClaim(session sarama.ConsumerGroupSession, claim sa
 					return er
 				}, bo)
 				if err != nil {
-					return faults.Errorf("handling event with ID '%s': %w", evt.ID, er)
+					return faults.Errorf("handling event with ID '%s': %w", evt.ID, err)
 				}
 			}
 

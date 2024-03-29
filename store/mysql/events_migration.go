@@ -82,7 +82,7 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 
 	// get all events for the aggregate id returned by the subquery
 	query := fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = (%s) AND migration = 0 ORDER BY aggregate_version ASC", r.eventsTable, subquery.String())
-	events, err := r.queryEvents(ctx, query, args...)
+	events, err := r.queryEvents(ctx, nil, query, args...)
 
 	return events, faults.Wrapf(err, "retrieving events for migration")
 }
@@ -105,7 +105,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
 		id := gen.NewID()
-		metadata := r.metadataMerge(ctx, r.metadata)
+		metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
 		err := r.saveEvent(c, tx, &Event{
 			ID:               id,
 			AggregateID:      last.AggregateID.String(),
@@ -151,7 +151,6 @@ func (r *EsRepository[K, PK]) saveMigration(
 		for _, mig := range migration {
 			version++
 			lastID = gen.NewID()
-			metadata := r.metadataMerge(ctx, r.metadata)
 			event := &Event{
 				ID:               lastID,
 				AggregateID:      last.AggregateID.String(),
@@ -188,7 +187,6 @@ func (r *EsRepository[K, PK]) saveMigration(
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
 			}
 
-			metadata := r.metadataMerge(ctx, r.metadata)
 			err = r.saveSnapshot(c, tx, &Snapshot{
 				ID:               lastID,
 				AggregateID:      last.AggregateID.String(),
