@@ -261,10 +261,10 @@ func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *
 		return faults.Errorf("unable to insert event, query: %s, args: %+v: %w", query, values, err)
 	}
 
-	return r.applyTxHandlers(ctx, tx, event)
+	return r.applyTxHandlers(ctx, event)
 }
 
-func (r *EsRepository[K, PK]) applyTxHandlers(ctx context.Context, tx *sql.Tx, event *Event) error {
+func (r *EsRepository[K, PK]) applyTxHandlers(ctx context.Context, event *Event) error {
 	if r.txHandlers == nil {
 		return nil
 	}
@@ -315,10 +315,8 @@ func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (e
 
 func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, metadata eventsourcing.Metadata, query string, args ...any) ([]eventsourcing.Snapshot[K], error) {
 	columns := []string{coreSnapCols}
-	base := []store.Metadata{}
 	for k := range metadata {
 		columns = append(columns, store.MetaColumnPrefix+k)
-		base = append(base, store.Metadata{Key: k})
 	}
 	query = strings.Replace(query, "SELECT *", fmt.Sprintf("SELECT %s", strings.Join(columns, ", ")), 1)
 

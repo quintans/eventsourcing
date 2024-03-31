@@ -11,10 +11,10 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/dist"
 )
 
-var _ lock.Locker = (*Lock)(nil)
+var _ dist.Locker = (*Lock)(nil)
 
 const retries = 3
 
@@ -66,7 +66,7 @@ func (m *Lock) iAmDone() {
 // Lock locks m. In case it returns an error on failure, you may retry to acquire the lock by calling this method again.
 func (m *Lock) Lock(ctx context.Context) (context.Context, error) {
 	if m.isLockAcquired() {
-		return nil, faults.Errorf("failed to acquire lock: '%s': %w", m.name, lock.ErrLockAlreadyHeld)
+		return nil, faults.Errorf("failed to acquire lock: '%s': %w", m.name, dist.ErrLockAlreadyHeld)
 	}
 
 	value, err := genValue()
@@ -97,7 +97,7 @@ func (m *Lock) Lock(ctx context.Context) (context.Context, error) {
 		return m.release(ctx, client, value)
 	})
 
-	return nil, faults.Wrap(lock.ErrLockAlreadyAcquired)
+	return nil, faults.Wrap(dist.ErrLockAlreadyAcquired)
 }
 
 func (m *Lock) heartbeat(ctx context.Context, expiry time.Duration) context.Context {
@@ -127,7 +127,7 @@ func (m *Lock) heartbeat(ctx context.Context, expiry time.Duration) context.Cont
 // Unlock unlocks m and returns the status of unlock.
 func (m *Lock) Unlock(ctx context.Context) error {
 	if !m.isLockAcquired() {
-		return faults.Wrap(lock.ErrLockNotHeld)
+		return faults.Wrap(dist.ErrLockNotHeld)
 	}
 
 	n, err := m.pool.DoAsync(func(client *redis.Client) (bool, error) {
@@ -145,7 +145,7 @@ func (m *Lock) Unlock(ctx context.Context) error {
 // extend resets the lock's expiry and returns the status of expiry extension.
 func (m *Lock) extend(ctx context.Context) error {
 	if !m.isLockAcquired() {
-		return faults.Wrap(lock.ErrLockNotHeld)
+		return faults.Wrap(dist.ErrLockNotHeld)
 	}
 
 	start := time.Now()
@@ -253,7 +253,7 @@ func (m *Lock) exists(ctx context.Context, client *redis.Client) (bool, error) {
 func (m *Lock) WaitForLock(ctx context.Context) (context.Context, error) {
 	for {
 		ctx2, err := m.Lock(ctx)
-		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+		if errors.Is(err, dist.ErrLockAlreadyAcquired) {
 			_ = m.WaitForUnlock(ctx)
 			continue
 		} else if err != nil {

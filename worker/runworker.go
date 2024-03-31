@@ -11,7 +11,7 @@ import (
 	"github.com/quintans/faults"
 	"github.com/teris-io/shortid"
 
-	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/dist"
 	"github.com/quintans/eventsourcing/log"
 )
 
@@ -24,18 +24,18 @@ type RunWorker struct {
 	logger     *slog.Logger
 	name       string
 	group      string
-	locker     lock.Locker
+	locker     dist.Locker
 	task       Task
 	cancel     context.CancelFunc
 	cancelLock context.CancelFunc
 	mu         sync.RWMutex
 }
 
-func NewRun(logger *slog.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
+func NewRun(logger *slog.Logger, name, group string, locker dist.Locker, task Task) *RunWorker {
 	return newRunWorker(logger, name, group, locker, task)
 }
 
-func newRunWorker(logger *slog.Logger, name, group string, locker lock.Locker, task Task) *RunWorker {
+func newRunWorker(logger *slog.Logger, name, group string, locker dist.Locker, task Task) *RunWorker {
 	logger = logger.With(
 		"id", "worker-"+shortid.MustGenerate(),
 		"name", name,
@@ -79,9 +79,9 @@ func (w *RunWorker) Start(ctx context.Context) (bool, error) {
 		release, err := w.locker.Lock(ctx)
 		if err != nil {
 			cancel()
-			if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+			if errors.Is(err, dist.ErrLockAlreadyAcquired) {
 				return false, nil
-			} else if errors.Is(err, lock.ErrLockAlreadyHeld) {
+			} else if errors.Is(err, dist.ErrLockAlreadyHeld) {
 				return true, nil
 			} else {
 				return false, faults.Wrap(err)

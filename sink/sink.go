@@ -3,6 +3,7 @@ package sink
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/quintans/eventsourcing"
@@ -44,6 +45,20 @@ type Message[K eventsourcing.ID] struct {
 	IdempotencyKey   string
 	Metadata         eventsourcing.Metadata
 	CreatedAt        time.Time
+}
+
+func (m *Message[K]) String() string {
+	return fmt.Sprintf(`{ID: %s, AggregateID: %s, AggregateVersion: %d, AggregateKind: %s, Kind: %s, Body: %s, IdempotencyKey: %s, Metadata: %s, CreatedAt: %s}`,
+		m.ID,
+		m.AggregateID,
+		m.AggregateVersion,
+		m.AggregateKind,
+		m.Kind,
+		m.Body,
+		m.IdempotencyKey,
+		m.Metadata,
+		m.CreatedAt,
+	)
 }
 
 type messageJSON struct {

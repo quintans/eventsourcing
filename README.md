@@ -7,12 +7,11 @@ The goal of this project is to implement an event store and how this event store
 
 This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS and eventually be consumed by a projector.
 
-This project offers implementation for the following:
-
-
 Other than the event store and the event streaming I also implemented a simple orchestration layer for the event consumer on the read side to create projections.
 
-> Creating a projection may take hours or even days, depending on the amount of event history so it is a good idea to create a projection on the side and start using it after it has catch up.
+> Creating a projection may take hours or even days, depending on the amount of event history so it is a good idea to create a projection on the side and start using it after it has catch up (blue/green).
+
+This project offers implementation for the following:
 
 **Event Stores**
 * MySQL
@@ -41,6 +40,8 @@ and
 * Event migration
 * Upcast
 
+> ${\textsf{\color{orange}Warning:}}$ Code examples below may be outdated
+
 ## Quick start
 
 an example demonstrating mysql event store store producing events to kafka and projecting them
@@ -48,24 +49,37 @@ an example demonstrating mysql event store store producing events to kafka and p
 The codec registry:
 
 ```go
-func NewJSONCodec() *jsoncodec.Codec {
-	c := jsoncodec.New()
-	c.RegisterFactory(KindAccount, func() eventsourcing.Kinder {
-		return account.Dehydrated()
+func NewJSONCodec() *jsoncodec.Codec[ids.AggID] {
+	c := jsoncodec.New[ids.AggID]()
+	c.RegisterFactory(KindAccount, func(id ids.AggID) eventsourcing.Kinder {
+		return DehydratedAccount(id)
 	})
-	c.RegisterFactory(KindAccountCreated, func() eventsourcing.Kinder {
-		return &account.Created{}
+	c.RegisterFactory(KindAccountCreated, func(_ ids.AggID) eventsourcing.Kinder {
+		return &AccountCreated{}
 	})
-	c.RegisterFactory(KindMoneyDeposited, func() eventsourcing.Kinder {
-		return &account.Deposited{}
+	c.RegisterFactory(KindMoneyDeposited, func(_ ids.AggID) eventsourcing.Kinder {
+		return &MoneyDeposited{}
 	})
-	c.RegisterFactory(KindMoneyWithdrawn, func() eventsourcing.Kinder {
-		return &account.Withdrawn{}
+	c.RegisterFactory(KindMoneyWithdrawn, func(_ ids.AggID) eventsourcing.Kinder {
+		return &MoneyWithdrawn{}
 	})
-	c.RegisterFactory(KindOwnerUpdated, func() eventsourcing.Kinder {
-		return &account.OwnerUpdated{}
+	c.RegisterFactory(KindOwnerUpdated, func(_ ids.AggID) eventsourcing.Kinder {
+		return &OwnerUpdated{}
 	})
 	return c
+}
+
+func DehydratedAccount(id ids.AggID) *Account {
+	reg := eventsourcing.NewRegistry()
+	a := &Account{
+		RootAggregate: eventsourcing.NewRootAggregate(reg, id),
+		_reg:          reg,
+	}
+	eventsourcing.EventHandler(reg, a.handleAccountCreated)
+	eventsourcing.EventHandler(reg, a.handleMoneyDeposited)
+	eventsourcing.EventHandler(reg, a.handleMoneyWithdrawn)
+	eventsourcing.EventHandler(reg, a.handleOwnerUpdated)
+	return a
 }
 ```
 
@@ -149,15 +163,13 @@ A service **writes** to a **database** (the event store), a **forwarder** compon
 
 ![Design](eventstore-design.png)
 
-> we still can still use consistent projections to build the current state of an aggregate
+> we still can still use consistent projections to build the current state of an aggregate.
 > To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
 We can write the read model into the same database in the same transaction as the write model (dual write).
 
 ## How to
 
 I assume that the reader is familiar with the concepts of event sourcing and CQRS.
-
-> **Warning**: Code examples below may be outdated
 
 ### Aggregate
 
@@ -268,10 +280,32 @@ The process for creating a new projection at boot time, is described as follow:
 
 Boot Partitioned Projection
 - Wait for lock release (if any)
-- Replay all events from the last recorded position from the event store.
-- Switch to the event bus and start consuming from the last event position
+- Replay all events from the last recorded position from the event store up to a safe time margin (Catchup).
+- Switch to the event bus and start consuming from the last event position (Live).
 
-> NB: a projection should be idempotent.
+> A projection never switches back to catchup.
+
+##### Idempotency
+
+A projection must be idempotent.
+
+There are several ways to make a [projection idempotent](https://event-driven.io/en/projections_and_read_models_in_event_driven_architecture/#idempotency). 
+
+Using this library, projection idempotency can be achieved by recording the last handled event. Events delivered to a projection go through two phases: The catchup and live phase.
+
+An event delivered to a projection will have metadata that describes in what phase the event is coming from, the name of the projector, the partition number and the sequence number. Sequence number is only populated on live phase.
+
+Events are delivered to a projection through a named projector. Several projectors can be used to deliver events to the same projection through different different topics and partitions.
+
+When the events are delivered on the **catchup** phase, the event ID is guaranteed to be monotonic so we can use it as the checkpoint. If a redelivery happens we just need to compare it with the last event and reject it if it is lesser or equal than the last recorded one.
+
+When the events are delivered on the **live** phase from the stream, the event ID is no longer guaranteed to be monotonic, but now we can use the sequence of each partition as the checkpoint.
+
+Events will only change to **live** phase/mode when all events in **catchup** mode are consumed and acknowledged. In between, a control event (switch kind) will be sent with an event ID where no future received events should be lesser or equal.
+
+To make the projection idempotent what we have to do is:
+- under the projector name and partition, record the **event ID**, if catching up, otherwise record the **sequence** and the last event ID in catchup mode, if any. Use the control event to record the threshold event ID.
+- when handling the event, reject events that are less or equal than the threshold event ID. If not reject by the previous condition and if in live mode, reject if the received sequence is less or equal than the last recorded sequence.
 
 ### Event Migration
 TODO
@@ -312,9 +346,7 @@ Consider two concurrent transactions relying on database sequence. One acquires 
 
 If we have a polling process that relies on this number to determine from where to start polling, it could miss the last added record, and this could lead to events not being tracked. Luckily this can be addressed by using the outbox pattern.
 
-Considering all the above, we could end up with missing events when replay events on a restart. To avoid that, when replaying, we need to make sure that we start from a sufficient large of time before the last recorded sent event to eliminate any clock skews. Usually servers have their clock time very close to each other, so I guess 1 minute is more than enough. I defined the default as 15 minute.
-
-Projection idempotency for a specific aggregate can be achieved by just looking into the version. We can safely ignore events that have lower version than the last one recorded.
+Considering all the above, we could end up with missing events when replay events on a restart. To avoid that, when replaying, we need to make sure that we start from a sufficient large time offset before the last recorded sent event to eliminate any problems due to clock skews. Usually servers have their clock time very close to each other (hundreds of millisecond), so I guess 1 minute is more than enough.
 
 ### IDs
 
@@ -409,7 +441,7 @@ The forwarder cold be a separate service but that would mean accessing a databas
 
 If the Forwarder component fails to write into the event bus, it will try again. If it restarts, it queries the event bus for the last message and start polling the database from there.
 > If it is not possible to get the last published message to the event bus, we can store it in a database.
-> Writing repeated messages to the event bus is not a concern, since it is the job of the projector to be idempotent, discarding repeated messages.
+> Writing repeated messages to the event bus is not a concern, since it is the job of the projection to be idempotent, discarding repeated messages.
 
 ### Replay
 

@@ -8,6 +8,10 @@ import (
 	"github.com/quintans/faults"
 )
 
+var Zero AggID
+
+type AggID ulid.ULID
+
 func New() AggID {
 	return AggID(ulid.Make())
 }
@@ -16,8 +20,6 @@ func Parse(s string) (AggID, error) {
 	id, err := ulid.Parse(s)
 	return AggID(id), err
 }
-
-type AggID ulid.ULID
 
 func (id AggID) String() string {
 	return ulid.ULID(id).String()

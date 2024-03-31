@@ -63,7 +63,8 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	time.Sleep(time.Second)
 
 	events := proj.Events()
-	assert.Len(t, events, 3)
+	require.Len(t, events, 4)
+	assert.Equal(t, ids.Zero, events[0].AggregateID) // control event (switch)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	assert.True(t, ok)
@@ -133,7 +134,8 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 	time.Sleep(time.Second)
 
 	events := proj.Events()
-	assert.Len(t, events, 4)
+	require.Len(t, events, 5)
+	assert.Equal(t, ids.Zero, events[0].AggregateID) // control event (switch)
 
 	balance, ok = proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -174,7 +176,7 @@ func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository
-	projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
+	projector := projection.Project(logger, nil, esRepo, sub, proj, kvStore, 1)
 
 	ok, err := projector.Start(ctx)
 	require.NoError(t, err)

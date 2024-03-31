@@ -18,11 +18,6 @@ func init() {
 	})
 }
 
-type namingStrategyExtension struct {
-	jsoniter.DummyExtension
-	translate func(string) string
-}
-
 type (
 	Factory[K eventsourcing.ID] func(id K) eventsourcing.Kinder
 	Upcaster                    func(t eventsourcing.Kinder) (eventsourcing.Kinder, error)

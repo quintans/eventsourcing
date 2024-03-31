@@ -13,8 +13,8 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/dist"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
@@ -44,7 +44,7 @@ type getByIDFunc[K eventsourcing.ID] func(ctx context.Context, aggregateID strin
 func (r *EsRepository[K, PK]) MigrateConsistentProjection(
 	ctx context.Context,
 	logger *slog.Logger,
-	locker lock.WaitLocker,
+	locker dist.WaitLocker,
 	migrater ProjectionMigrater[K],
 	getByID getByIDFunc[K],
 ) error {
@@ -65,7 +65,7 @@ func (r *EsRepository[K, PK]) MigrateConsistentProjection(
 func (r *EsRepository[K, PK]) migrateProjection(
 	ctx context.Context,
 	logger *slog.Logger,
-	locker lock.WaitLocker,
+	locker dist.WaitLocker,
 	migrater ProjectionMigrater[K],
 	getByID getByIDFunc[K],
 ) error {
@@ -80,7 +80,7 @@ func (r *EsRepository[K, PK]) migrateProjection(
 	// lock
 	for {
 		_, err = locker.Lock(ctx)
-		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+		if errors.Is(err, dist.ErrLockAlreadyAcquired) {
 			er := locker.WaitForUnlock(ctx)
 			if er != nil {
 				logger.Error("waiting for unlock", log.Err(er))

@@ -30,6 +30,9 @@ test-integration: docker-clean
 
 test-all: test test-redis test-consul test-pg test-mysql test-mongo test-integration docker-clean
 
+lint: 
+	golangci-lint run --deadline=10m -v -fix
+
 .PHONY: generate
 generate:
 	./codegen.sh ./api/proto/*.proto

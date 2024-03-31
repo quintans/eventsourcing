@@ -1,4 +1,4 @@
-package lock
+package dist
 
 import (
 	"context"
@@ -17,21 +17,19 @@ type WaitLocker interface {
 }
 
 type Locker interface {
-	/*
-		Lock acquires a lock.
-
-		The returned context will be cancelled when the lock is released.
-			The following errors can occur:
-			* ErrLockAlreadyHeld: it already had the lock
-			* ErrLockAlreadyAcquired: the lock is already held by another lock
-	*/
+	// Lock acquires a lock.
+	//
+	// The returned context will be cancelled when the lock is released.
+	//
+	// The following errors can occur:
+	//  * ErrLockAlreadyHeld: it already had the lock
+	//  * ErrLockAlreadyAcquired: the lock is already held by another lock
 	Lock(context.Context) (context.Context, error)
-	/*
-		Unlock releases the lock, leading to the cancelling the context returned in Lock()
 
-			The following errors can occur:
-			* ErrLockNotHeld: releasing a lock that it was not previously acquired
-	*/
+	// Unlock releases the lock, leading to the cancelling the context returned in Lock()
+	//
+	// The following errors can occur:
+	//  * ErrLockNotHeld: releasing a lock that it was not previously acquired
 	Unlock(context.Context) error
 
 	// WaitForLock lock or wait until it locks or the context is cancelled.

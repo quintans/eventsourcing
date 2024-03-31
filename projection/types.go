@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/dist"
 	"github.com/quintans/eventsourcing/encoding"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/sink"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
@@ -78,10 +78,9 @@ func WithAckWait[K eventsourcing.ID](ackWait time.Duration) ConsumerOption[K] {
 }
 
 type Consumer[K eventsourcing.ID] interface {
-	TopicPartitions() (string, []uint32)
+	Topic() string
 	// returns the subscriber Positions. The first Position should be 1
-	Positions(ctx context.Context) (map[uint32]SubscriberPosition, error)
-	StartConsumer(ctx context.Context, subPos map[uint32]SubscriberPosition, projectionName string, handle ConsumerHandler[K], options ...ConsumerOption[K]) error
+	StartConsumer(ctx context.Context, startTime *time.Time, projectionName string, handle ConsumerHandler[K], options ...ConsumerOption[K]) error
 }
 
 type ConsumerHandler[K eventsourcing.ID] func(ctx context.Context, e *sink.Message[K], partition uint32, seq uint64) error
@@ -89,11 +88,6 @@ type ConsumerHandler[K eventsourcing.ID] func(ctx context.Context, e *sink.Messa
 type ConsumerTopic struct {
 	Topic      string
 	Partitions []uint32
-}
-
-type SubscriberPosition struct {
-	EventID  eventid.EventID
-	Position uint64
 }
 
 type Event[K eventsourcing.ID] struct {
@@ -222,12 +216,32 @@ func (t Token) IsZero() bool {
 type Projection[K eventsourcing.ID] interface {
 	Name() string
 	CatchUpOptions() CatchUpOptions
-	Handle(ctx context.Context, e *sink.Message[K]) error
+	Handle(ctx context.Context, e Message[K]) error
+}
+
+type Message[K eventsourcing.ID] struct {
+	Meta    Meta
+	Message *sink.Message[K]
+}
+
+type MessageKind string
+
+var (
+	MessageKindCatchup MessageKind = "catchup"
+	MessageKindSwitch  MessageKind = "switch"
+	MessageKindLive    MessageKind = "live"
+)
+
+type Meta struct {
+	Name      string
+	Kind      MessageKind
+	Partition uint32
+	Sequence  uint64
 }
 
 type (
-	LockerFactory     func(lockName string) lock.Locker
-	WaitLockerFactory func(lockName string) lock.WaitLocker
+	LockerFactory     func(lockName string) dist.Locker
+	WaitLockerFactory func(lockName string) dist.WaitLocker
 	CatchUpCallback   func(context.Context, eventid.EventID) (eventid.EventID, error)
 )
 

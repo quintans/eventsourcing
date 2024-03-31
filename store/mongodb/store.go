@@ -176,10 +176,10 @@ type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 
 // NewStoreWithURI creates a new instance of MongoEsRepository
 func NewStoreWithURI[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.Context, connString, database string, opts ...Option[K, PK]) (*EsRepository[K, PK], error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx2, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connString))
+	client, err := mongo.Connect(ctx2, options.Client().ApplyURI(connString))
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
