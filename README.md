@@ -28,7 +28,6 @@ and
 
 * Event store database
 * Snapshots
-* Event Idempotency
 * Forget (GDPR)
 * Metadata associated to an event store (extra fields/columns)
 * Reactive streaming from the database into an Event BUS
@@ -151,8 +150,8 @@ es.Create(ctx, acc)
 **Components**:
 - utility to read/write to/from an event store
 - database change listeners to propagate changes into a message stream
-- message stream listeners to build read models (Projection)
-- message stream listeners to react to domain events (Reactors)
+- outbox
+- message stream listeners to build Projection
 
 > **Projections**: can be rebuild since the beginning of time
 
@@ -416,11 +415,6 @@ A polling solution  with the outbox pattern is implemented.
 I will also use the memento pattern, to take snapshots of the current state, every X events.
 
 Snapshots is a technique used to improve the performance of the event store, when retrieving an aggregate, but they don't play any part in keeping the consistency of the event store, therefore if we sporadically fail to save a snapshot, it is not a problem, so they can be saved in a separate transaction and asynchronously.
-
-### Write Idempotency
-
-When saving an aggregate, we have the option to supply an idempotent key. This idempotency key needs to be unique in the whole event store. The event store needs to guarantee the uniqueness constraint.
-Later, we can check the presence of the idempotency key, to see if we are repeating an action. This can be useful when used in process manager reactors.
 
 ## Event Sourcing + Command Query Responsibility Segregation (CQRS)
 

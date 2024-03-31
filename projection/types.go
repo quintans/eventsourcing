@@ -21,7 +21,7 @@ type ResumeKey struct {
 	topic     string
 	partition uint32
 	// projection identifies a projection name for a topic.
-	// The same topic can be consumed by different projections and/or reactors.
+	// The same topic can be consumed by different projections.
 	projection string
 }
 
