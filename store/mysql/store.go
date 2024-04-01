@@ -104,44 +104,8 @@ func WithSnapshotsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](table stri
 	}
 }
 
-type Repository struct {
-	db *sqlx.DB
-}
-
-func (r Repository) TxRunner() func(ctx context.Context, fn func(context.Context) error) error {
-	return func(ctx context.Context, fn func(context.Context) error) error {
-		return r.WithTx(ctx, func(c context.Context, _ *sql.Tx) error {
-			return fn(c)
-		})
-	}
-}
-
-func (r *Repository) WithTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
-	tx := TxFromContext(ctx)
-	if tx != nil {
-		return fn(ctx, tx)
-	}
-
-	return r.wrapWithTx(ctx, fn)
-}
-
-func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-	defer tx.Rollback()
-
-	ctx = context.WithValue(ctx, txKey{}, tx)
-	err = fn(ctx, tx)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
-	Repository
+	store.Repository
 	eventsTable    string
 	snapshotsTable string
 	txHandlers     []store.InTxHandler[K]
@@ -161,9 +125,7 @@ func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString st
 func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](db *sql.DB, options ...Option[K, PK]) *EsRepository[K, PK] {
 	dbx := sqlx.NewDb(db, driverName)
 	r := &EsRepository[K, PK]{
-		Repository: Repository{
-			db: dbx,
-		},
+		Repository:     store.NewRepository(dbx),
 		eventsTable:    defEventsTable,
 		snapshotsTable: defSnapTable,
 	}
@@ -175,14 +137,10 @@ func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](db *sql.DB, options 
 	return r
 }
 
-func (r *EsRepository[K, PK]) Connection() *sql.DB {
-	return r.db.DB
-}
-
 func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord[K]) (eventid.EventID, uint32, error) {
 	version := eRec.Version
 	var id eventid.EventID
-	err := r.WithTx(ctx, func(c context.Context, tx *sql.Tx) error {
+	err := r.WithTx(ctx, func(c context.Context, tx store.Session) error {
 		for _, e := range eRec.Details {
 			version++
 			aggIDStr := eRec.AggregateID.String()
@@ -222,7 +180,7 @@ func (r *EsRepository[K, PK]) metadataMerge(ctx context.Context, metadata events
 	return util.MapMerge(metadata, meta)
 }
 
-func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *Event) error {
+func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx store.Session, event *Event) error {
 	columns := []string{coreEventCols}
 	values := []any{
 		event.ID.String(),
@@ -313,7 +271,7 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, metadata eventso
 	}
 	query = strings.Replace(query, "SELECT *", fmt.Sprintf("SELECT %s", strings.Join(columns, ", ")), 1)
 
-	rows, err := r.db.QueryxContext(ctx, query, args...)
+	rows, err := r.Session(ctx).QueryxContext(ctx, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -358,7 +316,7 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, metadata eventso
 
 func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
 	metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
-	return r.saveSnapshot(ctx, r.db, &Snapshot{
+	return r.saveSnapshot(ctx, r.Session(ctx), &Snapshot{
 		ID:               snapshot.ID,
 		AggregateID:      snapshot.AggregateID.String(),
 		AggregateVersion: snapshot.AggregateVersion,
@@ -421,13 +379,6 @@ func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateI
 	return events, nil
 }
 
-type txKey struct{}
-
-func TxFromContext(ctx context.Context) *sql.Tx {
-	tx, _ := ctx.Value(txKey{}).(*sql.Tx) // with _ it will not panic if nil
-	return tx
-}
-
 func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
@@ -447,7 +398,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.Forg
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, qry, body, evt.ID.String())
+		_, err = r.Session(ctx).ExecContext(ctx, qry, body, evt.ID.String())
 		if err != nil {
 			return faults.Errorf("forgetting event ID %s: %w", evt.ID, err)
 		}
@@ -466,7 +417,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.Forg
 		if err != nil {
 			return err
 		}
-		_, err = r.db.ExecContext(ctx, qry, body, snap.ID.String())
+		_, err = r.Session(ctx).ExecContext(ctx, qry, body, snap.ID.String())
 		if err != nil {
 			return faults.Errorf("forgetting snapshot ID %s: %w", snap.ID, err)
 		}
@@ -573,7 +524,7 @@ func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, metadata eventsou
 	}
 	query = strings.Replace(query, "SELECT *", fmt.Sprintf("SELECT %s", strings.Join(columns, ", ")), 1)
 
-	rows, err := r.db.QueryxContext(ctx, query, args...)
+	rows, err := r.Session(ctx).QueryxContext(ctx, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -650,7 +601,7 @@ func (r *EsRepository[K, PK]) GetEventsByRawIDs(ctx context.Context, ids []strin
 	if err != nil {
 		return nil, faults.Errorf("getting pending events (IDs=%+v): %w", ids, err)
 	}
-	qry = r.db.Rebind(qry) // sqlx.In returns queries with the `?` bindvar, we can rebind it for our backend
+	qry = r.Session(ctx).Rebind(qry) // sqlx.In returns queries with the `?` bindvar, we can rebind it for our backend
 
 	return r.queryEvents(ctx, nil, qry, args...)
 }

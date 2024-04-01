@@ -2,7 +2,6 @@ package postgresql
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -101,7 +100,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 	version := last.AggregateVersion
 	gen := eventid.NewGenerator(last.CreatedAt)
 
-	return r.WithTx(ctx, func(c context.Context, tx *sql.Tx) error {
+	return r.WithTx(ctx, func(c context.Context, tx store.Session) error {
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
 		id := gen.NewID()

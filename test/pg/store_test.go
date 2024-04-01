@@ -92,8 +92,7 @@ func TestSaveAndGet(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := connect(dbConfig)
-	require.NoError(t, err)
+	db := connect(t, dbConfig)
 
 	snaps := []Snapshot{}
 	err = db.Select(&snaps, "SELECT * FROM snapshots WHERE aggregate_id = $1 ORDER by id ASC", id.String())
@@ -131,13 +130,13 @@ func TestPollListener(t *testing.T) {
 	t.Parallel()
 
 	dbConfig := setup(t)
+	db := connect(t, dbConfig)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL(
-		dbConfig.URL(),
+	r := postgresql.NewStore(
+		db.DB,
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
 	)
-	require.NoError(t, err)
 
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
@@ -145,7 +144,7 @@ func TestPollListener(t *testing.T) {
 	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Create(ctx, acc)
+	err := es.Create(ctx, acc)
 	require.NoError(t, err)
 	err = es.Update(ctx, id, func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
@@ -156,7 +155,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
+	outboxRepo := postgresql.NewOutboxStore(db.DB, "outbox", r)
 	require.NoError(t, err)
 
 	p := poller.New(logger, outboxRepo)
@@ -195,20 +194,20 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	t.Parallel()
 
 	dbConfig := setup(t)
+	db := connect(t, dbConfig)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL(
-		dbConfig.URL(),
+	r := postgresql.NewStore(
+		db.DB,
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
 	)
-	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	acc, _ := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err = es.Create(ctx, acc)
+	err := es.Create(ctx, acc)
 	require.NoError(t, err)
 	err = es.Update(ctx, id, func(a *test.Account) (*test.Account, error) {
 		a.Deposit(5)
@@ -219,7 +218,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
+	outboxRepo := postgresql.NewOutboxStore(db.DB, "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds[ids.AggID](aggregateKind))
 
@@ -257,10 +256,11 @@ func TestListenerWithMetadata(t *testing.T) {
 	t.Parallel()
 
 	dbConfig := setup(t)
+	db := connect(t, dbConfig)
 
 	key := "tenant"
-	r, err := postgresql.NewStoreWithURL(
-		dbConfig.URL(),
+	r := postgresql.NewStore(
+		db.DB,
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
 		postgresql.WithMetadataHook[ids.AggID](func(c *store.MetadataHookContext) eventsourcing.Metadata {
 			ctx := c.Context()
@@ -268,14 +268,13 @@ func TestListenerWithMetadata(t *testing.T) {
 			return eventsourcing.Metadata{key: val}
 		}),
 	)
-	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	ctx := context.WithValue(context.Background(), key, "abc")
 
 	acc, _ := test.NewAccount("Paulo", 50)
 	acc.Deposit(20)
-	err = es.Create(ctx, acc)
+	err := es.Create(ctx, acc)
 	require.NoError(t, err)
 
 	ctx = context.WithValue(context.Background(), key, "xyz")
@@ -297,7 +296,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	outboxRepo := postgresql.NewOutboxStore(r.Connection().DB, "outbox", r)
+	outboxRepo := postgresql.NewOutboxStore(db.DB, "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ids.AggID]("tenant", "xyz"))
 
@@ -363,7 +362,7 @@ func TestForget(t *testing.T) {
 
 	codec := test.NewJSONCodec()
 
-	db, err := connect(dbConfig)
+	db := connect(t, dbConfig)
 	require.NoError(t, err)
 	evts := [][]byte{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = $1 and kind = 'OwnerUpdated'", id.String())
@@ -494,7 +493,7 @@ func TestMigration(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	db, err := connect(dbConfig)
+	db := connect(t, dbConfig)
 	require.NoError(t, err)
 
 	snaps := []Snapshot{}

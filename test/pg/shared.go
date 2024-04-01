@@ -162,15 +162,14 @@ func dbSchema(dbConfig DBConfig) error {
 	return nil
 }
 
-func connect(dbConfig DBConfig) (*sqlx.DB, error) {
+func connect(t *testing.T, dbConfig DBConfig) *sqlx.DB {
 	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
 
 	db, err := sqlx.Open("postgres", dburl)
-	if err != nil {
-		return nil, err
-	}
-	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-	return db, nil
+	require.NoError(t, err)
+
+	err = db.Ping()
+	require.NoError(t, err)
+
+	return db
 }

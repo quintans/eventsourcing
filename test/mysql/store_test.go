@@ -54,17 +54,16 @@ type Event struct {
 	MetaTenant       store.NilString    `db:"meta_tenant,omitempty"`
 }
 
-func connect(dbConfig DBConfig) (*sqlx.DB, error) {
+func connect(t *testing.T, dbConfig DBConfig) *sqlx.DB {
 	dburl := dbConfig.URL()
 
 	db, err := sqlx.Open("mysql", dburl)
-	if err != nil {
-		return nil, err
-	}
-	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-	return db, nil
+	require.NoError(t, err)
+
+	err = db.Ping()
+	require.NoError(t, err)
+
+	return db
 }
 
 func TestSaveAndGet(t *testing.T) {
@@ -102,8 +101,7 @@ func TestSaveAndGet(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(100 * time.Millisecond)
 
-	db, err := connect(dbConfig)
-	require.NoError(t, err)
+	db := connect(t, dbConfig)
 
 	snaps := []Snapshot{}
 	err = db.Select(&snaps, "SELECT * FROM snapshots WHERE aggregate_id = ? ORDER by id ASC", id.String())
@@ -143,11 +141,11 @@ func TestPollListener(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL(
-		dbConfig.URL(),
+	db := connect(t, dbConfig)
+	r := mysql.NewStore(
+		db.DB,
 		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
 	)
-	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	acc, err := test.NewAccount("Paulo", 100)
@@ -166,7 +164,7 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox", r)
+	outboxRepo := mysql.NewOutboxStore(db.DB, "outbox", r)
 	require.NoError(t, err)
 
 	p := poller.New(logger, outboxRepo)
@@ -206,12 +204,13 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	dbConfig := Setup(t)
 
+	db := connect(t, dbConfig)
+
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL(
-		dbConfig.URL(),
+	r := mysql.NewStore(
+		db.DB,
 		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
 	)
-	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	acc, err := test.NewAccount("Paulo", 100)
@@ -230,7 +229,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox", r)
+	outboxRepo := mysql.NewOutboxStore(db.DB, "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds[ids.AggID](test.KindAccount))
 
@@ -268,11 +267,12 @@ func TestListenerWithMetadata(t *testing.T) {
 	t.Parallel()
 
 	dbConfig := Setup(t)
+	db := connect(t, dbConfig)
 
 	key := "tenant"
 
-	r, err := mysql.NewStoreWithURL(
-		dbConfig.URL(),
+	r := mysql.NewStore(
+		db.DB,
 		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
 		mysql.WithMetadataHook[ids.AggID](func(c *store.MetadataHookContext) eventsourcing.Metadata {
 			ctx := c.Context()
@@ -280,7 +280,6 @@ func TestListenerWithMetadata(t *testing.T) {
 			return eventsourcing.Metadata{key: val}
 		}),
 	)
-	require.NoError(t, err)
 	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
 	ctx := context.WithValue(context.Background(), key, "abc")
@@ -309,7 +308,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	outboxRepo := mysql.NewOutboxStore(r.Connection(), "outbox", r)
+	outboxRepo := mysql.NewOutboxStore(db.DB, "outbox", r)
 	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ids.AggID]("tenant", "xyz"))
 
@@ -379,7 +378,7 @@ func TestForget(t *testing.T) {
 
 	codec := test.NewJSONCodec()
 
-	db, err := connect(dbConfig)
+	db := connect(t, dbConfig)
 	require.NoError(t, err)
 	evts := [][]byte{}
 	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
@@ -507,7 +506,7 @@ func TestMigration(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	db, err := connect(dbConfig)
+	db := connect(t, dbConfig)
 	require.NoError(t, err)
 
 	snaps := []Snapshot{}
