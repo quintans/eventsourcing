@@ -15,7 +15,6 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/sink"
@@ -106,70 +105,11 @@ func NewSubscriber[K eventsourcing.ID, PK eventsourcing.IDPt[K]](
 	return s
 }
 
-func (s *Subscriber[K]) TopicPartitions() (string, []uint32) {
-	return s.topic.Topic, s.topic.Partitions
+func (s *Subscriber[K]) Topic() string {
+	return s.topic.Topic
 }
 
-func (s *Subscriber[K]) Positions(ctx context.Context) (map[uint32]projection.SubscriberPosition, error) {
-	bms := map[uint32]projection.SubscriberPosition{}
-	for _, p := range s.topic.Partitions {
-		seq, eventID, err := s.lastBUSMessage(ctx, p)
-		if err != nil {
-			return nil, faults.Wrap(err)
-		}
-		bms[p] = projection.SubscriberPosition{
-			EventID:  eventID,
-			Position: seq,
-		}
-	}
-
-	return bms, nil
-}
-
-// lastBUSMessage gets the last message sent to NATS
-// It will return 0 if there is no last message
-func (s *Subscriber[K]) lastBUSMessage(ctx context.Context, partition uint32) (uint64, eventid.EventID, error) {
-	type message struct {
-		sequence uint64
-		data     []byte
-	}
-	topic, err := snats.ComposeTopic(s.topic.Topic, partition)
-	if err != nil {
-		return 0, eventid.Zero, faults.Wrap(err)
-	}
-	ch := make(chan message)
-	_, err = s.js.Subscribe(
-		topic,
-		func(m *nats.Msg) {
-			ch <- message{
-				sequence: sequence(m),
-				data:     m.Data,
-			}
-		},
-		nats.DeliverLast(),
-	)
-	if err != nil {
-		return 0, eventid.Zero, faults.Errorf("subscribing topic '%s': %w", topic, err)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-
-	var msg message
-	select {
-	case msg = <-ch:
-	case <-ctx.Done():
-		// no last message
-		return 0, eventid.Zero, nil
-	}
-	event, err := s.codec.Decode(msg.data)
-	if err != nil {
-		return 0, eventid.Zero, err
-	}
-
-	return msg.sequence, event.ID, nil
-}
-
-func (s *Subscriber[K]) StartConsumer(ctx context.Context, subPos map[uint32]projection.SubscriberPosition, projName string, handler projection.ConsumerHandler[K], options ...projection.ConsumerOption[K]) (er error) {
+func (s *Subscriber[K]) StartConsumer(ctx context.Context, startTime *time.Time, projName string, handler projection.ConsumerHandler[K], options ...projection.ConsumerOption[K]) (er error) {
 	logger := s.logger.With("topic", s.topic.Topic)
 	opts := projection.ConsumerOptions[K]{
 		AckWait: 30 * time.Second,
@@ -216,19 +156,9 @@ func (s *Subscriber[K]) StartConsumer(ctx context.Context, subPos map[uint32]pro
 			nats.AckExplicit(),
 			nats.AckWait(opts.AckWait),
 		}
-
-		if subPos != nil {
-			pos := subPos[uint32(part)]
-			var startOption nats.SubOpt
-			if pos.Position == 0 {
-				logger.Info("Starting consuming all available events", "topic", natsOpts, "partition", part)
-				startOption = nats.StartSequence(1)
-			} else {
-				logger.Info("Starting consumer from an offset", "from", pos.Position+1, "topic", natsOpts, "partition", part)
-				startOption = nats.StartSequence(pos.Position + 1) // after seq
-			}
-
-			natsOpts = append(natsOpts, startOption)
+		if startTime != nil {
+			logger.Info("Starting consumer from start time", "from", *startTime, "partition", part)
+			natsOpts = append(natsOpts, nats.StartTime(*startTime))
 		}
 
 		sub, err := s.js.QueueSubscribe(natsTopic, groupName, callback, natsOpts...)

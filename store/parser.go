@@ -36,7 +36,7 @@ func (r Row) AsTimeDate(colName string) time.Time {
 			tm, _ := time.Parse("2006-01-02 15:04:05", t)
 			return tm
 		case int64:
-			time.UnixMilli(t)
+			return time.UnixMilli(t)
 		default:
 			panic(fmt.Sprintf("unknown type %T on column %s=%+v", o, colName, o))
 		}

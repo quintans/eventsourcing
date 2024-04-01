@@ -72,7 +72,6 @@ func (c GrpcRepository[K, PK]) GetEvents(ctx context.Context, after, until event
 			AggregateKind:    eventsourcing.Kind(v.AggregateKind),
 			Kind:             eventsourcing.Kind(v.Kind),
 			Body:             v.Body,
-			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         v.Metadata,
 			CreatedAt:        *createdAt,
 		}

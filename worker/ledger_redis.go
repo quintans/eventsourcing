@@ -12,7 +12,7 @@ import (
 	"github.com/teris-io/shortid"
 )
 
-var _ Memberlister = (*RedisMemberList)(nil)
+var _ Ledger = (*RedisLedger)(nil)
 
 const (
 	separator = ","
@@ -20,7 +20,7 @@ const (
 	retries   = 3
 )
 
-type RedisMemberList struct {
+type RedisLedger struct {
 	pool       []*redis.Client
 	prefix     string
 	name       string
@@ -28,7 +28,7 @@ type RedisMemberList struct {
 	quorum     int
 }
 
-func NewRedisMemberlist(addresses, prefix string, expiration time.Duration) *RedisMemberList {
+func NewRedisLedger(addresses, prefix string, expiration time.Duration) *RedisLedger {
 	addrs := strings.Split(addresses, separator)
 	pool := make([]*redis.Client, 0, len(addrs))
 	for _, addr := range addrs {
@@ -36,7 +36,7 @@ func NewRedisMemberlist(addresses, prefix string, expiration time.Duration) *Red
 			Addr: strings.TrimSpace(addr),
 		}))
 	}
-	return &RedisMemberList{
+	return &RedisLedger{
 		pool:       pool,
 		prefix:     prefix,
 		name:       prefix + "-" + shortid.MustGenerate(),
@@ -45,35 +45,35 @@ func NewRedisMemberlist(addresses, prefix string, expiration time.Duration) *Red
 	}
 }
 
-func (r *RedisMemberList) Name() string {
+func (r *RedisLedger) Name() string {
 	return r.name
 }
 
-func (r *RedisMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
-	results, err := doAsync(r, func(c *redis.Client) ([]MemberWorkers, error) {
+func (r *RedisLedger) Peers(ctx context.Context) ([]Peer, error) {
+	results, err := doAsync(r, func(c *redis.Client) ([]Peer, error) {
 		return r.list(ctx, c)
 	})
 	if len(results) < r.quorum {
 		return nil, err
 	}
 
-	// merge all workers of a member
-	memberSet := map[string]map[string]bool{}
+	// merge all workers of a peer
+	peerSet := map[string]map[string]bool{}
 	for _, result := range results {
 		for _, mw := range result {
-			workerSet, ok := memberSet[mw.Name]
+			workerSet, ok := peerSet[mw.Name]
 			if !ok {
 				workerSet = map[string]bool{}
-				memberSet[mw.Name] = workerSet
+				peerSet[mw.Name] = workerSet
 			}
 			for _, w := range mw.Workers {
 				workerSet[w] = true
 			}
 		}
 	}
-	mws := make([]MemberWorkers, 0, len(memberSet))
-	for name, workers := range memberSet {
-		mw := MemberWorkers{
+	mws := make([]Peer, 0, len(peerSet))
+	for name, workers := range peerSet {
+		mw := Peer{
 			Name: name,
 		}
 		for name := range workers {
@@ -84,9 +84,9 @@ func (r *RedisMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 	return mws, nil
 }
 
-func (r *RedisMemberList) list(ctx context.Context, c *redis.Client) ([]MemberWorkers, error) {
+func (r *RedisLedger) list(ctx context.Context, c *redis.Client) ([]Peer, error) {
 	var cursor uint64
-	membersWorkers := []MemberWorkers{}
+	peersWorkers := []Peer{}
 
 	type result struct {
 		MemberID string
@@ -96,14 +96,14 @@ func (r *RedisMemberList) list(ctx context.Context, c *redis.Client) ([]MemberWo
 
 	var allErr error
 	for {
-		var members []string
+		var peers []string
 		var err error
-		members, cursor, err = c.Scan(ctx, cursor, r.prefix+"-*", maxScan).Result()
+		peers, cursor, err = c.Scan(ctx, cursor, r.prefix+"-*", maxScan).Result()
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		ch := make(chan result, len(members))
-		for _, memberID := range members {
+		ch := make(chan result, len(peers))
+		for _, peerID := range peers {
 			go func(m string) {
 				var v string
 				err = retry.Do(
@@ -115,15 +115,15 @@ func (r *RedisMemberList) list(ctx context.Context, c *redis.Client) ([]MemberWo
 					retry.Attempts(retries),
 				)
 				ch <- result{MemberID: m, Val: v, Err: faults.Wrap(err)}
-			}(memberID)
+			}(peerID)
 		}
-		for range members {
+		for range peers {
 			r := <-ch
 			if r.Err != nil {
 				allErr = multierror.Append(err, r.Err)
 			} else {
 				s := strings.Split(r.Val, separator)
-				membersWorkers = append(membersWorkers, MemberWorkers{
+				peersWorkers = append(peersWorkers, Peer{
 					Name:    r.MemberID,
 					Workers: s,
 				})
@@ -136,10 +136,10 @@ func (r *RedisMemberList) list(ctx context.Context, c *redis.Client) ([]MemberWo
 	if allErr != nil {
 		return nil, allErr
 	}
-	return membersWorkers, nil
+	return peersWorkers, nil
 }
 
-func (r *RedisMemberList) Register(ctx context.Context, workers []string) error {
+func (r *RedisLedger) Register(ctx context.Context, workers []string) error {
 	s := strings.Join(workers, separator)
 	_, err := doAsync(r, func(c *redis.Client) (string, error) {
 		status, err := c.Set(ctx, r.name, s, r.expiration).Result()
@@ -151,7 +151,7 @@ func (r *RedisMemberList) Register(ctx context.Context, workers []string) error 
 	return faults.Wrap(err)
 }
 
-func (r *RedisMemberList) Unregister(ctx context.Context) error {
+func (r *RedisLedger) Close(ctx context.Context) error {
 	_, err := doAsync(r, func(c *redis.Client) (int64, error) {
 		status, err := c.Del(ctx, r.name).Result()
 		if err != nil {
@@ -167,7 +167,7 @@ type result[T any] struct {
 	Err error
 }
 
-func doAsync[T any](r *RedisMemberList, actFn func(*redis.Client) (T, error)) ([]T, error) {
+func doAsync[T any](r *RedisLedger, actFn func(*redis.Client) (T, error)) ([]T, error) {
 	ch := make(chan result[T], len(r.pool))
 	for _, client := range r.pool {
 		go func(client *redis.Client) {

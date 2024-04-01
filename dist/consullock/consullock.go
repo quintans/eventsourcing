@@ -9,10 +9,10 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/quintans/faults"
 
-	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/dist"
 )
 
-var _ lock.Locker = (*Lock)(nil)
+var _ dist.Locker = (*Lock)(nil)
 
 type Lock struct {
 	client   *api.Client
@@ -28,7 +28,7 @@ func (l *Lock) Lock(ctx context.Context) (context.Context, error) {
 	defer l.mu.Unlock()
 
 	if l.done != nil {
-		return nil, faults.Errorf("failed to acquire lock: '%s': %w", l.lockName, lock.ErrLockAlreadyHeld)
+		return nil, faults.Errorf("failed to acquire lock: '%s': %w", l.lockName, dist.ErrLockAlreadyHeld)
 	}
 
 	sEntry := &api.SessionEntry{
@@ -56,7 +56,7 @@ func (l *Lock) Lock(ctx context.Context) (context.Context, error) {
 
 	if !acquired {
 		_, _ = l.client.Session().Destroy(sID, options)
-		return nil, faults.Wrap(lock.ErrLockAlreadyAcquired)
+		return nil, faults.Wrap(dist.ErrLockAlreadyAcquired)
 	}
 
 	// auto renew session
@@ -77,7 +77,7 @@ func (l *Lock) Unlock(ctx context.Context) error {
 	defer l.mu.Unlock()
 
 	if l.done == nil {
-		return faults.Wrap(lock.ErrLockNotHeld)
+		return faults.Wrap(dist.ErrLockNotHeld)
 	}
 
 	lockEnt := &api.KVPair{
@@ -128,7 +128,7 @@ func (l *Lock) WaitForUnlock(ctx context.Context) error {
 func (l *Lock) WaitForLock(ctx context.Context) (context.Context, error) {
 	for {
 		ctx2, err := l.Lock(ctx)
-		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+		if errors.Is(err, dist.ErrLockAlreadyAcquired) {
 			_ = l.WaitForUnlock(ctx)
 			continue
 		} else if err != nil {

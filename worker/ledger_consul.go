@@ -12,17 +12,17 @@ import (
 	"github.com/teris-io/shortid"
 )
 
-var _ Memberlister = (*ConsulMemberList)(nil)
+var _ Ledger = (*ConsulLedger)(nil)
 
-// NewConsulMemberList is a member of a list of servers managing distributed workers backed by consul.
-type ConsulMemberList struct {
+// ConsulLedger is a member of a list of servers/ledgers managing distributed workers backed by consul.
+type ConsulLedger struct {
 	client *api.Client
 	prefix string
 	name   string
 	sID    string
 }
 
-func NewConsulMemberList(address, family string, expiration time.Duration) (*ConsulMemberList, error) {
+func NewConsulLedger(address, family string, expiration time.Duration) (*ConsulLedger, error) {
 	client, err := api.NewClient(&api.Config{Address: address})
 	if err != nil {
 		return nil, faults.Wrap(err)
@@ -37,7 +37,7 @@ func NewConsulMemberList(address, family string, expiration time.Duration) (*Con
 		return nil, faults.Wrap(err)
 	}
 
-	return &ConsulMemberList{
+	return &ConsulLedger{
 		client: client,
 		prefix: family,
 		name:   family + "-" + shortid.MustGenerate(),
@@ -45,16 +45,16 @@ func NewConsulMemberList(address, family string, expiration time.Duration) (*Con
 	}, nil
 }
 
-func (c *ConsulMemberList) Name() string {
+func (c *ConsulLedger) Name() string {
 	return c.name
 }
 
-// List lists all servers and the workers under each of them
-func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
-	membersWorkers := []MemberWorkers{}
+// Peers lists all servers and the workers under each of them
+func (c *ConsulLedger) Peers(ctx context.Context) ([]Peer, error) {
+	peersWorkers := []Peer{}
 	options := &api.QueryOptions{}
 	options = options.WithContext(ctx)
-	members, _, err := c.client.KV().Keys(c.prefix+"-", "", options)
+	peers, _, err := c.client.KV().Keys(c.prefix+"-", "", options)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
@@ -64,8 +64,8 @@ func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 		Err      error
 	}
 	var allErr error
-	ch := make(chan result, len(members))
-	for _, memberID := range members {
+	ch := make(chan result, len(peers))
+	for _, peerID := range peers {
 		go func(m string) {
 			r := result{
 				MemberID: m,
@@ -79,14 +79,14 @@ func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 			)
 			r.Err = faults.Wrap(r.Err)
 			ch <- r
-		}(memberID)
-		for range members {
+		}(peerID)
+		for range peers {
 			r := <-ch
 			if r.Err != nil {
 				allErr = multierror.Append(err, r.Err)
 			} else if r.KVPair != nil {
 				s := strings.Split(string(r.KVPair.Value), ",")
-				membersWorkers = append(membersWorkers, MemberWorkers{
+				peersWorkers = append(peersWorkers, Peer{
 					Name:    r.MemberID,
 					Workers: s,
 				})
@@ -97,11 +97,11 @@ func (c *ConsulMemberList) List(ctx context.Context) ([]MemberWorkers, error) {
 		return nil, allErr
 	}
 
-	return membersWorkers, nil
+	return peersWorkers, nil
 }
 
-// Register registers the workers under this member
-func (c *ConsulMemberList) Register(ctx context.Context, workers []string) error {
+// Register registers the workers under this ledger
+func (c *ConsulLedger) Register(ctx context.Context, workers []string) error {
 	options := &api.WriteOptions{}
 	options = options.WithContext(ctx)
 
@@ -129,7 +129,7 @@ func (c *ConsulMemberList) Register(ctx context.Context, workers []string) error
 	return nil
 }
 
-func (c *ConsulMemberList) Unregister(ctx context.Context) error {
+func (c *ConsulLedger) Close(ctx context.Context) error {
 	options := &api.WriteOptions{}
 	options = options.WithContext(ctx)
 

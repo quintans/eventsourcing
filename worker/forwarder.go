@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/dist"
 )
 
-type LockerFactory func(lockName string) lock.Locker
+type LockerFactory func(lockName string) dist.Locker
 
 type TaskerFactory func(partitionLow, partitionHi uint32) Task
 
@@ -18,7 +18,7 @@ func PartitionedEventForwarders(logger *slog.Logger, name string, lockerFactory 
 	for i, v := range partitionSlots {
 		slotsName := fmt.Sprintf("%d-%d", v.From, v.To)
 
-		var locker lock.Locker
+		var locker dist.Locker
 		if lockerFactory != nil {
 			locker = lockerFactory(name + "-lock-" + slotsName)
 		}
@@ -37,7 +37,7 @@ func PartitionedEventForwarders(logger *slog.Logger, name string, lockerFactory 
 
 // EventForwarderWorker creates a single worker responsible of forwarding
 func EventForwarder(logger *slog.Logger, name string, lockerFactory LockerFactory, task Task) Worker {
-	var locker lock.Locker
+	var locker dist.Locker
 	if lockerFactory != nil {
 		locker = lockerFactory(name + "-lock")
 	}

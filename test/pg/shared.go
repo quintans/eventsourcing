@@ -106,7 +106,6 @@ func dbSchema(dbConfig DBConfig) error {
 		aggregate_kind VARCHAR (50) NOT NULL,
 		kind VARCHAR (50) NOT NULL,
 		body bytea,
-		idempotency_key VARCHAR (50),
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		migration INTEGER NOT NULL DEFAULT 0,
 		migrated BOOLEAN NOT NULL DEFAULT false,
@@ -115,7 +114,6 @@ func dbSchema(dbConfig DBConfig) error {
 	CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);
 	CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);
 	CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);
-	CREATE UNIQUE INDEX evt_idempot_uk ON events (idempotency_key, migration);
 	CREATE INDEX evt_tenant_idx ON events (meta_tenant);
 
 	CREATE TABLE IF NOT EXISTS snapshots(
@@ -164,15 +162,14 @@ func dbSchema(dbConfig DBConfig) error {
 	return nil
 }
 
-func connect(dbConfig DBConfig) (*sqlx.DB, error) {
+func connect(t *testing.T, dbConfig DBConfig) *sqlx.DB {
 	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
 
 	db, err := sqlx.Open("postgres", dburl)
-	if err != nil {
-		return nil, err
-	}
-	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-	return db, nil
+	require.NoError(t, err)
+
+	err = db.Ping()
+	require.NoError(t, err)
+
+	return db
 }

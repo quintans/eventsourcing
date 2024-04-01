@@ -64,9 +64,7 @@ func (s *MockKVStore) Puts() []KV {
 	kvs := []KV{}
 
 	s.mu.Lock()
-	for _, v := range s.puts {
-		kvs = append(kvs, v)
-	}
+	kvs = append(kvs, s.puts...)
 	s.mu.Unlock()
 
 	return kvs

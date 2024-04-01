@@ -129,7 +129,7 @@ func newBalancer(name string, members *sync.Map) ([]worker.Worker, context.Cance
 	ctx, cancel := context.WithCancel(context.Background())
 	member := test.NewInMemMemberList(ctx, members)
 	ws := getWorkers(name)
-	balancer := worker.NewMembersBalancer(
+	balancer := worker.NewWorkBalancer(
 		slog.New(slog.NewTextHandler(os.Stdout, nil)),
 		name,
 		member,

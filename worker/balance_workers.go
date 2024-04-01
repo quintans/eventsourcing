@@ -11,20 +11,20 @@ import (
 
 var turbo = time.Second
 
-type MemberWorkers struct {
+type Peer struct {
 	Name    string
 	Workers []string
 }
 
-// Memberlister represents a member of a list to which the a worker may be assigned
-type Memberlister interface {
+// Ledger represents a member of a cluster of ledger to which a worker may be assigned
+type Ledger interface {
 	Name() string
-	// List lists all servers and the workers under each of them
-	List(context.Context) ([]MemberWorkers, error)
-	// Register registers the workers under this member
+	// Peers lists all ledgers/servers and the workers under each of them
+	Peers(context.Context) ([]Peer, error)
+	// Register registers the workers under this server
 	Register(context.Context, []string) error
-	// Unregister removes itself from the list
-	Unregister(context.Context) error
+	// Close removes itself from the list
+	Close(context.Context) error
 }
 
 // Worker represents an execution that can be started or stopped
@@ -43,19 +43,19 @@ type Balancer interface {
 	Stop(ctx context.Context)
 }
 
-var _ Balancer = (*MembersBalancer)(nil)
+var _ Balancer = (*WorkBalancer)(nil)
 
-type MembersBalancerOption func(*MembersBalancer)
+type MultiBalancerOption func(*WorkBalancer)
 
-// MembersBalancer manages the lifecycle of workers as well balance them over all members.
+// WorkBalancer manages the lifecycle of workers and balance them over all peers.
 //
 // A worker can be unbalanced or paused.
-//   - Unbalanced worker will never be balanced across the different members and will always run.
+//   - Unbalanced worker will never be balanced across the different peers and will always run.
 //   - Paused worker will hold its execution and will not be balanced-
-type MembersBalancer struct {
+type WorkBalancer struct {
 	name             string
 	logger           *slog.Logger
-	member           Memberlister
+	ledger           Ledger
 	workers          []Worker
 	heartbeat        time.Duration
 	currentHeartbeat time.Duration
@@ -65,13 +65,13 @@ type MembersBalancer struct {
 	done chan struct{}
 }
 
-func NewMembersBalancer(logger *slog.Logger, name string, member Memberlister, workers []Worker, options ...MembersBalancerOption) *MembersBalancer {
-	mb := &MembersBalancer{
+func NewWorkBalancer(logger *slog.Logger, name string, ledger Ledger, workers []Worker, options ...MultiBalancerOption) *WorkBalancer {
+	mb := &WorkBalancer{
 		name: name,
 		logger: logger.With(
 			"name", name,
 		),
-		member:           member,
+		ledger:           ledger,
 		workers:          workers,
 		heartbeat:        5 * time.Second,
 		currentHeartbeat: 5 * time.Second,
@@ -83,24 +83,24 @@ func NewMembersBalancer(logger *slog.Logger, name string, member Memberlister, w
 	return mb
 }
 
-func WithHeartbeat(heartbeat time.Duration) MembersBalancerOption {
-	return func(b *MembersBalancer) {
+func WithHeartbeat(heartbeat time.Duration) MultiBalancerOption {
+	return func(b *WorkBalancer) {
 		b.heartbeat = heartbeat
 		b.currentHeartbeat = heartbeat
 	}
 }
 
-func WithTurboHeartbeat(heartbeat time.Duration) MembersBalancerOption {
-	return func(b *MembersBalancer) {
+func WithTurboHeartbeat(heartbeat time.Duration) MultiBalancerOption {
+	return func(b *WorkBalancer) {
 		b.turbo = heartbeat
 	}
 }
 
-func (b *MembersBalancer) Name() string {
+func (b *WorkBalancer) Name() string {
 	return b.name
 }
 
-func (b *MembersBalancer) Start(ctx context.Context) <-chan struct{} {
+func (b *WorkBalancer) Start(ctx context.Context) <-chan struct{} {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -133,7 +133,7 @@ func (b *MembersBalancer) Start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
-func (b *MembersBalancer) Stop(ctx context.Context) {
+func (b *WorkBalancer) Stop(ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.done == nil {
@@ -144,7 +144,7 @@ func (b *MembersBalancer) Stop(ctx context.Context) {
 		w.Stop(ctx)
 	}
 
-	err := b.member.Unregister(context.Background())
+	err := b.ledger.Close(context.Background())
 	if err != nil {
 		b.logger.Warn("Error while cleaning register", log.Err(err))
 	}
@@ -153,41 +153,41 @@ func (b *MembersBalancer) Stop(ctx context.Context) {
 	b.done = nil
 }
 
-func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
-	members, err := b.member.List(ctx)
+func (b *WorkBalancer) run(ctx context.Context, ticker *time.Ticker) error {
+	peers, err := b.ledger.Peers(ctx)
 	if err != nil {
 		return err
 	}
 	balancedWorkers := b.filterBalancedWorkers()
-	members = filterMemberWorkers(members, balancedWorkers)
+	peers = filterPeerWorkers(peers, balancedWorkers)
 
-	// if current member is not in the list, add it to the member count
+	// if current peer is not in the list, add it to the peer count
 	present := false
-	for _, v := range members {
-		if v.Name == b.member.Name() {
+	for _, v := range peers {
+		if v.Name == b.ledger.Name() {
 			present = true
 			break
 		}
 	}
-	membersCount := len(members)
+	peersCount := len(peers)
 	if !present {
-		membersCount++
+		peersCount++
 	}
 
 	monitorsNo := len(balancedWorkers)
-	minWorkersToAcquire := monitorsNo / membersCount
+	minWorkersToAcquire := monitorsNo / peersCount
 
-	// check if all members have the minimum workers. Only after that, any additional can be picked up.
+	// check if all peers have the minimum workers. Only after that, any additional can be picked up.
 	allHaveMinWorkers := true
 	workersInUse := map[string]bool{}
-	for _, m := range members {
+	for _, m := range peers {
 		// checking if others have min required workers running.
-		// This member might be included
+		// This peer might be included
 		if len(m.Workers) < minWorkersToAcquire {
 			allHaveMinWorkers = false
 		}
-		// map only other members workers
-		if m.Name != b.member.Name() {
+		// map only other peers workers
+		if m.Name != b.ledger.Name() {
 			for _, v := range m.Workers {
 				workersInUse[v] = true
 			}
@@ -201,12 +201,12 @@ func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 			myRunningWorkers[v.Name()] = true
 		}
 	}
-	// if my current running workers are less, then not all members have the min workers
+	// if my current running workers are less, then not all peers have the min workers
 	if len(myRunningWorkers) < minWorkersToAcquire {
 		allHaveMinWorkers = false
 	}
 
-	if allHaveMinWorkers && monitorsNo%membersCount != 0 {
+	if allHaveMinWorkers && monitorsNo%peersCount != 0 {
 		minWorkersToAcquire++
 	}
 
@@ -220,7 +220,7 @@ func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 	locks := b.balance(ctx, balancedWorkers, minWorkersToAcquire, workersInUse, myRunningWorkers)
 
 	// reset ticker if needed
-	if b.enableTurbo(balancedWorkers, members, locks, minWorkersToAcquire) {
+	if b.enableTurbo(balancedWorkers, peers, locks, minWorkersToAcquire) {
 		// turbo is activated when there is a need to rebalance workers
 		if b.currentHeartbeat != b.turbo {
 			b.currentHeartbeat = b.turbo
@@ -233,17 +233,17 @@ func (b *MembersBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 		}
 	}
 
-	return b.member.Register(ctx, locks)
+	return b.ledger.Register(ctx, locks)
 }
 
-func (b *MembersBalancer) enableTurbo(workers []Worker, members []MemberWorkers, myWorkers []string, minWorkersToAcquire int) bool {
+func (b *WorkBalancer) enableTurbo(workers []Worker, peers []Peer, myWorkers []string, minWorkersToAcquire int) bool {
 	total := len(workers)
 	acquired := len(myWorkers)
 	if acquired < minWorkersToAcquire {
 		return true
 	}
-	for _, m := range members {
-		if m.Name != b.member.Name() {
+	for _, m := range peers {
+		if m.Name != b.ledger.Name() {
 			if len(m.Workers) < minWorkersToAcquire {
 				return true
 			}
@@ -253,7 +253,7 @@ func (b *MembersBalancer) enableTurbo(workers []Worker, members []MemberWorkers,
 	return total != acquired
 }
 
-func (b *MembersBalancer) filterBalancedWorkers() []Worker {
+func (b *WorkBalancer) filterBalancedWorkers() []Worker {
 	var balanceable []Worker
 	for _, w := range b.workers {
 		if w.IsBalanceable() {
@@ -263,8 +263,8 @@ func (b *MembersBalancer) filterBalancedWorkers() []Worker {
 	return balanceable
 }
 
-func filterMemberWorkers(members []MemberWorkers, workers []Worker) []MemberWorkers {
-	for _, m := range members {
+func filterPeerWorkers(peers []Peer, workers []Worker) []Peer {
+	for _, m := range peers {
 		newWorkers := []string{}
 		for _, v := range m.Workers {
 			for _, w := range workers {
@@ -276,10 +276,10 @@ func filterMemberWorkers(members []MemberWorkers, workers []Worker) []MemberWork
 		}
 		m.Workers = newWorkers
 	}
-	return members
+	return peers
 }
 
-func (b *MembersBalancer) balance(ctx context.Context, workers []Worker, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
+func (b *WorkBalancer) balance(ctx context.Context, workers []Worker, workersToAcquire int, workersInUse, myRunningWorkers map[string]bool) []string {
 	running := len(myRunningWorkers)
 	if running == workersToAcquire {
 		return mapToString(myRunningWorkers)

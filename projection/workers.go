@@ -24,6 +24,7 @@ func PartitionedWorkers[K eventsourcing.ID](
 	esRepo EventsRepository[K],
 	projection Projection[K],
 	splits int,
+	splitIds []int,
 	resumeStore store.KVStore,
 ) ([]*worker.RunWorker, error) {
 	return PartitionedCompetingWorkers(
@@ -63,8 +64,8 @@ func PartitionedCompetingWorkers[K eventsourcing.ID](
 			0,
 			esRepo,
 			projection,
-			splits,
 			resumeStore,
+			splits,
 		)
 		if err != nil {
 			return nil, faults.Wrap(err)
@@ -83,8 +84,8 @@ func PartitionedCompetingWorkers[K eventsourcing.ID](
 			x+1,
 			esRepo,
 			projection,
-			splits,
 			resumeStore,
+			splits,
 		)
 		if err != nil {
 			return nil, faults.Wrap(err)
@@ -105,8 +106,8 @@ func createProjector[K eventsourcing.ID](
 	partition uint32,
 	esRepo EventsRepository[K],
 	projection Projection[K],
-	splits int,
 	resumeStore store.KVStore,
+	splits int,
 ) (*worker.RunWorker, error) {
 	sr, err := NewResumeKey(projection.Name(), topic, partition)
 	if err != nil {
@@ -119,7 +120,7 @@ func createProjector[K eventsourcing.ID](
 		esRepo,
 		subscriberFactory(ctx, sr),
 		projection,
-		splits,
 		resumeStore,
+		splits,
 	), nil
 }

@@ -239,7 +239,6 @@ func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		var aggregateKind string
 		var kind string
 		body := []byte{}
-		var idempotencyKey string
 		var createdAt time.Time
 		var migrated bool
 		err = extract(values, map[string]interface{}{
@@ -249,7 +248,6 @@ func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			"aggregate_kind":    &aggregateKind,
 			"kind":              &kind,
 			"body":              &body,
-			"idempotency_key":   &idempotencyKey,
 			"created_at":        &createdAt,
 			"migrated":          &migrated,
 		})
@@ -279,7 +277,6 @@ func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			Kind:             eventsourcing.Kind(kind),
 			Body:             body,
 			Metadata:         meta,
-			IdempotencyKey:   idempotencyKey,
 			CreatedAt:        createdAt,
 			Migrated:         migrated,
 		}

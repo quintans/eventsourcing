@@ -13,8 +13,8 @@ import (
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/dist"
 	"github.com/quintans/eventsourcing/eventid"
-	"github.com/quintans/eventsourcing/lock"
 	"github.com/quintans/eventsourcing/log"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/util"
@@ -44,7 +44,7 @@ type getByIDFunc[K eventsourcing.ID] func(ctx context.Context, aggregateID strin
 func (r *EsRepository[K, PK]) MigrateConsistentProjection(
 	ctx context.Context,
 	logger *slog.Logger,
-	locker lock.WaitLocker,
+	locker dist.WaitLocker,
 	migrater ProjectionMigrater[K],
 	getByID getByIDFunc[K],
 ) error {
@@ -65,7 +65,7 @@ func (r *EsRepository[K, PK]) MigrateConsistentProjection(
 func (r *EsRepository[K, PK]) migrateProjection(
 	ctx context.Context,
 	logger *slog.Logger,
-	locker lock.WaitLocker,
+	locker dist.WaitLocker,
 	migrater ProjectionMigrater[K],
 	getByID getByIDFunc[K],
 ) error {
@@ -80,7 +80,7 @@ func (r *EsRepository[K, PK]) migrateProjection(
 	// lock
 	for {
 		_, err = locker.Lock(ctx)
-		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+		if errors.Is(err, dist.ErrLockAlreadyAcquired) {
 			er := locker.WaitForUnlock(ctx)
 			if er != nil {
 				logger.Error("waiting for unlock", log.Err(er))
@@ -133,7 +133,7 @@ func (r *EsRepository[K, PK]) processAggregate(
 		return faults.Wrap(err)
 	}
 
-	return r.WithTx(c, func(c context.Context, tx *sql.Tx) error {
+	return r.WithTx(c, func(c context.Context, tx store.Session) error {
 		// flush the event to the handler
 		err := migrater.Flush(c, metadata, agg)
 		if err != nil {
@@ -149,7 +149,7 @@ func (r *EsRepository[K, PK]) processAggregate(
 }
 
 func (r *EsRepository[K, PK]) createMigrationTable(ctx context.Context) error {
-	_, err := r.db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS projection_migration (name VARCHAR (100) PRIMARY KEY)")
+	_, err := r.Session(ctx).ExecContext(ctx, "CREATE TABLE IF NOT EXISTS projection_migration (name VARCHAR (100) PRIMARY KEY)")
 	if err != nil {
 		return faults.Errorf("failed to create projection_migration table: %w", err)
 	}
@@ -159,7 +159,7 @@ func (r *EsRepository[K, PK]) createMigrationTable(ctx context.Context) error {
 
 func (r *EsRepository[K, PK]) shouldMigrate(ctx context.Context) (bool, error) {
 	var value int
-	if err := r.db.GetContext(ctx, &value, "SELECT 1 FROM projection_migration WHERE name=$1"); err != nil {
+	if err := r.Session(ctx).GetContext(ctx, &value, "SELECT 1 FROM projection_migration WHERE name=$1"); err != nil {
 		if err != sql.ErrNoRows {
 			return false, faults.Errorf("unable to get the projection status: %w", err)
 		}
@@ -169,7 +169,7 @@ func (r *EsRepository[K, PK]) shouldMigrate(ctx context.Context) (bool, error) {
 }
 
 func (r *EsRepository[K, PK]) doneMigration(ctx context.Context, name string) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO projection_migration (name) VALUES ($1)`, name)
+	_, err := r.Session(ctx).ExecContext(ctx, `INSERT INTO projection_migration (name) VALUES ($1)`, name)
 	if err != nil {
 		return faults.Errorf("failed to mark projection migration '%s' as done: %w", name, err)
 	}
@@ -197,7 +197,7 @@ func (r *EsRepository[K, PK]) distinctAggregates(
 		query.WriteString(" ORDER BY id ASC LIMIT " + strconv.Itoa(distinctLimit))
 
 		aggIDs := []string{}
-		err := r.db.SelectContext(ctx, &aggIDs, query.String(), args...)
+		err := r.Session(ctx).SelectContext(ctx, &aggIDs, query.String(), args...)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		} else if err != nil {
@@ -223,7 +223,7 @@ func (r *EsRepository[K, PK]) addNoOp(ctx context.Context, metadata store.Aggreg
 	ver := metadata.Version + 1
 	aggID := metadata.ID.String()
 	id := eventid.NewAfterTime(metadata.UpdatedAt)
-	tx := TxFromContext(ctx)
+	tx := store.TxFromContext(ctx)
 	err := r.saveEvent(ctx, tx, &Event{
 		ID:               id,
 		AggregateID:      aggID,

@@ -28,7 +28,7 @@ type Sink[K eventsourcing.ID] struct {
 	logger        *slog.Logger
 	producer      sarama.SyncProducer
 	topic         string
-	allPartitions []uint32
+	allPartitions []int32
 	codec         sink.Codec[K]
 	brokers       []string
 
@@ -71,7 +71,7 @@ func NewSink[K eventsourcing.ID, PK eventsourcing.IDPt[K]](logger *slog.Logger, 
 		topic:         topic,
 		codec:         sink.JSONCodec[K, PK]{},
 		producer:      prd,
-		allPartitions: util.NormalizePartitions(allPartitions),
+		allPartitions: util.NormalizeKafkaPartitions(allPartitions),
 		brokers:       brokers,
 		checkPointCh:  make(chan resume, checkPointBuffer),
 	}
@@ -140,7 +140,7 @@ func (s *Sink[K]) ResumeTokens(ctx context.Context, forEach func(resumeToken enc
 	return nil
 }
 
-func resumeTokenKey(topic string, partitionID uint32) (_ string, e error) {
+func resumeTokenKey(topic string, partitionID int32) (_ string, e error) {
 	defer faults.Catch(&e, "resumeTokenKey(topic=%s, partitionID=%d)", topic, partitionID)
 
 	if topic == "" {
@@ -171,7 +171,7 @@ func (s *Sink[K]) Sink(_ context.Context, e *eventsourcing.Event[K], m sink.Meta
 		return faults.Errorf("encoding event: %w", err)
 	}
 
-	topic, err := resumeTokenKey(s.topic, uint32(partition+1))
+	topic, err := resumeTokenKey(s.topic, partition+1)
 	if err != nil {
 		return faults.Wrap(err)
 	}

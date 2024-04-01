@@ -18,7 +18,7 @@ type kvStoreRow struct {
 }
 
 type KVStore struct {
-	Repository
+	store.Repository
 	table string
 }
 
@@ -34,16 +34,14 @@ func NewKVStoreWithURL(connString string, table string) (KVStore, error) {
 func NewKVStore(db *sql.DB, table string) KVStore {
 	dbx := sqlx.NewDb(db, driverName)
 	return KVStore{
-		Repository: Repository{
-			db: dbx,
-		},
-		table: table,
+		Repository: store.NewRepository(dbx),
+		table:      table,
 	}
 }
 
 func (r KVStore) Get(ctx context.Context, key string) (string, error) {
 	row := kvStoreRow{}
-	if err := r.db.GetContext(ctx, &row, fmt.Sprintf("SELECT value FROM %s WHERE id = ?", r.table), key); err != nil {
+	if err := r.Session(ctx).GetContext(ctx, &row, fmt.Sprintf("SELECT value FROM %s WHERE id = ?", r.table), key); err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil
 		}
@@ -57,7 +55,7 @@ func (m KVStore) Put(ctx context.Context, key string, value string) error {
 	if value == "" {
 		return nil
 	}
-	return m.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	return m.WithTx(ctx, func(ctx context.Context, tx store.Session) error {
 		_, err := tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s(id, value) VALUES(?, ?) ON DUPLICATE KEY UPDATE value = ?", m.table), key, value, value)
 		return faults.Wrapf(err, "setting value '%s' for key '%s': %w", value, key, err)
 	})

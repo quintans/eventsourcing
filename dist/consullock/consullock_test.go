@@ -14,8 +14,8 @@ import (
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/quintans/eventsourcing/lock"
-	"github.com/quintans/eventsourcing/lock/consullock"
+	"github.com/quintans/eventsourcing/dist"
+	"github.com/quintans/eventsourcing/dist/consullock"
 )
 
 func SetupConsul(t *testing.T) string {
@@ -68,7 +68,7 @@ func TestConsul(t *testing.T) {
 
 	lock2 := pool2.NewLock(lockKey, 10*time.Second)
 	_, err = lock2.Lock(ctx)
-	require.ErrorIs(t, err, lock.ErrLockAlreadyAcquired)
+	require.ErrorIs(t, err, dist.ErrLockAlreadyAcquired)
 
 	err = lock1.Unlock(ctx)
 	require.NoError(t, err)

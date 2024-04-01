@@ -7,7 +7,7 @@ import (
 
 	"github.com/teris-io/shortid"
 
-	"github.com/quintans/eventsourcing/lock"
+	"github.com/quintans/eventsourcing/dist"
 	"github.com/quintans/eventsourcing/projection"
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/worker"
@@ -43,13 +43,13 @@ func (l *InMemLocker) Lock(ctx context.Context) (context.Context, error) {
 		return ctx, nil
 	}
 	cancel()
-	return nil, lock.ErrLockAlreadyHeld
+	return nil, dist.ErrLockAlreadyHeld
 }
 
 func (l *InMemLocker) Unlock(context.Context) error {
 	done, loaded := l.locks.LoadAndDelete(l.name)
 	if !loaded {
-		return lock.ErrLockNotHeld
+		return dist.ErrLockNotHeld
 	}
 	done.(context.CancelFunc)()
 	return nil
@@ -67,7 +67,7 @@ func (l *InMemLocker) WaitForUnlock(context.Context) error {
 func (l *InMemLocker) WaitForLock(ctx context.Context) (context.Context, error) {
 	for {
 		ctx2, err := l.Lock(ctx)
-		if errors.Is(err, lock.ErrLockAlreadyAcquired) {
+		if errors.Is(err, dist.ErrLockAlreadyAcquired) {
 			_ = l.WaitForUnlock(ctx)
 			continue
 		} else if err != nil {
@@ -100,10 +100,10 @@ func (m InMemMemberList) Name() string {
 	return m.name
 }
 
-func (m InMemMemberList) List(context.Context) ([]worker.MemberWorkers, error) {
-	members := []worker.MemberWorkers{}
+func (m InMemMemberList) Peers(context.Context) ([]worker.Peer, error) {
+	members := []worker.Peer{}
 	m.db.Range(func(key, value interface{}) bool {
-		members = append(members, worker.MemberWorkers{
+		members = append(members, worker.Peer{
 			Name:    key.(string),
 			Workers: value.([]string),
 		})
@@ -118,7 +118,7 @@ func (m *InMemMemberList) Register(_ context.Context, workers []string) error {
 	return nil
 }
 
-func (m *InMemMemberList) Unregister(_ context.Context) error {
+func (m *InMemMemberList) Close(_ context.Context) error {
 	m.db.Delete(m.name)
 	return nil
 }

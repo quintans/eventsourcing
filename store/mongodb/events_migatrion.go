@@ -205,7 +205,6 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,
 				Body:             mig.Body,
-				IdempotencyKey:   mig.IdempotencyKey,
 				Metadata:         fromMetadata(r.metadata),
 				CreatedAt:        now,
 				Migrated:         true,

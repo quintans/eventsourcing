@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	EmptyIdempotencyKey      = ""
-	InvalidatedKind     Kind = "Invalidated"
+	InvalidatedKind Kind = "Invalidated"
 )
 
 var (
@@ -66,7 +65,6 @@ type Event[K ID] struct {
 	AggregateKind    Kind
 	Kind             Kind
 	Body             encoding.Base64
-	IdempotencyKey   string
 	Metadata         Metadata
 	CreatedAt        time.Time
 	Migrated         bool
@@ -91,7 +89,6 @@ type EsRepository[K ID] interface {
 	GetSnapshot(ctx context.Context, aggregateID K) (Snapshot[K], error)
 	SaveSnapshot(ctx context.Context, snapshot *Snapshot[K]) error
 	GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*Event[K], error)
-	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
 	Forget(ctx context.Context, request ForgetRequest[K], forget func(kind Kind, body []byte) ([]byte, error)) error
 	MigrateInPlaceCopyReplace(
 		ctx context.Context,
@@ -108,18 +105,16 @@ type EsRepository[K ID] interface {
 
 // Event is the event data stored in the database
 type EventMigration struct {
-	Kind           Kind
-	Body           []byte
-	IdempotencyKey string
-	Metadata       Metadata
+	Kind     Kind
+	Body     []byte
+	Metadata Metadata
 }
 
 func DefaultEventMigration[K ID](e *Event[K]) *EventMigration {
 	return &EventMigration{
-		Kind:           e.Kind,
-		Body:           e.Body,
-		IdempotencyKey: e.IdempotencyKey,
-		Metadata:       e.Metadata,
+		Kind:     e.Kind,
+		Body:     e.Body,
+		Metadata: e.Metadata,
 	}
 }
 
@@ -138,12 +133,11 @@ func (e NoOpEvent) GetKind() string {
 type MigrationHandler[K ID] func(events []*Event[K]) ([]*EventMigration, error)
 
 type EventRecord[K ID] struct {
-	AggregateID    K
-	Version        uint32
-	AggregateKind  Kind
-	IdempotencyKey string
-	CreatedAt      time.Time
-	Details        []EventRecordDetail
+	AggregateID   K
+	Version       uint32
+	AggregateKind Kind
+	CreatedAt     time.Time
+	Details       []EventRecordDetail
 }
 
 type EventRecordDetail struct {
@@ -154,23 +148,10 @@ type EventRecordDetail struct {
 
 type Metadata map[string]string
 
-type PersistOptions struct {
-	IdempotencyKey string
-}
-
-type PersistOption func(*PersistOptions)
-
-func WithIdempotencyKey(key string) PersistOption {
-	return func(o *PersistOptions) {
-		o.IdempotencyKey = key
-	}
-}
-
 type EventStorer[T Aggregater[K], K ID] interface {
-	Create(ctx context.Context, aggregate T, options ...PersistOption) error
+	Create(ctx context.Context, aggregate T) error
 	Retrieve(ctx context.Context, aggregateID K) (T, error)
-	Update(ctx context.Context, aggregateID K, do func(T) (T, error), options ...PersistOption) error
-	HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error)
+	Update(ctx context.Context, aggregateID K, do func(T) (T, error)) error
 	// Forget erases the values of the specified fields
 	Forget(ctx context.Context, request ForgetRequest[K], forget func(Kinder) (Kinder, error)) error
 }
@@ -208,7 +189,7 @@ func NewEventStore[T Aggregater[K], K ID, PK IDPt[K]](repo EsRepository[K], code
 // Update loads the aggregate from the event store and handles it to the handler function, saving the returning Aggregater in the event store.
 // If no aggregate is found for the provided ID the error ErrUnknownAggregateID is returned.
 // If the handler function returns nil for the Aggregater or an error, the save action is ignored.
-func (es EventStore[T, K, PK]) Update(ctx context.Context, aggregateID K, do func(T) (T, error), options ...PersistOption) error {
+func (es EventStore[T, K, PK]) Update(ctx context.Context, aggregateID K, do func(T) (T, error)) error {
 	a, version, updatedAt, eventsCounter, err := es.retrieve(ctx, aggregateID)
 	if err != nil {
 		return err
@@ -219,7 +200,7 @@ func (es EventStore[T, K, PK]) Update(ctx context.Context, aggregateID K, do fun
 		return err
 	}
 
-	return es.save(ctx, a, version, updatedAt, eventsCounter, options...)
+	return es.save(ctx, a, version, updatedAt, eventsCounter)
 }
 
 func (es EventStore[T, K, PK]) Retrieve(ctx context.Context, aggregateID K) (T, error) {
@@ -312,8 +293,8 @@ func (es EventStore[T, K, PK]) RehydrateEvent(kind Kind, body []byte) (Kinder, e
 }
 
 // Create saves the events of the aggregater into the event store
-func (es EventStore[T, K, PK]) Create(ctx context.Context, aggregate T, options ...PersistOption) (err error) {
-	return es.save(ctx, aggregate, 0, time.Now(), 0, options...)
+func (es EventStore[T, K, PK]) Create(ctx context.Context, aggregate T) (err error) {
+	return es.save(ctx, aggregate, 0, time.Now(), 0)
 }
 
 func (es EventStore[T, K, PK]) save(
@@ -322,17 +303,11 @@ func (es EventStore[T, K, PK]) save(
 	version uint32,
 	updatedAt time.Time,
 	eventsCounter uint32,
-	options ...PersistOption,
 ) (err error) {
 	events := aggregate.PopEvents()
 	eventsLen := len(events)
 	if eventsLen == 0 {
 		return nil
-	}
-
-	opts := PersistOptions{}
-	for _, fn := range options {
-		fn(&opts)
 	}
 
 	gen := eventid.NewGenerator(updatedAt)
@@ -353,12 +328,11 @@ func (es EventStore[T, K, PK]) save(
 
 	now := time.Now()
 	rec := &EventRecord[K]{
-		AggregateID:    aggregate.GetID(),
-		Version:        version,
-		AggregateKind:  tName,
-		IdempotencyKey: opts.IdempotencyKey,
-		CreatedAt:      now,
-		Details:        details,
+		AggregateID:   aggregate.GetID(),
+		Version:       version,
+		AggregateKind: tName,
+		CreatedAt:     now,
+		Details:       details,
 	}
 
 	id, lastVersion, err := es.store.SaveEvent(ctx, rec)
@@ -388,13 +362,6 @@ func (es EventStore[T, K, PK]) save(
 	}
 
 	return nil
-}
-
-func (es EventStore[T, K, PK]) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
-	if idempotencyKey == EmptyIdempotencyKey {
-		return false, nil
-	}
-	return es.store.HasIdempotencyKey(ctx, idempotencyKey)
 }
 
 type ForgetRequest[K ID] struct {

@@ -28,7 +28,7 @@ type EventsRepository[K eventsourcing.ID] interface {
 }
 
 type OutboxRepository[K eventsourcing.ID] struct {
-	Repository
+	store.Repository
 	tableName  string
 	eventsRepo EventsRepository[K]
 }
@@ -36,9 +36,7 @@ type OutboxRepository[K eventsourcing.ID] struct {
 func NewOutboxStore[K eventsourcing.ID](db *sql.DB, tableName string, eventsRepo EventsRepository[K]) *OutboxRepository[K] {
 	dbx := sqlx.NewDb(db, driverName)
 	r := &OutboxRepository[K]{
-		Repository: Repository{
-			db: dbx,
-		},
+		Repository: store.NewRepository(dbx),
 		tableName:  tableName,
 		eventsRepo: eventsRepo,
 	}
@@ -57,7 +55,7 @@ func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, 
 	}
 
 	var ids []string
-	err := r.db.Select(&ids, query.String(), args...)
+	err := r.Session(ctx).SelectContext(ctx, &ids, query.String(), args...)
 	if err != nil {
 		return nil, faults.Errorf("getting pending events: query=%s, args=%v:  %w", query.String(), args, err)
 	}
@@ -78,14 +76,14 @@ func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, 
 }
 
 func (r *OutboxRepository[K]) AfterSink(ctx context.Context, eID eventid.EventID) error {
-	_, err := r.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = ?", r.tableName), eID.String())
+	_, err := r.Session(ctx).ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = ?", r.tableName), eID.String())
 	return faults.Wrapf(err, "deleting from '%s' where id='%s'", r.tableName, eID)
 }
 
 func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler[K] {
 	return func(c *store.InTxHandlerContext[K]) error {
 		ctx := c.Context()
-		tx := TxFromContext(ctx)
+		tx := store.TxFromContext(ctx)
 		if tx == nil {
 			return faults.Errorf("no transaction in context")
 		}
