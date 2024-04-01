@@ -51,7 +51,6 @@ type Event struct {
 	AggregateKind    eventsourcing.Kind `db:"aggregate_kind"`
 	Kind             eventsourcing.Kind `db:"kind"`
 	Body             []byte             `db:"body"`
-	IdempotencyKey   store.NilString    `db:"idempotency_key"`
 	CreatedAt        time.Time          `db:"created_at"`
 	Migration        int                `db:"migration"`
 	Migrated         bool               `db:"migrated"`
@@ -86,7 +85,6 @@ func TestSaveAndGet(t *testing.T) {
 			acc.Deposit(1)
 			return acc, nil
 		},
-		eventsourcing.WithIdempotencyKey("idempotency-key"),
 	)
 	require.NoError(t, err)
 	time.Sleep(time.Second)
@@ -116,7 +114,6 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, "MoneyDeposited", evts[1].Kind.String())
 	assert.Equal(t, "MoneyDeposited", evts[2].Kind.String())
 	assert.Equal(t, "MoneyDeposited", evts[3].Kind.String())
-	assert.Equal(t, "idempotency-key", string(evts[3].IdempotencyKey))
 	assert.Equal(t, aggregateKind, evts[0].AggregateKind)
 	assert.Equal(t, id.String(), evts[0].AggregateID)
 	for i := 0; i < len(evts); i++ {
@@ -128,21 +125,6 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(136), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
-
-	found, err := es.HasIdempotencyKey(ctx, "idempotency-key")
-	require.NoError(t, err)
-	require.True(t, found)
-
-	err = es.Update(
-		ctx,
-		id,
-		func(acc *test.Account) (*test.Account, error) {
-			acc.Deposit(5)
-			return acc, nil
-		},
-		eventsourcing.WithIdempotencyKey("idempotency-key"),
-	)
-	require.Error(t, err)
 }
 
 func TestPollListener(t *testing.T) {

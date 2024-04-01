@@ -31,8 +31,8 @@ const (
 	coreSnapVars = "?, ?, ?, ?, ?, ?"
 
 	defEventsTable = "events"
-	coreEventCols  = "id, aggregate_id, aggregate_id_hash, aggregate_version, aggregate_kind, kind, body, idempotency_key, created_at, migration, migrated"
-	coreEventVars  = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+	coreEventCols  = "id, aggregate_id, aggregate_id_hash, aggregate_version, aggregate_kind, kind, body, created_at, migration, migrated"
+	coreEventVars  = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
 )
 
 // Event is the event data is stored in the database
@@ -44,7 +44,6 @@ type Event struct {
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
 	Body             []byte
-	IdempotencyKey   store.NilString
 	CreatedAt        time.Time
 	Migration        int
 	Migrated         bool
@@ -181,8 +180,6 @@ func (r *EsRepository[K, PK]) Connection() *sql.DB {
 }
 
 func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord[K]) (eventid.EventID, uint32, error) {
-	idempotencyKey := eRec.IdempotencyKey
-
 	version := eRec.Version
 	var id eventid.EventID
 	err := r.WithTx(ctx, func(c context.Context, tx *sql.Tx) error {
@@ -200,15 +197,12 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 				AggregateKind:    eRec.AggregateKind,
 				Kind:             e.Kind,
 				Body:             e.Body,
-				IdempotencyKey:   store.NilString(idempotencyKey),
 				CreatedAt:        eRec.CreatedAt,
 				Metadata:         metadata,
 			})
 			if err != nil {
 				return faults.Wrap(err)
 			}
-			// for a batch of events, the idempotency key is only applied on the first record
-			idempotencyKey = ""
 		}
 
 		return nil
@@ -238,7 +232,6 @@ func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx *sql.Tx, event *
 		event.AggregateKind,
 		event.Kind,
 		event.Body,
-		event.IdempotencyKey,
 		event.CreatedAt,
 		event.Migration,
 		event.Migrated,
@@ -435,16 +428,6 @@ func TxFromContext(ctx context.Context) *sql.Tx {
 	return tx
 }
 
-func (r *EsRepository[K, PK]) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
-	var exists bool
-	qry := fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE idempotency_key=? AND migration = 0) AS "EXISTS"`, r.eventsTable)
-	err := r.db.GetContext(ctx, &exists, qry, idempotencyKey)
-	if err != nil {
-		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
-	}
-	return exists, nil
-}
-
 func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte) ([]byte, error)) error {
 	// When Forget() is called, the aggregate is no longer used, therefore if it fails, it can be called again.
 
@@ -608,7 +591,6 @@ func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, metadata eventsou
 			&event.AggregateKind,
 			&event.Kind,
 			&event.Body,
-			&event.IdempotencyKey,
 			&event.CreatedAt,
 			&event.Migration,
 			&event.Migrated,

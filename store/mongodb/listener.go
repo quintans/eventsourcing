@@ -156,7 +156,6 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 				AggregateKind:    eventDoc.AggregateKind,
 				Kind:             eventDoc.Kind,
 				Body:             eventDoc.Body,
-				IdempotencyKey:   eventDoc.IdempotencyKey,
 				Metadata:         toMetadata(eventDoc.Metadata),
 				CreatedAt:        eventDoc.CreatedAt,
 				Migrated:         eventDoc.Migrated,

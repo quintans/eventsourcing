@@ -42,7 +42,6 @@ func (s *GrpcServer[K]) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (
 			AggregateKind:    v.AggregateKind.String(),
 			Kind:             v.Kind.String(),
 			Body:             v.Body,
-			IdempotencyKey:   v.IdempotencyKey,
 			Metadata:         v.Metadata,
 			CreatedAt:        createdAt,
 		}

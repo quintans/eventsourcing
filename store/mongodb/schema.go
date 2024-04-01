@@ -97,22 +97,6 @@ func (r *EsRepository[K, PK]) createSchema(ctx context.Context) error {
 						{"unique", true},
 						{"background", true},
 					},
-					{
-						{"key", bson.D{
-							{"idempotency_key", 1},
-							{"migration", 1},
-						}},
-						{"name", "idx_idempotency"},
-						{"unique", true},
-						{"partialFilterExpression", bson.D{
-							{
-								"idempotency_key", bson.D{
-									{"$gt", ""},
-								},
-							},
-						}},
-						{"background", true},
-					},
 				}},
 			})
 	}

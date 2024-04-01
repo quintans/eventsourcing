@@ -58,7 +58,6 @@ type Event struct {
 	AggregateKind    eventsourcing.Kind `bson:"aggregate_kind,omitempty"`
 	Kind             eventsourcing.Kind `bson:"kind,omitempty"`
 	Body             []byte             `bson:"body,omitempty"`
-	IdempotencyKey   string             `bson:"idempotency_key,omitempty"`
 	Metadata         bson.M             `bson:"metadata,omitempty"`
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
 	Migration        int                `bson:"migration"`
@@ -241,7 +240,6 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 
 	var id eventid.EventID
 	version := eRec.Version
-	idempotencyKey := eRec.IdempotencyKey
 	err := r.WithTx(ctx, func(ctx context.Context) error {
 		for _, e := range eRec.Details {
 			version++
@@ -258,7 +256,6 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 					Kind:             e.Kind,
 					Body:             e.Body,
 					AggregateVersion: version,
-					IdempotencyKey:   idempotencyKey,
 					Metadata:         fromMetadata(metadata),
 					CreatedAt:        eRec.CreatedAt,
 				},
@@ -267,8 +264,6 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			if err != nil {
 				return err
 			}
-			// for a batch of events, the idempotency key is only applied on the first record
-			idempotencyKey = ""
 		}
 
 		return nil
@@ -408,23 +403,6 @@ func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateI
 	}
 
 	return events, nil
-}
-
-func (r *EsRepository[K, PK]) HasIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
-	filter := bson.D{
-		{"idempotency_key", idempotencyKey},
-		{"migration", bson.D{{"$eq", 0}}},
-	}
-	opts := options.FindOne().SetProjection(bson.D{{"_id", 1}})
-	evt := Event{}
-	if err := r.eventsCollection().FindOne(ctx, filter, opts).Decode(&evt); err != nil {
-		if err == mongo.ErrNoDocuments {
-			return false, nil
-		}
-		return false, faults.Errorf("Unable to verify the existence of the idempotency key: %w", err)
-	}
-
-	return true, nil
 }
 
 func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.ForgetRequest[K], forget func(kind eventsourcing.Kind, body []byte) ([]byte, error)) error {
@@ -612,7 +590,6 @@ func toEventsourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 		AggregateIDHash:  uint32(e.AggregateIDHash),
 		AggregateVersion: e.AggregateVersion,
 		AggregateKind:    e.AggregateKind,
-		IdempotencyKey:   e.IdempotencyKey,
 		Kind:             e.Kind,
 		Body:             e.Body,
 		Metadata:         toMetadata(e.Metadata),

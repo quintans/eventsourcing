@@ -273,7 +273,6 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 			AggregateKind:    eventsourcing.Kind(r.getAsString("aggregate_kind")),
 			Kind:             eventsourcing.Kind(r.getAsString("kind")),
 			Body:             r.getStringAsBytes("body"),
-			IdempotencyKey:   r.getAsString("idempotency_key"),
 			Metadata:         meta,
 			CreatedAt:        r.getAsTimeDate("created_at"),
 			Migrated:         r.getAsBool("migrated"),

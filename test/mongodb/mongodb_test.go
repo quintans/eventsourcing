@@ -80,7 +80,6 @@ func TestSaveAndGet(t *testing.T) {
 			acc.Deposit(1)
 			return acc, nil
 		},
-		eventsourcing.WithIdempotencyKey("idempotency-key"),
 	)
 	require.NoError(t, err)
 
@@ -100,28 +99,12 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, EventAccountCreated, evts[0].Kind)
 	assert.Equal(t, EventMoneyDeposited, evts[1].Kind)
 	assert.Equal(t, EventMoneyWithdrawn, evts[2].Kind)
-	assert.Equal(t, "idempotency-key", evts[3].IdempotencyKey)
 
 	acc2, err := es.Retrieve(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, id, acc2.GetID())
 	assert.Equal(t, int64(111), acc2.Balance())
 	assert.Equal(t, test.OPEN, acc2.Status())
-
-	found, err := es.HasIdempotencyKey(ctx, "idempotency-key")
-	require.NoError(t, err)
-	require.True(t, found)
-
-	err = es.Update(
-		ctx,
-		id,
-		func(acc *test.Account) (*test.Account, error) {
-			acc.Deposit(5)
-			return acc, nil
-		},
-		eventsourcing.WithIdempotencyKey("idempotency-key"),
-	)
-	require.Error(t, err)
 }
 
 func getEvents(ctx context.Context, dbConfig DBConfig, id ids.AggID) ([]mongodb.Event, error) {

@@ -97,7 +97,6 @@ type Event[K eventsourcing.ID] struct {
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
 	Body             encoding.Base64
-	IdempotencyKey   string
 	Metadata         eventsourcing.Metadata
 	CreatedAt        time.Time
 }
@@ -110,7 +109,6 @@ func FromEvent[K eventsourcing.ID](e *eventsourcing.Event[K]) *Event[K] {
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		IdempotencyKey:   e.IdempotencyKey,
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 	}
@@ -124,7 +122,6 @@ func FromMessage[K eventsourcing.ID](m *sink.Message[K]) *Event[K] {
 		AggregateKind:    m.AggregateKind,
 		Kind:             m.Kind,
 		Body:             m.Body,
-		IdempotencyKey:   m.IdempotencyKey,
 		Metadata:         m.Metadata,
 		CreatedAt:        m.CreatedAt,
 	}

@@ -42,20 +42,18 @@ type Message[K eventsourcing.ID] struct {
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
 	Body             encoding.Base64
-	IdempotencyKey   string
 	Metadata         eventsourcing.Metadata
 	CreatedAt        time.Time
 }
 
 func (m *Message[K]) String() string {
-	return fmt.Sprintf(`{ID: %s, AggregateID: %s, AggregateVersion: %d, AggregateKind: %s, Kind: %s, Body: %s, IdempotencyKey: %s, Metadata: %s, CreatedAt: %s}`,
+	return fmt.Sprintf(`{ID: %s, AggregateID: %s, AggregateVersion: %d, AggregateKind: %s, Kind: %s, Body: %s, Metadata: %s, CreatedAt: %s}`,
 		m.ID,
 		m.AggregateID,
 		m.AggregateVersion,
 		m.AggregateKind,
 		m.Kind,
 		m.Body,
-		m.IdempotencyKey,
 		m.Metadata,
 		m.CreatedAt,
 	)
@@ -68,7 +66,6 @@ type messageJSON struct {
 	AggregateKind    eventsourcing.Kind     `json:"aggregate_kind,omitempty"`
 	Kind             eventsourcing.Kind     `json:"kind,omitempty"`
 	Body             encoding.Base64        `json:"body,omitempty"`
-	IdempotencyKey   string                 `json:"idempotency_key,omitempty"`
 	Metadata         eventsourcing.Metadata `json:"metadata,omitempty"`
 	CreatedAt        time.Time              `json:"created_at,omitempty"`
 }
@@ -83,7 +80,6 @@ func (JSONCodec[K, PK]) Encode(e *eventsourcing.Event[K]) ([]byte, error) {
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		IdempotencyKey:   e.IdempotencyKey,
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 	}
@@ -112,7 +108,6 @@ func (JSONCodec[K, PK]) Decode(data []byte) (*Message[K], error) {
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		IdempotencyKey:   e.IdempotencyKey,
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 	}
@@ -128,7 +123,6 @@ func ToMessage[K eventsourcing.ID](e *eventsourcing.Event[K]) *Message[K] {
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		IdempotencyKey:   e.IdempotencyKey,
 		Metadata:         e.Metadata,
 		CreatedAt:        e.CreatedAt,
 	}

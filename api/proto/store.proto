@@ -40,7 +40,6 @@ message Event {
 	string aggregate_kind = 4;
 	string kind = 5;
 	bytes body = 6;
-	string idempotency_key = 7;
-	map<string, string> metadata = 8;
-	google.protobuf.Timestamp created_at = 9;
+	map<string, string> metadata = 7;
+	google.protobuf.Timestamp created_at = 8;
 }
