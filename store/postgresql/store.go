@@ -518,10 +518,8 @@ func buildFilter(qry *strings.Builder, prefix string, metadata eventsourcing.Met
 
 func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, metadata eventsourcing.Metadata, query string, args ...any) ([]*eventsourcing.Event[K], error) {
 	columns := []string{coreEventCols}
-	base := []store.Metadata{}
 	for k := range metadata {
 		columns = append(columns, store.MetaColumnPrefix+k)
-		base = append(base, store.Metadata{Key: k})
 	}
 	query = strings.Replace(query, "SELECT *", fmt.Sprintf("SELECT %s", strings.Join(columns, ", ")), 1)
 
