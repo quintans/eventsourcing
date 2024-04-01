@@ -23,13 +23,13 @@ const (
 	defaultUntilOffset   = time.Minute
 	defaultCatchupWindow = 3 * 24 * time.Hour // 3 days
 	checkPointBuffer     = 1_000
+	updateResumeInterval = time.Second
 )
 
 type resumeKV struct {
-	consuming bool
+	done      bool
 	eventID   eventid.EventID
 	partition uint32
-	sequence  uint64
 }
 
 // NewProjector creates a subscriber to an event stream and process all events.
@@ -78,7 +78,7 @@ func Project[K eventsourcing.ID](
 	)
 }
 
-func asyncSaveResumes(ctx context.Context, logger *slog.Logger, resumeStore store.KVStore, projName, topic string) (chan resumeKV, <-chan struct{}) {
+func asyncSaveResumes(ctx context.Context, logger *slog.Logger, resumeStore store.KVStore, projName, topic string) (chan<- resumeKV, <-chan struct{}) {
 	checkPointCh := make(chan resumeKV, checkPointBuffer)
 	done := make(chan struct{})
 
@@ -91,20 +91,15 @@ func asyncSaveResumes(ctx context.Context, logger *slog.Logger, resumeStore stor
 				return
 			}
 
-			var t Token
-			if kv.consuming {
-				t = NewConsumerToken(kv.sequence, kv.eventID)
-			} else {
-				t = NewCatchupToken(kv.eventID)
-			}
+			t := Token{Done: kv.done, EventID: kv.eventID}
 			err := saveResume(ctx, resumeStore, projName, topic, kv.partition, t)
 			if err != nil {
 				if errors.Is(err, ctx.Err()) {
 					return
 				}
 				logger.Error("Failed to save resume token",
-					"resumeKey", t.String(),
-					"token,", t.String(),
+					"prjName", projName, "topic", topic, "partition", kv.partition,
+					"token", t.String(),
 					log.Err(err),
 				)
 			}
@@ -172,7 +167,7 @@ func resume[K eventsourcing.ID](
 
 		if !catchup && start.Sub(after.Time()) < catchUpWindow {
 			logger.Info("There is nothing to catchup. Starting consumer from the last position")
-			return startConsuming(ctx, logger, name, nil, topic, subscriber, projection, resumeStore)
+			return startConsuming(ctx, name, nil, subscriber, projection)
 		}
 
 		var wg sync.WaitGroup
@@ -236,23 +231,29 @@ func resume[K eventsourcing.ID](
 			}
 
 			startTime := until.Time().Add(-offset)
-			return startConsuming(ctx, logger, name, &startTime, topic, subscriber, projection, resumeStore)
+			err = startConsuming(ctx, name, &startTime, subscriber, projection)
+			if err != nil {
+				return faults.Errorf("starting to consume after catch up: %w", err)
+			}
+
+			// marking all catchup resumes as closed
+			checkPointCh, done = asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic)
+			for split := 0; split < catchupSplits; split++ {
+				checkPointCh <- resumeKV{done: true, eventID: until}
+			}
+			checkPointCh <- resumeKV{}
+			<-done
 		}
 	}
 }
 
 func startConsuming[K eventsourcing.ID](
 	ctx context.Context,
-	logger *slog.Logger,
 	name string,
 	startTime *time.Time,
-	topic string,
 	subscriber Consumer[K],
 	projection Projection[K],
-	resumeStore store.KVStore,
 ) error {
-	checkPointCh, _ := asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic)
-
 	handler := func(ctx context.Context, msg *sink.Message[K], partition uint32, seq uint64) error {
 		er := projection.Handle(ctx, Message[K]{
 			Meta: Meta{
@@ -267,7 +268,6 @@ func startConsuming[K eventsourcing.ID](
 			return faults.Wrap(er)
 		}
 
-		checkPointCh <- resumeKV{consuming: true, sequence: seq, partition: partition, eventID: msg.ID}
 		return nil
 	}
 	err := subscriber.StartConsumer(ctx, startTime, projection.Name(), handler)
@@ -288,18 +288,18 @@ func catchupAfter[K eventsourcing.ID](ctx context.Context, topic string, project
 	// only replay partitions are in the catchup phase - if there is a crash while switching to consuming
 	for i := uint32(1); i <= catchupSplits; i++ {
 		// get the sequence for the part
-		token, err := getSavedToken[K](ctx, topic, i, projection, resumeStore)
+		token, err := getSavedToken(ctx, topic, i, projection.Name(), resumeStore)
 		if err != nil {
 			return eventid.Zero, false, faults.Wrap(err)
 		}
 		// ignore replay of partitions in the consumer phase
-		if token.Kind() == CatchUpToken {
+		if !token.Done {
 			catchup = true
 		}
 
 		// after will be the min event ID - if max we would potentially miss events
-		if after.IsZero() || after.Compare(token.CatchupEventID()) < 0 {
-			after = token.eventID
+		if after.IsZero() || after.Compare(token.EventID) < 0 {
+			after = token.EventID
 		}
 	}
 
@@ -315,7 +315,7 @@ func catching[K eventsourcing.ID](
 	until eventid.EventID,
 	partitions, partition uint32,
 	projection Projection[K],
-	checkPointCh chan resumeKV,
+	checkPointCh chan<- resumeKV,
 ) error {
 	logger.Info("Catching up events", "startAt", after)
 	options := projection.CatchUpOptions()
@@ -330,6 +330,8 @@ func catching[K eventsourcing.ID](
 		SplitIDs:       []uint32{partition},
 	})
 
+	var lastTime sync.Map
+
 	handle := func(ctx context.Context, msg *sink.Message[K]) error {
 		err := projection.Handle(ctx, Message[K]{
 			Meta: Meta{
@@ -343,7 +345,11 @@ func catching[K eventsourcing.ID](
 			return faults.Wrap(err)
 		}
 
-		checkPointCh <- resumeKV{eventID: msg.ID, partition: partition}
+		v, ok := lastTime.Load(partition)
+		if !ok || time.Since(v.(time.Time)) > updateResumeInterval {
+			checkPointCh <- resumeKV{eventID: msg.ID, partition: partition}
+			lastTime.Store(partition, time.Now())
+		}
 
 		return nil
 	}
@@ -359,15 +365,15 @@ func catching[K eventsourcing.ID](
 	return nil
 }
 
-func getSavedToken[K eventsourcing.ID](ctx context.Context, topic string, partition uint32, prj Projection[K], resumeStore store.KVRStore) (Token, error) {
-	resume, err := NewResumeKey(prj.Name(), topic, partition)
+func getSavedToken(ctx context.Context, topic string, partition uint32, prjName string, resumeStore store.KVRStore) (Token, error) {
+	resume, err := NewResumeKey(prjName, topic, partition)
 	if err != nil {
 		return Token{}, faults.Wrap(err)
 	}
 
 	data, err := resumeStore.Get(ctx, resume.String())
 	if errors.Is(err, store.ErrResumeTokenNotFound) {
-		return NewCatchupToken(eventid.Zero), nil
+		return Token{}, nil
 	}
 
 	token, err := ParseToken(data)

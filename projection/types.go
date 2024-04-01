@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/quintans/eventsourcing"
@@ -127,38 +126,9 @@ func FromMessage[K eventsourcing.ID](m *sink.Message[K]) *Event[K] {
 	}
 }
 
-type TokenKind string
-
-const (
-	CatchUpToken  TokenKind = "catchup"
-	ConsumerToken TokenKind = "consumer"
-)
-
-type tokenDB struct {
-	Kind     TokenKind       `json:"kind"`
-	EventID  eventid.EventID `json:"eventID,omitempty"`
-	Sequence uint64          `json:"sequence,omitempty"`
-}
-
 type Token struct {
-	kind     TokenKind
-	eventID  eventid.EventID
-	sequence uint64
-}
-
-func NewConsumerToken(sequence uint64, eventID eventid.EventID) Token {
-	return Token{
-		kind:     ConsumerToken,
-		sequence: sequence,
-		eventID:  eventID,
-	}
-}
-
-func NewCatchupToken(eventID eventid.EventID) Token {
-	return Token{
-		kind:    CatchUpToken,
-		eventID: eventID,
-	}
+	Done    bool            `json:"done"`
+	EventID eventid.EventID `json:"eventID,omitempty"`
 }
 
 func ParseToken(s string) (_ Token, e error) {
@@ -168,46 +138,22 @@ func ParseToken(s string) (_ Token, e error) {
 		return Token{}, nil
 	}
 
-	t := tokenDB{}
+	t := Token{}
 	err := json.Unmarshal([]byte(s), &t)
 	if err != nil {
 		return Token{}, faults.Errorf("parsing token data '%s': %w", s, err)
 	}
 
-	if !slices.Contains([]TokenKind{CatchUpToken, ConsumerToken}, t.Kind) {
-		return Token{}, faults.Errorf("invalid kind when parsing token: %s", s)
-	}
-
-	return Token{
-		kind:     t.Kind,
-		eventID:  t.EventID,
-		sequence: t.Sequence,
-	}, nil
+	return t, nil
 }
 
 func (t Token) String() string {
 	// don't want to return an error, so I use a poor man marshalling
-	return fmt.Sprintf(`{"kind": "%s", "eventID": "%s", "sequence": %d}`, t.kind, t.eventID, t.sequence)
-}
-
-func (t Token) Kind() TokenKind {
-	return t.kind
-}
-
-func (t Token) ConsumerSequence() uint64 {
-	return t.sequence
-}
-
-func (t Token) CatchupEventID() eventid.EventID {
-	return t.eventID
+	return fmt.Sprintf(`{"done": "%s", "eventID": "%s"}`, t.Done, t.EventID)
 }
 
 func (t Token) IsEmpty() bool {
-	return t.sequence == 0 && t.eventID.IsZero()
-}
-
-func (t Token) IsZero() bool {
-	return t == Token{}
+	return t.EventID.IsZero()
 }
 
 type Projection[K eventsourcing.ID] interface {
