@@ -9,6 +9,8 @@ import (
 	"github.com/quintans/eventsourcing"
 )
 
+type Tx func(ctx context.Context, fn func(context.Context) error) error
+
 const MetaColumnPrefix = "meta_"
 
 type InTxHandlerContext[K eventsourcing.ID] struct {

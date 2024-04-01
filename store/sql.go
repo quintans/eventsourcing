@@ -8,8 +8,6 @@ import (
 	"github.com/quintans/faults"
 )
 
-type Tx func(ctx context.Context, fn func(context.Context) error) error
-
 type Session interface {
 	Rebind(query string) string
 	GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error

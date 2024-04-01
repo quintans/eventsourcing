@@ -27,10 +27,10 @@ func NewCheckpoints[K eventsourcing.ID](store store.KVStore) *Checkpoints[K] {
 	}
 }
 
-// Check verifies if projection should accept the event within the message.
+// Reject verifies if projection should accept the event within the message.
 //
 // When the message if of type MessageKindSwitch, it signals that the catchup has been done and that from now on all events will come from the event bus
-func (p *Checkpoints[K]) Check(ctx context.Context, msg Message[K]) (bool, error) {
+func (p *Checkpoints[K]) Reject(ctx context.Context, msg Message[K]) (bool, error) {
 	meta := msg.Meta
 
 	if meta.Kind == MessageKindSwitch {

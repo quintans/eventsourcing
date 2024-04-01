@@ -3,11 +3,11 @@ an implementation of event sourcing library using a database as an event store
 
 ## Introduction
 
-The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture pattern where each side (write and read) can scale independently.
+The goal of this project is to implement an event store and how this event store could be used with the Event Sourcing + CQRS Architecture pattern, where each side (write and read) can scale independently.
 
-This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS and eventually be consumed by a projector.
+This library provides a common interface to store domain events in a database, like MongoDB, and to stream the events to an event bus like NATS and eventually be consumed by one or more projections.
 
-Other than the event store and the event streaming I also implemented a simple orchestration layer for the event consumer on the read side to create projections.
+Other than the event store and the event streaming, I also implemented all the plumbing for projections.
 
 > Creating a projection may take hours or even days, depending on the amount of event history so it is a good idea to create a projection on the side and start using it after it has catch up (blue/green).
 
@@ -82,17 +82,37 @@ func DehydratedAccount(id ids.AggID) *Account {
 }
 ```
 
-The producer (forwarding events):
+The producer (eg: mongo event store)
+
+```go
+esRepo := mongodb.NewStoreDB(client, cfg.EsName)
+es := eventsourcing.NewEventStore(esRepo, cfg.SnapshotThreshold, entity.Factory{})
+
+//After that we just interact normally with the aggregate and then we save.
+id := uuid.New().String()
+acc := test.CreateAccount("Paulo", id, 100)
+acc.Deposit(10)
+acc.Withdraw(20)
+es.Create(ctx, acc)
+
+// ...
+
+// and to get the aggregate
+a, _ = es.Retrieve(ctx, id)
+acc2 := a.(*Account)
+```
+
+The forwarder (forwarding events):
 
 ```go
 logger := ... // slog
 config := ... // get configuration into your custom structure
 
 // store
-kvStore := mysql.NewKVStore(config.Url, "resumes")
+kvStore := mysql.NewKVStoreWithURL(config.Url, "resumes")
 
 // sinker provider
-sinker, _ := kafka.NewSink[ulid.ULID](logger, kvStore, "my-topic", config.KafkaUris)
+sinker, _ := kafka.NewSink[ids.AggID](logger, kvStore, "my-topic", 1, config.KafkaUris)
 
 dbConf := mysql.DBConfig{
 	Host:     config.Host,
@@ -110,24 +130,74 @@ forwarder := projection.EventForwarderWorker(logger, "forwarder-id", nil, feed.R
 worker.RunSingleBalancer(ctx, logger, forwarder, 5*time.Second)
 ```
 
+The projection:
+
+```go
+type MyProjectionV1[K eventsourcing.ID] struct {
+	checkpoints projection.Checkpoints
+	txRunner    store.TxRunner
+	// other fields like repositories
+}
+
+func NewMyProjectionV1[K eventsourcing.ID](txRunner store.TxRunner, checkpoints projection.Checkpoints) MyProjectionV1[K] {
+	return MyProjectionV1[K]{
+		checkpoints: checkpoints,
+		txRunner:    txRunner
+	}
+}
+
+func (p *MyProjectionV1[K]) Name() string {
+	return "my-name"
+}
+
+func (*MyProjectionV1[K]) CatchUpOptions() projection.CatchUpOptions {
+	return projection.CatchUpOptions{}
+}
+
+func (p *MyProjectionV1[K]) Handle(ctx context.Context, msg projection.Message[K]) error {
+	rejected, err := p.checkpoints.Reject(ctx, msg)
+	if err != nil {
+		return faults.Wrap(err)
+	}
+	if rejected {
+		return nil
+	}
+
+	// handle event
+	e := msg.Message
+	return p.txRunner.WithTx(ctx, func(ctx context.Context) error {
+		// do your stuff
+
+		// save the checkpoint inside the same transaction
+		err := p.checkpoints.Save(ctx, msg)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+	})
+}
+```
+
 The consumer (building projections):
 
 ```go
 logger := ... // slog
-// create projection that implements projection.Projection
-proj := ...
 
-esRepo, _ := mysql.NewStoreWithURL[ulid.ULID](dburl) 
+esRepo, _ := mysql.NewStoreWithURL[ids.AggID](dburl) 
 // if the projection is part of another service and we cannot access the database directly
 // we can use the grpc repo
-// esRepo := projection.NewGrpcRepository[ulid.ULID](serviceAddr)
+// esRepo := projection.NewGrpcRepository[ids.AggID](serviceAddr)
 
-sub, _ := kafka.NewSubscriberWithBrokers[ulid.ULID](ctx, logger, kafkaUris, "my-topic", nil)
+sub, _ := kafka.NewSubscriberWithBrokers[ids.AggID](ctx, logger, kafkaUris, "my-topic", nil)
 // store
-kvStore := mysql.NewKVStore(dbConfig.Url, "resumes")
+kvStore := mysql.NewKVStoreWithURL(dbConfig.Url, "resumes")
+
+// we can use different db connection than the previous kvStore
+db := ... // mysql db connection
+cpStore := mysql.NewKVStore(db, "my_name_checkpoints")
+proj := NewMyProjectionV1[ids.AggID](store.TxRunner(db), projection.NewCheckpoints[ids.AggID](cpStore))
 
 // repository here could be remote, like GrpcRepository
-projector := projection.Project(logger, nil, esRepo, sub, proj, 1, kvStore)
+projector := projection.Project(logger, nil, esRepo, sub, proj, kvStore, 1)
 projector.Start(ctx)
 ```
 
@@ -136,8 +206,8 @@ Writing to aggregates:
 ```go
 // codec registry
 reg := NewJSONCodec()
-store, _ := mysql.NewStoreWithURL[ulid.ULID](url)
-es := eventsourcing.NewEventStore[*account.Account, ulid.ULID](store, reg, nil)
+store, _ := mysql.NewStoreWithURL[ids.AggID](url)
+es := eventsourcing.NewEventStore[*account.Account, ids.AggID](store, reg, nil)
 
 acc, _ := account.New("Paulo", 100)
 
@@ -163,7 +233,8 @@ A service **writes** to a **database** (the event store), a **forwarder** compon
 ![Design](eventstore-design.png)
 
 > we still can still use consistent projections to build the current state of an aggregate.
-> To use CQRS it is not mandatory to have two separate databases, so it is not mandatory to plug in the change stream into the database.
+>
+> To use CQRS it is not mandatory to have two separate databases, and it is not mandatory to plug in the change stream into the database.
 We can write the read model into the same database in the same transaction as the write model (dual write).
 
 ## How to
@@ -172,10 +243,10 @@ I assume that the reader is familiar with the concepts of event sourcing and CQR
 
 ### Aggregate
 
-The aggregate must "extend" `eventsourcing.RootAggregate`, that implements `eventsourcing.Aggregater` interface, and implement `eventsourcing.Typer` and `eventsourcing.EventHandler` interface.
+The aggregate must "extend" `eventsourcing.RootAggregate`, that implements `eventsourcing.Aggregater` interface, and implement `eventsourcing.Kinder` interface.
 Any change to the aggregate is recorded as a series of events.
 
-You can find an example [here](./test/aggregate.go#L96)
+You can find an example [here](./test/aggregate.go#L103)
 
 ### Factory
 
@@ -197,7 +268,7 @@ As the application evolves, domain events may change in a way that previously se
 
 Events must implement the `eventsourcing.Eventer` interface.
 
-Example [here](./test/aggregate.go#L17)
+Example [here](./test/aggregate.go#L31)
 
 ### Event Store
 
@@ -205,30 +276,6 @@ The event data can be stored in any database. Currently we have implementations 
 * PostgreSQL
 * MySQL
 * MongoDB
-
-After we choose one, we can instantiate our event store.
-
-```go
-esRepo := mongodb.NewStoreDB(client, cfg.EsName)
-es := eventsourcing.NewEventStore(esRepo, cfg.SnapshotThreshold, entity.Factory{})
-```
-
-After that we just interact normally with the aggregate and then we save.
-
-```go
-id := uuid.New().String()
-acc := test.CreateAccount("Paulo", id, 100)
-acc.Deposit(10)
-acc.Withdraw(20)
-es.Create(ctx, acc)
-```
-
-to get the aggregate
-
-```go
-a, _ = es.Retrieve(ctx, id)
-acc2 := a.(*Account)
-```
 
 ### Projections
 
@@ -306,10 +353,17 @@ To make the projection idempotent what we have to do is:
 - under the projector name and partition, record the **event ID**, if catching up, otherwise record the **sequence** and the last event ID in catchup mode, if any. Use the control event to record the threshold event ID.
 - when handling the event, reject events that are less or equal than the threshold event ID. If not reject by the previous condition and if in live mode, reject if the received sequence is less or equal than the last recorded sequence.
 
+An utility providing what was described above provided [here](./projection/checkpoints.go)
+
+See the code above an example of its use for the projection `MyProjectionV1`.
+
 ### Event Migration
 TODO
 
 https://leanpub.com/esversioning/read#leanpub-auto-copy-and-replace
+
+---
+---
 
 ## Rationale
 Next I try to explain the reason for some design decisions.
@@ -439,14 +493,17 @@ If the Forwarder component fails to write into the event bus, it will try again.
 
 ### Replay
 
-Every time a forwarder component restarts, it needs to replay all the events that were generated while it was offline
-(if there is another replica, probably it took over).
+> please read idempotency section above
 
-Considering that the event bus should have a limited message retention window (X days), replaying messages from a certain point in time can be achieved in the following manner:
-1) get the position of the last message from the event bus
-1) get the position(s) of the last event(s) consumed by the projection
-1) replay events from the event store from the last stored position until we reach the event matching the previous event bus position
-1) resume listening the event bus from the position of 1)
+Every time a forwarder component restarts, it will pick up either from the event store or the event bus, depending where it was last consuming.
+
+When replaying from the beginning of time is achieved in the following manner:
+1) consume all messages from the event store until X seconds ago (default 1 minute)
+1) keep track of the last consumed event ID
+1) set the next sequence to be consumed the one immediate after 2 x X seconds ago.
+1) switch to the event bus 
+1) keep track of the last consumed sequence number
+1) on restart start from the last save position
 
 Whenever a projection needs a breaking change, it is better to create a new version of the projection, let it catch up and then switch to it.
 

@@ -125,6 +125,18 @@ type Repository struct {
 	client *mongo.Client
 }
 
+func TxRunner(client *mongo.Client) store.Tx {
+	return Repository{client}.TxRunner()
+}
+
+func (r Repository) TxRunner() store.Tx {
+	return func(ctx context.Context, fn func(context.Context) error) error {
+		return r.WithTx(ctx, func(c context.Context) error {
+			return fn(c)
+		})
+	}
+}
+
 func (r Repository) WithTx(ctx context.Context, callback func(context.Context) error) (err error) {
 	sess := mongo.SessionFromContext(ctx)
 	if sess != nil {
