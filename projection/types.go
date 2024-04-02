@@ -149,7 +149,7 @@ func ParseToken(s string) (_ Token, e error) {
 
 func (t Token) String() string {
 	// don't want to return an error, so I use a poor man marshalling
-	return fmt.Sprintf(`{"done": "%s", "eventID": "%s"}`, t.Done, t.EventID)
+	return fmt.Sprintf(`{"done": "%t", "eventID": "%s"}`, t.Done, t.EventID)
 }
 
 func (t Token) IsEmpty() bool {
