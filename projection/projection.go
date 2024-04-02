@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	defaultUntilOffset   = time.Minute
-	defaultCatchupWindow = 3 * 24 * time.Hour // 3 days
-	checkPointBuffer     = 1_000
-	updateResumeInterval = time.Second
+	defaultUntilOffset          = time.Minute
+	defaultCatchupWindow        = 3 * 24 * time.Hour // 3 days
+	checkPointBuffer            = 1_000
+	defaultUpdateResumeInterval = time.Second
 )
 
 type resumeKV struct {
@@ -178,7 +178,7 @@ func resume[K eventsourcing.ID](
 		until := eventid.NewWithTime(start).OffsetTime(-offset)
 
 		if after.Compare(until) < 0 {
-			for split := 0; split < catchupSplits; split++ {
+			for split := 1; split <= catchupSplits; split++ {
 				split := split
 				wg.Add(1)
 
@@ -236,13 +236,23 @@ func resume[K eventsourcing.ID](
 				return faults.Errorf("starting to consume after catch up: %w", err)
 			}
 
-			// marking all catchup resumes as closed
-			checkPointCh, done = asyncSaveResumes(ctx, logger, resumeStore, projection.Name(), topic)
-			for split := 0; split < catchupSplits; split++ {
-				checkPointCh <- resumeKV{done: true, eventID: until}
+			logger.Info("Marking all catchup resumes as done")
+			for split := 1; split <= catchupSplits; split++ {
+				t := Token{Done: true, EventID: until}
+				err := saveResume(ctx, resumeStore, projection.Name(), topic, uint32(split), t)
+				if err != nil {
+					if errors.Is(err, ctx.Err()) {
+						break
+					}
+					logger.Error("Failed to save resume token",
+						"projectionName", projection.Name(), "topic", topic, "partition", uint32(split),
+						"token", t.String(),
+						log.Err(err),
+					)
+				}
 			}
-			checkPointCh <- resumeKV{}
-			<-done
+
+			return nil
 		}
 	}
 }
@@ -293,7 +303,7 @@ func catchupAfter[K eventsourcing.ID](ctx context.Context, topic string, project
 			return eventid.Zero, false, faults.Wrap(err)
 		}
 		// ignore replay of partitions in the consumer phase
-		if !token.Done {
+		if (token != Token{}) && !token.Done {
 			catchup = true
 		}
 
@@ -322,15 +332,17 @@ func catching[K eventsourcing.ID](
 
 	player := NewPlayer(esRepo)
 
-	logger.Info("Replaying all events from the event store", "from", after, "until", until)
+	logger.Info("Replaying all events from the event store", "from", after, "until", until, "time", until.Time())
 	option := store.WithFilter(store.Filter{
 		AggregateKinds: options.AggregateKinds,
 		Metadata:       options.Metadata,
 		Splits:         partitions,
-		SplitIDs:       []uint32{partition},
+		SplitIDs:       []uint32{partition - 1},
 	})
 
 	var lastTime sync.Map
+
+	updateResumeInterval := util.IfZero(options.UpdateResumeInterval, defaultUpdateResumeInterval)
 
 	handle := func(ctx context.Context, msg *sink.Message[K]) error {
 		err := projection.Handle(ctx, Message[K]{
@@ -346,7 +358,7 @@ func catching[K eventsourcing.ID](
 		}
 
 		v, ok := lastTime.Load(partition)
-		if !ok || time.Since(v.(time.Time)) > updateResumeInterval {
+		if !ok || time.Since(v.(time.Time)) >= updateResumeInterval {
 			checkPointCh <- resumeKV{eventID: msg.ID, partition: partition}
 			lastTime.Store(partition, time.Now())
 		}

@@ -78,7 +78,7 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	}, balance)
 
 	putsProj := kvStoreProj.Puts()
-	assert.Len(t, putsProj, 3)
+	assert.Len(t, putsProj, 1)
 
 	puts := kvStoreSink.Puts()
 	assert.Len(t, puts, 3)
@@ -117,7 +117,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	require.NoError(t, err)
 
 	// giving time to forward events
-	time.Sleep(time.Second)
+	time.Sleep(2 * time.Second)
 
 	// after data (replay): start projection after we have some data on the event bus
 	kvStoreProj := &integration.MockKVStore{}
@@ -141,7 +141,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 
 	events := proj.Events()
 	assert.Len(t, events, 5)
-	assert.Equal(t, ids.Zero, events[0].AggregateID) // control event (switch)
+	assert.Equal(t, ids.Zero, events[3].AggregateID) // control event (switch)
 
 	balance, ok = proj.BalanceByID(acc.GetID())
 	require.True(t, ok)

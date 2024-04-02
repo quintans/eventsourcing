@@ -1,6 +1,6 @@
 module github.com/quintans/eventsourcing
 
-go 1.21
+go 1.22
 
 require (
 	github.com/IBM/sarama v1.40.1

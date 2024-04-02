@@ -149,7 +149,7 @@ func ParseToken(s string) (_ Token, e error) {
 
 func (t Token) String() string {
 	// don't want to return an error, so I use a poor man marshalling
-	return fmt.Sprintf(`{"done": "%t", "eventID": "%s"}`, t.Done, t.EventID)
+	return fmt.Sprintf(`{"done": %t, "eventID": "%s"}`, t.Done, t.EventID)
 }
 
 func (t Token) IsEmpty() bool {
@@ -189,8 +189,9 @@ type (
 )
 
 type CatchUpOptions struct {
-	StartOffset   time.Duration
-	CatchUpWindow time.Duration
+	StartOffset          time.Duration
+	CatchUpWindow        time.Duration
+	UpdateResumeInterval time.Duration
 
 	AggregateKinds []eventsourcing.Kind
 	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
