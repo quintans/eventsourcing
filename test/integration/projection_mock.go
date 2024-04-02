@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/quintans/eventsourcing"
@@ -52,7 +53,10 @@ func (p *ProjectionMock[K]) Name() string {
 }
 
 func (*ProjectionMock[K]) CatchUpOptions() projection.CatchUpOptions {
-	return projection.CatchUpOptions{}
+	return projection.CatchUpOptions{
+		StartOffset:          100 * time.Millisecond,
+		UpdateResumeInterval: time.Nanosecond,
+	}
 }
 
 func (p *ProjectionMock[K]) Handle(ctx context.Context, msg projection.Message[K]) error {

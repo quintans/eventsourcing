@@ -7,6 +7,7 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
+	"github.com/quintans/eventsourcing/sink"
 
 	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/faults"
@@ -18,13 +19,37 @@ type checkpoint struct {
 }
 
 type Checkpoints[K eventsourcing.ID] struct {
-	store store.KVStore
+	store    store.KVStore
+	txRunner store.Tx
 }
 
-func NewCheckpoints[K eventsourcing.ID](store store.KVStore) *Checkpoints[K] {
+func NewCheckpoints[K eventsourcing.ID](store store.KVStore, txRunner store.Tx) *Checkpoints[K] {
 	return &Checkpoints[K]{
-		store: store,
+		store:    store,
+		txRunner: txRunner,
 	}
+}
+
+func (p *Checkpoints[K]) Handle(ctx context.Context, msg Message[K], callback func(*sink.Message[K]) error) error {
+	rejected, err := p.Reject(ctx, msg)
+	if err != nil {
+		return faults.Wrapf(err, "checking it should reject")
+	}
+	if rejected {
+		return nil
+	}
+
+	// handle event
+	return p.txRunner(ctx, func(ctx context.Context) error {
+		err := callback(msg.Message)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+
+		// save the checkpoint inside the same transaction
+		err = p.Save(ctx, msg)
+		return faults.Wrapf(err, "saving projection checkpoint")
+	})
 }
 
 // Reject verifies if projection should accept the event within the message.

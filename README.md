@@ -134,15 +134,14 @@ The projection:
 
 ```go
 type MyProjectionV1[K eventsourcing.ID] struct {
-	checkpoints projection.Checkpoints
+	checkpoints projection.Checkpoints[K]
 	txRunner    store.TxRunner
 	// other fields like repositories
 }
 
-func NewMyProjectionV1[K eventsourcing.ID](txRunner store.TxRunner, checkpoints projection.Checkpoints) MyProjectionV1[K] {
+func NewMyProjectionV1[K eventsourcing.ID](checkpoints projection.Checkpoints[K]) MyProjectionV1[K] {
 	return MyProjectionV1[K]{
 		checkpoints: checkpoints,
-		txRunner:    txRunner
 	}
 }
 
@@ -155,24 +154,8 @@ func (*MyProjectionV1[K]) CatchUpOptions() projection.CatchUpOptions {
 }
 
 func (p *MyProjectionV1[K]) Handle(ctx context.Context, msg projection.Message[K]) error {
-	rejected, err := p.checkpoints.Reject(ctx, msg)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-	if rejected {
-		return nil
-	}
-
-	// handle event
-	e := msg.Message
-	return p.txRunner.WithTx(ctx, func(ctx context.Context) error {
+	return p.checkpoints.Handle(ctx, msg, func(m *sink.Message[K]) error {
 		// do your stuff
-
-		// save the checkpoint inside the same transaction
-		err := p.checkpoints.Save(ctx, msg)
-		if err != nil {
-			return faults.Wrap(err)
-		}
 	})
 }
 ```

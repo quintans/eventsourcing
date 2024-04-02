@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -189,7 +191,7 @@ func (s *Subscriber[K]) StartConsumer(ctx context.Context, startTime *time.Time,
 			// server-side rebalance happens, the consumer session will need to be
 			// recreated to get the new claims
 			if err := group.Consume(ctx, []string{s.topic}, &consumer); err != nil {
-				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
+				if errors.Is(err, sarama.ErrClosedConsumerGroup) || errors.Is(err, io.EOF) {
 					return
 				}
 				logger.Error("Error from consumer", log.Err(err))
@@ -207,18 +209,11 @@ func (s *Subscriber[K]) StartConsumer(ctx context.Context, startTime *time.Time,
 	<-consumer.ready // Await till the consumer has been set up
 	logger.Info("Consumer group up and running!...")
 
-	s.AddShutdownHook(func() {
-		if err = group.Close(); err != nil {
-			logger.Error("Error closing consumer group", log.Err(err))
-		}
-	})
-
 	go func() {
 		<-ctx.Done()
 		logger.Info("Terminating: context cancelled")
 
 		wg.Wait()
-		s.Shutdown()
 	}()
 
 	return nil
@@ -232,8 +227,24 @@ type Consumer[K eventsourcing.ID] struct {
 	projName string
 	topic    string
 	handler  projection.ConsumerHandler[K]
-	subPos   map[int32]int64
 	ready    chan bool
+
+	mu     sync.RWMutex
+	subPos map[int32]int64
+}
+
+func (c *Consumer[K]) SubPos() map[int32]int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return maps.Clone(c.subPos)
+}
+
+func (c *Consumer[K]) ClearSubPos() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.subPos = nil
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
@@ -241,12 +252,13 @@ func (c *Consumer[K]) Setup(session sarama.ConsumerGroupSession) (er error) {
 	// Mark the consumer as ready
 	defer close(c.ready)
 
-	if c.subPos == nil {
+	subPos := c.SubPos()
+	if subPos == nil {
 		return nil
 	}
 
 	// resetting ALL partitions
-	for part, pos := range c.subPos {
+	for part, pos := range subPos {
 		c.logger.Info("Starting consumer from an offset",
 			"from", pos,
 			"topic", c.topic,
@@ -258,13 +270,14 @@ func (c *Consumer[K]) Setup(session sarama.ConsumerGroupSession) (er error) {
 		session.ResetOffset(c.topic, part, pos, "") // only moves to point BEFORE the last consumed message of this group is
 	}
 	// We need to clear the map, otherwise it will be used again in the next session
-	c.subPos = nil
+	c.ClearSubPos()
 
 	return nil
 }
 
 // Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
-func (c *Consumer[K]) Cleanup(sarama.ConsumerGroupSession) error {
+func (c *Consumer[K]) Cleanup(session sarama.ConsumerGroupSession) error {
+	c.logger.Info("Shutting down consumer")
 	return nil
 }
 

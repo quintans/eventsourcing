@@ -7,7 +7,7 @@ func IfZero[T comparable](test, def T) T {
 	if test == zero {
 		return def
 	}
-	return def
+	return test
 }
 
 func CalcPartition(hash, partitions uint32) uint32 {
