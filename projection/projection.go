@@ -330,7 +330,12 @@ func catching[K eventsourcing.ID](
 	logger.Info("Catching up events", "startAt", after)
 	options := projection.CatchUpOptions()
 
-	player := NewPlayer(esRepo)
+	playOptions := []Option[K]{}
+	if options.BatchSize > 0 {
+		playOptions = append(playOptions, WithBatchSize[K](options.BatchSize))
+	}
+
+	player := NewPlayer(esRepo, playOptions...)
 
 	logger.Info("Replaying all events from the event store", "from", after, "until", until, "time", until.Time())
 	option := store.WithFilter(store.Filter{

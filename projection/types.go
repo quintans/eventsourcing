@@ -197,4 +197,5 @@ type CatchUpOptions struct {
 	// Discriminator filters on top of discriminator. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
 	Discriminator store.DiscriminatorFilter
+	BatchSize     int
 }

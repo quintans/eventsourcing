@@ -211,11 +211,11 @@ es.Create(ctx, acc)
 
 ## Eventually consistent projection
 
-A service **writes** to a **database** (the event store), a **forwarder** component (can be on the write service or it can be an external service) listens to inserts into the database (change stream) and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary read models.
+A service **writes** to a **database** (the event store), a **forwarder** component - can be on the write service or it can be an external service (preferable) - listens to inserts into the database (change stream) and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary read models.
 
 ![Design](eventstore-design.png)
 
-> we still can still use consistent projections to build the current state of an aggregate.
+> we can still use consistent projections to build the current state of an aggregate.
 >
 > To use CQRS it is not mandatory to have two separate databases, and it is not mandatory to plug in the change stream into the database.
 We can write the read model into the same database in the same transaction as the write model (dual write).
@@ -303,7 +303,9 @@ To avoid duplication and **keep the order of events** we can have only one activ
 
 ##### Rebuilding a projection
 
-If a a projection needs to be rebuild, due to a breaking change, the best strategy is to create a new projection, replay all events, and switch to it when the catchup is done. This way will never have a down time for a projection.
+If a a projection needs to be rebuild, due to a breaking change, the best strategy is to create a **new** projection, replay all events, and switch to it when the catchup is done. This way will never have a down time for a projection.
+
+> Depending on the number of events to be processed, this can take hours or even days. This can be mitigated by using a large batch size and discriminators when defining a projection.
 
 The process for creating a new projection at boot time, is described as follow:
 
