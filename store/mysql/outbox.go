@@ -16,11 +16,6 @@ import (
 	"github.com/quintans/faults"
 )
 
-const (
-	coreOutboxCols = "id, aggregate_id, aggregate_kind, kind, aggregate_id_hash"
-	coreOutboxVars = "?, ?, ?, ?, ?"
-)
-
 var _ poller.Repository[*ulid.ULID] = (*OutboxRepository[*ulid.ULID])(nil)
 
 type EventsRepository[K eventsourcing.ID] interface {
@@ -33,7 +28,7 @@ type OutboxRepository[K eventsourcing.ID] struct {
 	eventsRepo EventsRepository[K]
 }
 
-func NewOutboxStore[K eventsourcing.ID](db *sql.DB, tableName string, eventsRepo EventsRepository[K]) *OutboxRepository[K] {
+func NewOutboxStore[K eventsourcing.ID](db *sql.DB, tableName string, eventsRepo EventsRepository[K]) (*OutboxRepository[K], error) {
 	dbx := sqlx.NewDb(db, driverName)
 	r := &OutboxRepository[K]{
 		Repository: store.NewRepository(dbx),
@@ -41,23 +36,27 @@ func NewOutboxStore[K eventsourcing.ID](db *sql.DB, tableName string, eventsRepo
 		eventsRepo: eventsRepo,
 	}
 
-	return r
+	err := r.createTableIfNotExists(dbx)
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
 }
 
-func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
+func (r *OutboxRepository[K]) PendingEvents(ctx context.Context, batchSize int) ([]*eventsourcing.Event[K], error) {
 	var query strings.Builder
-	query.WriteString(fmt.Sprintf("SELECT id FROM %s", r.tableName))
-	args := buildFilter(&query, " WHERE ", nil, filter, []interface{}{})
-	query.WriteString(" ORDER BY id ASC")
+	query.WriteString(fmt.Sprintf("SELECT id FROM %s ORDER BY id ASC", r.tableName))
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
 		query.WriteString(strconv.Itoa(batchSize))
 	}
 
 	var ids []string
-	err := r.Session(ctx).SelectContext(ctx, &ids, query.String(), args...)
+	qry := query.String()
+	err := r.Session(ctx).SelectContext(ctx, &ids, qry)
 	if err != nil {
-		return nil, faults.Errorf("getting pending events: query=%s, args=%v:  %w", query.String(), args, err)
+		return nil, faults.Errorf("getting pending events (SQL=%s):  %w", qry, err)
 	}
 
 	if len(ids) == 0 {
@@ -80,6 +79,33 @@ func (r *OutboxRepository[K]) AfterSink(ctx context.Context, eID eventid.EventID
 	return faults.Wrapf(err, "deleting from '%s' where id='%s'", r.tableName, eID)
 }
 
+func (r *OutboxRepository[K]) createTableIfNotExists(dbx *sqlx.DB) error {
+	var count int
+	err := dbx.Get(&count, "SELECT count(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name=?", r.tableName)
+	if err != nil {
+		return faults.Wrap(err)
+	}
+
+	if count > 0 {
+		return nil
+	}
+
+	sqls := []string{
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s(
+			id VARCHAR (50) PRIMARY KEY
+		);`, r.tableName),
+	}
+
+	for _, s := range sqls {
+		_, err := dbx.Exec(s)
+		if err != nil {
+			return faults.Errorf("failed to execute %s: %w", s, err)
+		}
+	}
+
+	return nil
+}
+
 func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler[K] {
 	return func(c *store.InTxHandlerContext[K]) error {
 		ctx := c.Context()
@@ -89,24 +115,10 @@ func OutboxInsertHandler[K eventsourcing.ID](tableName string) store.InTxHandler
 		}
 
 		event := c.Event()
-		values := []any{
-			event.ID.String(),
-			event.AggregateID.String(),
-			event.AggregateKind,
-			event.Kind,
-			event.AggregateIDHash,
-		}
-		columns := []string{coreOutboxCols}
-		vars := []string{coreOutboxVars}
-		for k, v := range event.Metadata {
-			columns = append(columns, store.MetaColumnPrefix+k)
-			vars = append(vars, "?")
-			values = append(values, v)
-		}
 
-		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", tableName, strings.Join(columns, ", "), strings.Join(vars, ", "))
+		query := fmt.Sprintf("INSERT INTO %s (id) VALUES (?)", tableName)
 
-		_, err := tx.ExecContext(ctx, query, values...)
-		return faults.Wrapf(err, "inserting into the outbox, query=%s, args=%+v", query, values)
+		_, err := tx.ExecContext(ctx, query, event.ID.String())
+		return faults.Wrapf(err, "inserting into the outbox (SQL=%s) (args=%+v)", query, event.ID)
 	}
 }

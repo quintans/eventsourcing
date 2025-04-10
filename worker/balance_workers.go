@@ -213,7 +213,10 @@ func (b *WorkBalancer) run(ctx context.Context, ticker *time.Ticker) error {
 	// make sure that all unpaused and unbalanced workers are running
 	for _, w := range b.workers {
 		if !w.IsBalanceable() {
-			w.Start(ctx)
+			_, err := w.Start(ctx)
+			if err != nil {
+				b.logger.Error("Failed to start worker", log.Err(err))
+			}
 		}
 	}
 
@@ -378,7 +381,10 @@ func (b *SingleBalancer) Start(ctx context.Context) <-chan struct{} {
 		ticker := time.NewTicker(b.heartbeat)
 		defer ticker.Stop()
 		for {
-			b.worker.Start(ctx)
+			_, err := b.worker.Start(ctx)
+			if err != nil {
+				b.logger.Error("Failed to start worker", log.Err(err))
+			}
 
 			select {
 			case <-done:

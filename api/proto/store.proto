@@ -19,12 +19,12 @@ message GetEventsRequest {
 
 message Filter {
   repeated string aggregate_kinds = 1;
-  repeated Metadata metadata = 2;
+  repeated Discriminator discriminators = 2;
   uint32 splits = 3;
   repeated uint32 split_ids = 4;
 }
 
-message Metadata {
+message Discriminator {
   string key = 1;
   repeated string value = 2;
 }
@@ -40,6 +40,6 @@ message Event {
 	string aggregate_kind = 4;
 	string kind = 5;
 	bytes body = 6;
-	map<string, string> metadata = 7;
+	map<string, string> discriminators = 7;
 	google.protobuf.Timestamp created_at = 8;
 }

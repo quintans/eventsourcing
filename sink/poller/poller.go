@@ -18,7 +18,7 @@ const (
 )
 
 type Repository[K eventsourcing.ID] interface {
-	PendingEvents(ctx context.Context, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error)
+	PendingEvents(ctx context.Context, batchSize int) ([]*eventsourcing.Event[K], error)
 	AfterSink(ctx context.Context, eID eventid.EventID) error
 }
 
@@ -28,7 +28,7 @@ type Poller[K eventsourcing.ID] struct {
 	pullInterval   time.Duration
 	limit          int
 	aggregateKinds []eventsourcing.Kind
-	metadata       store.MetadataFilter
+	discriminator  store.DiscriminatorFilter
 	splits         uint32
 	splitIDs       []uint32
 }
@@ -62,18 +62,18 @@ func WithAggregateKinds[K eventsourcing.ID](at ...eventsourcing.Kind) Option[K] 
 	}
 }
 
-func WithMetadataKV[K eventsourcing.ID](key string, values ...string) Option[K] {
+func WithDiscriminatorKV[K eventsourcing.ID](key string, values ...string) Option[K] {
 	return func(f *Poller[K]) {
-		if f.metadata == nil {
-			f.metadata = store.MetadataFilter{}
+		if f.discriminator == nil {
+			f.discriminator = store.DiscriminatorFilter{}
 		}
-		f.metadata.Add(key, values...)
+		f.discriminator.Add(key, values...)
 	}
 }
 
-func WithMetadata[K eventsourcing.ID](metadata store.MetadataFilter) Option[K] {
+func WithDiscriminator[K eventsourcing.ID](filter store.DiscriminatorFilter) Option[K] {
 	return func(f *Poller[K]) {
-		f.metadata = metadata
+		f.discriminator = filter
 	}
 }
 
@@ -134,18 +134,9 @@ func (p *Poller[K]) pull(ctx context.Context, sinker sink.Sinker[K]) {
 }
 
 func (p *Poller[K]) catchUp(ctx context.Context, sinker sink.Sinker[K]) error {
-	filters := []store.FilterOption{
-		store.WithAggregateKinds(p.aggregateKinds...),
-		store.WithMetadata(p.metadata),
-		store.WithSplits(p.splits, p.splitIDs),
-	}
-	filter := store.Filter{}
-	for _, f := range filters {
-		f(&filter)
-	}
 	loop := true
 	for loop {
-		events, err := p.store.PendingEvents(ctx, p.limit, filter)
+		events, err := p.store.PendingEvents(ctx, p.limit)
 		if err != nil {
 			return faults.Wrap(err)
 		}

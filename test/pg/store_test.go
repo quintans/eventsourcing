@@ -29,9 +29,10 @@ const (
 
 var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-var esOptions = &eventsourcing.EsOptions{
-	SnapshotThreshold: 3,
-}
+var (
+	esOptions  = eventsourcing.EsSnapshotThreshold(3)
+	snapOption = postgresql.WithSnapshotsTable[ids.AggID]("snapshots")
+)
 
 type Snapshot struct {
 	ID               eventid.EventID    `db:"id,omitempty"`
@@ -40,7 +41,7 @@ type Snapshot struct {
 	AggregateKind    eventsourcing.Kind `db:"aggregate_kind,omitempty"`
 	Body             []byte             `db:"body,omitempty"`
 	CreatedAt        time.Time          `db:"created_at,omitempty"`
-	MetaTenant       store.NilString    `db:"meta_tenant,omitempty"`
+	DiscTenant       store.NilString    `db:"disc_tenant,omitempty"`
 }
 
 type Event struct {
@@ -54,7 +55,7 @@ type Event struct {
 	CreatedAt        time.Time          `db:"created_at"`
 	Migration        int                `db:"migration"`
 	Migrated         bool               `db:"migrated"`
-	MetaTenant       store.NilString    `db:"meta_tenant,omitempty"`
+	DiscTenant       store.NilString    `db:"disc_tenant,omitempty"`
 }
 
 func TestSaveAndGet(t *testing.T) {
@@ -63,9 +64,10 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL(), snapOption)
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := es.Retrieve(ctx, ids.New())
 	require.ErrorIs(t, err, eventsourcing.ErrUnknownAggregateID)
@@ -133,18 +135,25 @@ func TestPollListener(t *testing.T) {
 	db := connect(t, dbConfig)
 
 	ctx := context.Background()
-	r := postgresql.NewStore(
+	r, err := postgresql.NewStore(
 		db.DB,
+		postgresql.WithNoPublication[ids.AggID](), // disables publication
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
+		snapOption,
 	)
+	require.NoError(t, err)
 
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	outboxRepo, err := postgresql.NewOutboxStore(db.DB, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, _ := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err := es.Create(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 	err = es.Update(ctx, id, func(acc *test.Account) (*test.Account, error) {
 		acc.Deposit(5)
@@ -155,8 +164,6 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	outboxRepo := postgresql.NewOutboxStore(db.DB, "outbox", r)
-	require.NoError(t, err)
 
 	p := poller.New(logger, outboxRepo)
 
@@ -197,17 +204,24 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	db := connect(t, dbConfig)
 
 	ctx := context.Background()
-	r := postgresql.NewStore(
+	r, err := postgresql.NewStore(
 		db.DB,
+		postgresql.WithNoPublication[ids.AggID](), // disables publication
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
 	)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
+
+	outboxRepo, err := postgresql.NewOutboxStore(db.DB, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, _ := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
-	err := es.Create(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 	err = es.Update(ctx, id, func(a *test.Account) (*test.Account, error) {
 		a.Deposit(5)
@@ -218,8 +232,6 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	outboxRepo := postgresql.NewOutboxStore(db.DB, "outbox", r)
-	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds[ids.AggID](aggregateKind))
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -252,37 +264,42 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func TestListenerWithMetadata(t *testing.T) {
+func TestListenerWithDiscriminator(t *testing.T) {
 	t.Parallel()
 
 	dbConfig := setup(t)
 	db := connect(t, dbConfig)
 
 	key := "tenant"
-	r := postgresql.NewStore(
+	r, err := postgresql.NewStore(
 		db.DB,
+		postgresql.WithNoPublication[ids.AggID](), // disables publication
 		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID]("outbox")),
-		postgresql.WithMetadataHook[ids.AggID](func(c *store.MetadataHookContext) eventsourcing.Metadata {
-			ctx := c.Context()
-			val := ctx.Value(key).(string)
-			return eventsourcing.Metadata{key: val}
-		}),
+		postgresql.WithDiscriminatorKeys[ids.AggID](key),
 	)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
-	ctx := context.WithValue(context.Background(), key, "abc")
+	outboxRepo, err := postgresql.NewOutboxStore(db.DB, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
+
+	ctx := eventsourcing.SetCtxDiscriminator(context.Background(), eventsourcing.Discriminator{key: "abc"})
 
 	acc, _ := test.NewAccount("Paulo", 50)
 	acc.Deposit(20)
-	err := es.Create(ctx, acc)
+	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 
-	ctx = context.WithValue(context.Background(), key, "xyz")
+	ctx = eventsourcing.SetCtxDiscriminator(context.Background(), eventsourcing.Discriminator{key: "xyz"})
 
 	acc1, _ := test.NewAccount("Pereira", 100)
 	id := acc1.GetID()
 	acc1.Deposit(10)
 	acc1.Deposit(20)
+	err = es.Create(ctx, acc1)
+	err = es.Create(ctx, acc1)
 	err = es.Create(ctx, acc1)
 	require.NoError(t, err)
 	err = es.Update(
@@ -296,9 +313,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	outboxRepo := postgresql.NewOutboxStore(db.DB, "outbox", r)
-	require.NoError(t, err)
-	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ids.AggID]("tenant", "xyz"))
+	p := poller.New(logger, outboxRepo, poller.WithDiscriminatorKV[ids.AggID](key, "xyz"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
@@ -338,9 +353,10 @@ func TestForget(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL(), snapOption)
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, _ := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
@@ -443,10 +459,11 @@ func TestMigration(t *testing.T) {
 	dbConfig := setup(t)
 
 	ctx := context.Background()
-	r, err := postgresql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	r, err := postgresql.NewStoreWithURL(dbConfig.URL(), snapOption)
 	require.NoError(t, err)
 
-	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es1, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo Pereira", 100)
 	id := acc.GetID()
@@ -462,7 +479,9 @@ func TestMigration(t *testing.T) {
 
 	// switching the aggregator factory
 	codec := test.NewJSONCodecWithUpcaster()
-	es2 := eventsourcing.NewEventStore[*test.AccountV2](r, codec, esOptions)
+	es2, err := eventsourcing.NewEventStore[*test.AccountV2](r, codec, esOptions)
+	require.NoError(t, err)
+
 	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,

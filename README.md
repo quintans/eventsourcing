@@ -29,7 +29,7 @@ and
 * Event store database
 * Snapshots
 * Forget (GDPR)
-* Metadata associated to an event store (extra fields/columns)
+* Discriminator associated to an event store (extra fields/columns)
 * Reactive streaming from the database into an Event BUS
 * Polling from the database with the Outbox table into an Event BUS
 * Transaction hooks
@@ -211,11 +211,11 @@ es.Create(ctx, acc)
 
 ## Eventually consistent projection
 
-A service **writes** to a **database** (the event store), a **forwarder** component (can be on the write service or it can be an external service) listens to inserts into the database (change stream) and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary read models.
+A service **writes** to a **database** (the event store), a **forwarder** component - can be on the write service or it can be an external service (preferable) - listens to inserts into the database (change stream) and forwards them into a **event bus**, then a **projection** listen to the event bus and creates the necessary read models.
 
 ![Design](eventstore-design.png)
 
-> we still can still use consistent projections to build the current state of an aggregate.
+> we can still use consistent projections to build the current state of an aggregate.
 >
 > To use CQRS it is not mandatory to have two separate databases, and it is not mandatory to plug in the change stream into the database.
 We can write the read model into the same database in the same transaction as the write model (dual write).
@@ -303,7 +303,9 @@ To avoid duplication and **keep the order of events** we can have only one activ
 
 ##### Rebuilding a projection
 
-If a a projection needs to be rebuild, due to a breaking change, the best strategy is to create a new projection, replay all events, and switch to it when the catchup is done. This way will never have a down time for a projection.
+If a a projection needs to be rebuild, due to a breaking change, the best strategy is to create a **new** projection, replay all events, and switch to it when the catchup is done. This way will never have a down time for a projection.
+
+> Depending on the number of events to be processed, this can take hours or even days. This can be mitigated by using a large batch size and discriminators when defining a projection.
 
 The process for creating a new projection at boot time, is described as follow:
 
@@ -557,10 +559,10 @@ When this happens we need to create more forwarding processes/services and sprea
 
 > To be honest, if we use a Forwarder service per write service I don't see how this would ever be a bottleneck, but again, we never know.
 
-#### Metadata
+#### Discriminators
 
-Spreading by filtering by metadata.
-What this metadata can be and how it is stored will depend in your business case.
+Spreading by filtering by discriminator.
+What this Discriminator can be, depend in your business case.
 A good example is to have a Forwarder service per set of aggregates types of per aggregate type.
 As an implementation example, for a very broad spectrum of problem, events can be stored with generic labels, that in turn can be used to filter the events. Each Forwarder service would then be sending events into its own event bus topic.
 

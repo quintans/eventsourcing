@@ -76,7 +76,7 @@ func (p *Pool) doAsync(quorum int, actFn func(*redis.Client) (bool, error)) (int
 	for _, client := range p.pool {
 		go func(client *redis.Client) {
 			r := result{}
-			retry.Do(
+			_ = retry.Do(
 				func() error {
 					r.Status, r.Err = actFn(client)
 					return r.Err

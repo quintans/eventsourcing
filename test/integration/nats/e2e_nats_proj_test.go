@@ -41,7 +41,8 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 
 	esRepo, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
+	es, err := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec())
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -98,7 +99,8 @@ func TestNATSProjectionAfterData(t *testing.T) {
 
 	esRepo, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec(), &eventsourcing.EsOptions{})
+	es, err := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec())
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 

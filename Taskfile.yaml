@@ -1,0 +1,83 @@
+version: "3"
+
+tasks:
+  test:
+    desc: Run unit tests
+    cmds:
+      - go test -tags unit -race -count=1 -v ./...
+
+  clean-docker:
+    desc: Clean up docker
+    cmds:
+      - echo "Cleaning up docker..."
+      - docker images -f "dangling=true" -q | xargs -r docker rmi
+      - docker volume ls -q | xargs -r docker volume rm
+      - docker network prune --force
+
+  test-pg:
+    desc: Run postgresql tests
+    deps:
+      - clean-docker
+    cmds:
+      - echo "Running postgresql integration tests..."
+      - go test -tags pg -race -count=1 -v ./...
+
+  test-mysql:
+    desc: Run mysql tests
+    deps:
+      - clean-docker
+    cmds:
+      - echo "Running mysql integration tests..."
+      - go test -tags mysql -race -count=1 -v ./...
+
+  test-mongo:
+    desc: Run mongo tests
+    deps:
+      - clean-docker
+    cmds:
+      - echo "Running mongo integration tests..."
+      - go test -tags mongo -race -count=1 -v ./...
+
+  test-redis:
+    desc: Run redis tests
+    deps:
+      - clean-docker
+    cmds:
+      - go test -tags redis -race -count=1 -v ./...
+
+  test-consul:
+    deps:
+      - clean-docker
+    desc: Run consul tests
+    cmds:
+      - go test -tags consul -race -count=1 -v ./...
+
+  test-integration:
+    deps:
+      - clean-docker
+    desc: Run integration tests
+    cmds:
+      - go test -tags integration -race -count=1 -v ./...
+
+  lint:
+    desc: Lint the code
+    cmds:
+      - echo "Linting the code..."
+      - golangci-lint run -v --fix
+
+  test-all:
+    desc: Run all test tasks
+    deps:
+      - lint
+      - test-pg
+      - test-mysql
+      - test-mongo
+      - test-redis
+      - test-consul
+      - test-integration
+
+  generate:
+    desc: Generate code
+    cmds:
+      - echo "Generating code..."
+      - ./codegen.sh ./api/proto/*.proto

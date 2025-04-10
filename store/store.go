@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/quintans/eventsourcing"
+	"github.com/quintans/eventsourcing/util"
 )
 
 type Tx func(ctx context.Context, fn func(context.Context) error) error
 
-const MetaColumnPrefix = "meta_"
+const DiscriminatorColumnPrefix = "disc_"
 
 type InTxHandlerContext[K eventsourcing.ID] struct {
 	ctx   context.Context
@@ -33,45 +34,51 @@ func (c *InTxHandlerContext[K]) Event() *eventsourcing.Event[K] {
 	return c.event
 }
 
-type MetadataHookKind string
+type DiscriminatorHookKind string
 
 const (
-	OnPersist  = MetadataHookKind("persist")
-	OnRetrieve = MetadataHookKind("retrieve")
+	OnPersist  = DiscriminatorHookKind("persist")
+	OnRetrieve = DiscriminatorHookKind("retrieve")
 )
 
-type MetadataHookContext struct {
-	ctx  context.Context
-	kind MetadataHookKind
+type DiscriminatorHookContext struct {
+	ctx           context.Context
+	discriminator eventsourcing.Discriminator
+	kind          DiscriminatorHookKind
 }
 
-func NewMetadataHookContext(ctx context.Context, kind MetadataHookKind) *MetadataHookContext {
-	return &MetadataHookContext{
-		ctx:  ctx,
-		kind: kind,
+func NewDiscriminatorHookContext(ctx context.Context, discriminator eventsourcing.Discriminator, kind DiscriminatorHookKind) *DiscriminatorHookContext {
+	return &DiscriminatorHookContext{
+		ctx:           ctx,
+		discriminator: discriminator,
+		kind:          kind,
 	}
 }
 
-func (c *MetadataHookContext) Context() context.Context {
+func (c *DiscriminatorHookContext) Context() context.Context {
 	return c.ctx
 }
 
-func (c *MetadataHookContext) Kind() MetadataHookKind {
+func (c *DiscriminatorHookContext) Kind() DiscriminatorHookKind {
 	return c.kind
 }
 
+func (c *DiscriminatorHookContext) Discriminator() eventsourcing.Discriminator {
+	return c.discriminator
+}
+
 type (
-	InTxHandler[K eventsourcing.ID]  func(*InTxHandlerContext[K]) error
-	MetadataHook[K eventsourcing.ID] func(*MetadataHookContext) eventsourcing.Metadata
+	InTxHandler[K eventsourcing.ID]       func(*InTxHandlerContext[K]) error
+	DiscriminatorHook[K eventsourcing.ID] func(*DiscriminatorHookContext) eventsourcing.Discriminator
 )
 
 type Filter struct {
 	AggregateKinds []eventsourcing.Kind
-	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
+	// Discriminator filters on top of discriminator. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Metadata MetadataFilter
-	Splits   uint32
-	SplitIDs []uint32
+	Discriminator DiscriminatorFilter
+	Splits        uint32
+	SplitIDs      []uint32
 }
 
 type FilterOption func(*Filter)
@@ -79,7 +86,7 @@ type FilterOption func(*Filter)
 func WithFilter(filter Filter) FilterOption {
 	return func(f *Filter) {
 		f.AggregateKinds = filter.AggregateKinds
-		f.Metadata = filter.Metadata
+		f.Discriminator = filter.Discriminator
 		f.Splits = filter.Splits
 		f.SplitIDs = filter.SplitIDs
 	}
@@ -91,36 +98,36 @@ func WithAggregateKinds(at ...eventsourcing.Kind) FilterOption {
 	}
 }
 
-func WithMetadataFilter(key, value string) FilterOption {
+func WithDiscriminatorFilter(key, value string) FilterOption {
 	return func(f *Filter) {
-		if f.Metadata == nil {
-			f.Metadata = MetadataFilter{}
+		if f.Discriminator == nil {
+			f.Discriminator = DiscriminatorFilter{}
 		}
-		f.Metadata.Add(key, value)
+		f.Discriminator.Add(key, value)
 	}
 }
 
 type (
-	MetadataFilter []*MetadataKVs
-	MetadataKVs    struct {
+	DiscriminatorFilter []*DiscriminatorKVs
+	DiscriminatorKVs    struct {
 		Key    string
 		Values []string
 	}
 )
 
-func (m *MetadataFilter) Add(key string, values ...string) {
+func (m *DiscriminatorFilter) Add(key string, values ...string) {
 	for _, v := range *m {
 		if v.Key == key {
 			v.Values = append(v.Values, values...)
 			return
 		}
 	}
-	*m = append(*m, &MetadataKVs{Key: key, Values: values})
+	*m = append(*m, &DiscriminatorKVs{Key: key, Values: values})
 }
 
-func WithMetadata(metadata MetadataFilter) FilterOption {
+func WithDiscriminator(filter DiscriminatorFilter) FilterOption {
 	return func(f *Filter) {
-		f.Metadata = metadata
+		f.Discriminator = filter
 	}
 }
 
@@ -155,7 +162,7 @@ type KVStore interface {
 	KVWStore
 }
 
-type Metadata struct {
+type Discriminator struct {
 	Key   string
 	Value string
 }
@@ -183,4 +190,39 @@ func (ns NilString) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns), nil
+}
+
+func DiscriminatorMerge(
+	ctx context.Context,
+	allowedKeys map[string]struct{},
+	rootDiscriminator eventsourcing.Discriminator,
+	DiscriminatorHook func(*DiscriminatorHookContext) eventsourcing.Discriminator,
+	kind DiscriminatorHookKind,
+) eventsourcing.Discriminator {
+	disc := eventsourcing.DiscriminatorFromCtx(ctx)
+
+	if DiscriminatorHook != nil {
+		disc = DiscriminatorHook(NewDiscriminatorHookContext(ctx, disc, kind))
+	}
+
+	disc = util.MapMerge(rootDiscriminator, disc)
+
+	return filterOut(allowedKeys, disc)
+}
+
+func filterOut(allowedKeys map[string]struct{}, m eventsourcing.Discriminator) eventsourcing.Discriminator {
+	if len(allowedKeys) == 0 {
+		return eventsourcing.Discriminator{}
+	}
+
+	disc := eventsourcing.Discriminator{}
+
+	for k, v := range m {
+		_, ok := allowedKeys[k]
+		if ok {
+			disc[k] = v
+		}
+	}
+
+	return disc
 }

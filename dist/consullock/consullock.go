@@ -65,7 +65,7 @@ func (l *Lock) Lock(ctx context.Context) (context.Context, error) {
 	go func() {
 		err := l.client.Session().RenewPeriodic(sEntry.TTL, sID, &api.WriteOptions{}, ctx2.Done())
 		if err != nil {
-			l.Unlock(context.Background())
+			_ = l.Unlock(context.Background())
 		}
 	}()
 

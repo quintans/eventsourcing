@@ -172,7 +172,10 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 func (f *Feed[K, PK]) newCanal() (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	buf := make([]byte, 4)
-	rand.Read(buf) // Always succeeds, no need to check error
+	_, err := rand.Read(buf)
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
 	cfg.ServerID = binary.LittleEndian.Uint32(buf)
 
 	cfg.Addr = fmt.Sprintf("%s:%d", f.config.Host, f.config.Port)
@@ -252,18 +255,18 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 		if err != nil {
 			return faults.Errorf("unmarshaling id '%s': %w", aggIDStr, err)
 		}
-		// metadata
-		meta := eventsourcing.Metadata{}
+		// discriminator
+		disc := eventsourcing.Discriminator{}
 		for k, v := range r.cols {
-			if r.row[k] == nil || !strings.HasPrefix(v.Name, store.MetaColumnPrefix) {
+			if r.row[k] == nil || !strings.HasPrefix(v.Name, store.DiscriminatorColumnPrefix) {
 				continue
 			}
 
 			c, ok := r.row[k].(string)
 			if !ok {
-				return faults.Errorf("metadata for column '%s' must be a string, got %T", v.Name, r.row[k])
+				return faults.Errorf("discriminator for column '%s' must be a string, got %T", v.Name, r.row[k])
 			}
-			meta[v.Name[len(store.MetaColumnPrefix):]] = c
+			disc[v.Name[len(store.DiscriminatorColumnPrefix):]] = c
 		}
 		event := &eventsourcing.Event[K]{
 			ID:               id,
@@ -273,7 +276,7 @@ func (h *binlogHandler[K, PK]) OnRow(e *canal.RowsEvent) error {
 			AggregateKind:    eventsourcing.Kind(r.getAsString("aggregate_kind")),
 			Kind:             eventsourcing.Kind(r.getAsString("kind")),
 			Body:             r.getStringAsBytes("body"),
-			Metadata:         meta,
+			Discriminator:    disc,
 			CreatedAt:        r.getAsTimeDate("created_at"),
 			Migrated:         r.getAsBool("migrated"),
 		}
@@ -309,8 +312,8 @@ func (h *binlogHandler[K, PK]) accepts(event *eventsourcing.Event[K]) bool {
 		return false
 	}
 
-	for _, v := range h.filter.Metadata {
-		val := event.Metadata[v.Key]
+	for _, v := range h.filter.Discriminator {
+		val := event.Discriminator[v.Key]
 		if val == "" || !slices.Contains(v.Values, val) {
 			return false
 		}
@@ -322,13 +325,6 @@ func (h *binlogHandler[K, PK]) accepts(event *eventsourcing.Event[K]) bool {
 type rec struct {
 	row  []interface{}
 	cols []schema.TableColumn
-}
-
-func (r *rec) getAsBytes(colName string) []byte {
-	if o := r.find(colName); o != nil {
-		return o.([]byte)
-	}
-	return nil
 }
 
 func (r *rec) getStringAsBytes(colName string) []byte {

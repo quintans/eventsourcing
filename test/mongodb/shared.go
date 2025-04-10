@@ -3,6 +3,8 @@ package mongodb
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"strconv"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ type DBConfig struct {
 }
 
 func (c DBConfig) URL() string {
-	return fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", c.Host, c.Port, c.Database)
+	return fmt.Sprintf("mongodb://%s:%d/%s?directConnection=true", c.Host, c.Port, c.Database)
 }
 
 const (
@@ -34,15 +36,15 @@ func Setup(t *testing.T, dockerComposePath string) DBConfig {
 	dbConfig := DBConfig{
 		Database: DBName,
 		Host:     "localhost",
-		Port:     27017,
+		Port:     1024 + rand.Intn(65535-1024),
 	}
 
 	ctx := context.Background()
-	test.DockerCompose(t, dockerComposePath, "mongo", time.Second)
+	test.DockerCompose(t, dockerComposePath, "mongo", map[string]string{
+		"MONGO_PORT": strconv.Itoa(dbConfig.Port),
+	})
 
-	DBURL := fmt.Sprintf("mongodb://localhost:27017/%s?replicaSet=rs0", DBName)
-
-	opts := options.Client().ApplyURI(DBURL)
+	opts := options.Client().ApplyURI(dbConfig.URL())
 	client, err := mongo.Connect(ctx, opts)
 	require.NoError(t, err)
 	defer client.Disconnect(context.Background())
@@ -62,7 +64,7 @@ func Setup(t *testing.T, dockerComposePath string) DBConfig {
 func dbSchema(cli *mongo.Client) error {
 	cmds := []bson.D{
 		{
-			{"create", "keyvalue"},
+			{Key: "create", Value: "keyvalue"},
 		},
 	}
 

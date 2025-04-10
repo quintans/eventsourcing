@@ -50,7 +50,7 @@ func (r *Repository) wrapWithTx(ctx context.Context, fn func(context.Context, Se
 	if err != nil {
 		return faults.Wrap(err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 
 	ctx = context.WithValue(ctx, txKey{}, tx)
 	err = fn(ctx, tx)

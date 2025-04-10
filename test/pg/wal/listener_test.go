@@ -79,13 +79,14 @@ func TestListener(t *testing.T) {
 
 			dbConfig := setup(t)
 
-			repository, err := postgresql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+			repository, err := postgresql.NewStoreWithURL(dbConfig.URL(), postgresql.WithSnapshotsTable[ids.AggID]("snapshots"))
 			require.NoError(t, err)
 
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
+			es, err := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), eventsourcing.EsSnapshotThreshold(3))
+			require.NoError(t, err)
 
 			data := test.NewMockSinkData[ids.AggID]()
 			ctx, cancel := context.WithCancel(context.Background())

@@ -6,12 +6,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/avast/retry-go/v3"
 	"github.com/oklog/ulid/v2"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 
 	"github.com/quintans/eventsourcing"
@@ -58,7 +60,7 @@ type Event struct {
 	AggregateKind    eventsourcing.Kind `bson:"aggregate_kind,omitempty"`
 	Kind             eventsourcing.Kind `bson:"kind,omitempty"`
 	Body             []byte             `bson:"body,omitempty"`
-	Metadata         bson.M             `bson:"metadata,omitempty"`
+	Discriminator    bson.M             `bson:"discriminator,omitempty"`
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
 	Migration        int                `bson:"migration"`
 	Migrated         bool               `bson:"migrated"`
@@ -71,7 +73,7 @@ type Snapshot struct {
 	AggregateKind    eventsourcing.Kind `bson:"aggregate_kind,omitempty"`
 	Body             []byte             `bson:"body,omitempty"`
 	CreatedAt        time.Time          `bson:"created_at,omitempty"`
-	Metadata         bson.M
+	Discriminator    bson.M
 }
 
 var _ eventsourcing.EsRepository[ulid.ULID] = (*EsRepository[ulid.ULID, *ulid.ULID])(nil)
@@ -96,22 +98,30 @@ func WithTxHandler[K eventsourcing.ID, PK eventsourcing.IDPt[K]](txHandler store
 	}
 }
 
-// WithMetadata defines the metadata to be save on every event. Data keys will be converted to lower case
-func WithMetadata[K eventsourcing.ID, PK eventsourcing.IDPt[K]](metadata eventsourcing.Metadata) Option[K, PK] {
+func WithDiscriminatorKeys[K eventsourcing.ID, PK eventsourcing.IDPt[K]](keys ...string) Option[K, PK] {
 	return func(r *EsRepository[K, PK]) {
-		m := eventsourcing.Metadata{}
-		for k, v := range metadata {
-			m[strings.ToLower(k)] = v
+		for _, v := range keys {
+			r.allowedKeys[v] = struct{}{}
 		}
-		r.metadata = m
 	}
 }
 
-// WithMetadataHook defines the hook that will return the metadata.
-// This metadata will override any metadata defined at the repository level
-func WithMetadataHook[K eventsourcing.ID, PK eventsourcing.IDPt[K]](fn store.MetadataHook[K]) Option[K, PK] {
+// WithDiscriminator defines the discriminator to be save on every event. Data keys will be converted to lower case
+func WithDiscriminator[K eventsourcing.ID, PK eventsourcing.IDPt[K]](disc eventsourcing.Discriminator) Option[K, PK] {
 	return func(r *EsRepository[K, PK]) {
-		r.metadataHook = fn
+		m := eventsourcing.Discriminator{}
+		for k, v := range disc {
+			m[strings.ToLower(k)] = v
+		}
+		r.discriminator = m
+	}
+}
+
+// WithDiscriminatorHook defines the hook that will return the discriminator.
+// This discriminator will override any discriminator defined at the repository level
+func WithDiscriminatorHook[K eventsourcing.ID, PK eventsourcing.IDPt[K]](fn store.DiscriminatorHook[K]) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
+		r.discriminatorHook = fn
 	}
 }
 
@@ -179,10 +189,25 @@ type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	txHandlers              []store.InTxHandler[K]
 	eventsCollectionName    string
 	snapshotsCollectionName string
-	metadata                eventsourcing.Metadata
-	metadataHook            store.MetadataHook[K]
+	discriminator           eventsourcing.Discriminator
+	discriminatorHook       store.DiscriminatorHook[K]
 	skipSchemaCreation      bool
-	postSchemaCreation      func(Schema) []bson.D
+	allowedKeys             map[string]struct{}
+}
+
+func TryPing(ctx context.Context, client *mongo.Client) error {
+	err := retry.Do(
+		func() error {
+			err := client.Ping(ctx, readpref.Primary())
+			if err != nil && errors.Is(err, ctx.Err()) {
+				return retry.Unrecoverable(err)
+			}
+			return faults.Wrapf(err, "pinging")
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+	)
+	return faults.Wrapf(err, "database did not respond to ping")
 }
 
 // NewStoreWithURI creates a new instance of MongoEsRepository
@@ -191,6 +216,11 @@ func NewStoreWithURI[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.C
 	defer cancel()
 
 	client, err := mongo.Connect(ctx2, options.Client().ApplyURI(connString))
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
+
+	err = TryPing(ctx, client)
 	if err != nil {
 		return nil, faults.Wrap(err)
 	}
@@ -207,10 +237,15 @@ func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](ctx context.Context,
 		dbName:                  database,
 		eventsCollectionName:    defaultEventsCollection,
 		snapshotsCollectionName: defaultSnapshotsCollection,
+		allowedKeys:             make(map[string]struct{}),
 	}
 
 	for _, o := range opts {
 		o(r)
+	}
+
+	if len(r.allowedKeys) == 0 {
+		r.discriminatorHook = nil
 	}
 
 	if r.skipSchemaCreation {
@@ -257,7 +292,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			version++
 			id = e.ID
 			aggIDStr := eRec.AggregateID.String()
-			metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
+			disc := r.discriminatorMerge(ctx, store.OnPersist)
 			err := r.saveEvent(
 				ctx,
 				&Event{
@@ -268,7 +303,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 					Kind:             e.Kind,
 					Body:             e.Body,
 					AggregateVersion: version,
-					Metadata:         fromMetadata(metadata),
+					Discriminator:    fromDiscriminator(disc),
 					CreatedAt:        eRec.CreatedAt,
 				},
 				id,
@@ -290,12 +325,14 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 	return id, version, nil
 }
 
-func (r *EsRepository[K, PK]) metadataMerge(ctx context.Context, metadata eventsourcing.Metadata, kind store.MetadataHookKind) eventsourcing.Metadata {
-	if r.metadataHook == nil {
-		return metadata
-	}
-	meta := r.metadataHook(store.NewMetadataHookContext(ctx, kind))
-	return util.MapMerge(metadata, meta)
+func (r *EsRepository[K, PK]) discriminatorMerge(ctx context.Context, kind store.DiscriminatorHookKind) eventsourcing.Discriminator {
+	return store.DiscriminatorMerge(
+		ctx,
+		r.allowedKeys,
+		r.discriminator,
+		r.discriminatorHook,
+		kind,
+	)
 }
 
 func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, doc *Event, id eventid.EventID) error {
@@ -342,12 +379,12 @@ func isMongoDup(err error) bool {
 func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (eventsourcing.Snapshot[K], error) {
 	snap := Snapshot{}
 	opts := options.FindOne()
-	opts.SetSort(bson.D{{"aggregate_version", -1}})
-	filter := bson.D{{"aggregate_id", aggregateID.String()}}
+	opts.SetSort(bson.D{{Key: "aggregate_version", Value: -1}})
+	filter := bson.D{{Key: "aggregate_id", Value: aggregateID.String()}}
 
-	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
-	for k, v := range metadata {
-		filter = append(filter, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
+	disc := r.discriminatorMerge(ctx, store.OnRetrieve)
+	for k, v := range disc {
+		filter = append(filter, bson.E{Key: "discriminator." + k, Value: bson.D{{Key: "$eq", Value: v}}})
 	}
 
 	if err := r.snapshotCollection().FindOne(ctx, filter, opts).Decode(&snap); err != nil {
@@ -368,12 +405,16 @@ func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (e
 		AggregateKind:    snap.AggregateKind,
 		Body:             snap.Body,
 		CreatedAt:        snap.CreatedAt,
-		Metadata:         toMetadata(snap.Metadata),
+		Discriminator:    toDiscriminator(snap.Discriminator),
 	}, nil
 }
 
+func (r *EsRepository[K, PK]) IsSnapshotEnabled() bool {
+	return r.snapshotsCollectionName != ""
+}
+
 func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
-	metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
+	disc := r.discriminatorMerge(ctx, store.OnPersist)
 	return r.saveSnapshot(ctx, &Snapshot{
 		ID:               snapshot.ID.String(),
 		AggregateID:      snapshot.AggregateID.String(),
@@ -381,11 +422,15 @@ func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *events
 		AggregateKind:    snapshot.AggregateKind,
 		Body:             snapshot.Body,
 		CreatedAt:        snapshot.CreatedAt,
-		Metadata:         fromMetadata(metadata),
+		Discriminator:    fromDiscriminator(disc),
 	})
 }
 
 func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, snapshot *Snapshot) error {
+	if r.snapshotsCollectionName == "" {
+		return faults.New("snapshot collection is undefined")
+	}
+
 	// TODO instead of adding we could replace UPDATE/INSERT
 	_, err := r.snapshotCollection().InsertOne(ctx, snapshot)
 
@@ -394,20 +439,20 @@ func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, snapshot *Snapsh
 
 func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
 	filter := bson.D{
-		{"aggregate_id", bson.D{{"$eq", aggregateID.String()}}},
-		{"migration", bson.D{{"$eq", 0}}},
+		{Key: "aggregate_id", Value: bson.D{{Key: "$eq", Value: aggregateID.String()}}},
+		{Key: "migration", Value: bson.D{{Key: "$eq", Value: 0}}},
 	}
 	if snapVersion > -1 {
-		filter = append(filter, bson.E{"aggregate_version", bson.D{{"$gt", snapVersion}}})
+		filter = append(filter, bson.E{Key: "aggregate_version", Value: bson.D{{Key: "$gt", Value: snapVersion}}})
 	}
 
-	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
-	for k, v := range metadata {
-		filter = append(filter, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
+	disc := r.discriminatorMerge(ctx, store.OnRetrieve)
+	for k, v := range disc {
+		filter = append(filter, bson.E{Key: "discriminator." + k, Value: bson.D{{Key: "$eq", Value: v}}})
 	}
 
 	opts := options.Find()
-	opts.SetSort(bson.D{{"aggregate_version", 1}})
+	opts.SetSort(bson.D{{Key: "aggregate_version", Value: 1}})
 
 	events, err := r.queryEvents(ctx, filter, opts)
 	if err != nil {
@@ -422,8 +467,8 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 	// for events
 	filter := bson.D{
-		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
-		{"kind", bson.D{{"$eq", request.EventKind}}},
+		{Key: "aggregate_id", Value: bson.D{{Key: "$eq", Value: request.AggregateID.String()}}},
+		{Key: "kind", Value: bson.D{{Key: "$eq", Value: request.EventKind}}},
 	}
 	cursor, err := r.eventsCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
@@ -441,7 +486,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 		}
 
 		fltr := bson.D{
-			{"_id", evt.ID},
+			{Key: "_id", Value: evt.ID},
 		}
 		update := bson.M{
 			"$set": bson.M{"body": body},
@@ -454,7 +499,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 	// for snapshots
 	filter = bson.D{
-		{"aggregate_id", bson.D{{"$eq", request.AggregateID.String()}}},
+		{Key: "aggregate_id", Value: bson.D{{Key: "$eq", Value: request.AggregateID.String()}}},
 	}
 	cursor, err = r.snapshotCollection().Find(ctx, filter)
 	if err != nil && err != mongo.ErrNoDocuments {
@@ -472,7 +517,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 		}
 
 		filter := bson.D{
-			{"_id", s.ID},
+			{Key: "_id", Value: s.ID},
 		}
 		update := bson.M{
 			"$set": bson.M{"body": body},
@@ -488,15 +533,15 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 
 func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	flt := bson.D{
-		{"_id", bson.D{{"$gt", after.String()}}},
-		{"_id", bson.D{{"$lte", until.String()}}},
-		{"migration", bson.D{{"$eq", 0}}},
+		{Key: "_id", Value: bson.D{{Key: "$gt", Value: after.String()}}},
+		{Key: "_id", Value: bson.D{{Key: "$lte", Value: until.String()}}},
+		{Key: "migration", Value: bson.D{{Key: "$eq", Value: 0}}},
 	}
 
-	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
-	flt = buildFilter(metadata, filter, flt)
+	disc := r.discriminatorMerge(ctx, store.OnRetrieve)
+	flt = buildFilter(disc, filter, flt)
 
-	opts := options.Find().SetSort(bson.D{{"_id", 1}})
+	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}})
 	if batchSize > 0 {
 		opts.SetBatchSize(int32(batchSize))
 	} else {
@@ -514,30 +559,30 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(metadata eventsourcing.Metadata, filter store.Filter, flt bson.D) bson.D {
+func buildFilter(disc eventsourcing.Discriminator, filter store.Filter, flt bson.D) bson.D {
 	if len(filter.AggregateKinds) > 0 {
-		flt = append(flt, bson.E{"aggregate_kind", bson.D{{"$in", filter.AggregateKinds}}})
+		flt = append(flt, bson.E{Key: "aggregate_kind", Value: bson.D{{Key: "$in", Value: filter.AggregateKinds}}})
 	}
 
 	if filter.Splits > 1 && len(filter.SplitIDs) != int(filter.Splits) {
 		flt = append(flt, splitFilter("aggregate_id_hash", filter.Splits, filter.SplitIDs))
 	}
 
-	for k, v := range metadata {
-		flt = append(flt, bson.E{"metadata." + k, bson.D{{"$eq", v}}})
+	for k, v := range disc {
+		flt = append(flt, bson.E{Key: "discriminator." + k, Value: bson.D{{Key: "$eq", Value: v}}})
 	}
 
-	if len(filter.Metadata) > 0 {
-		for _, kv := range filter.Metadata {
-			// ignore if already set by the metadata
-			if metadata != nil {
-				_, ok := metadata[kv.Key]
+	if len(filter.Discriminator) > 0 {
+		for _, kv := range filter.Discriminator {
+			// ignore if already set by the discriminator
+			if disc != nil {
+				_, ok := disc[kv.Key]
 				if ok {
 					continue
 				}
 			}
 
-			flt = append(flt, bson.E{"metadata." + kv.Key, bson.D{{"$in", kv.Values}}})
+			flt = append(flt, bson.E{Key: "discriminator." + kv.Key, Value: bson.D{{Key: "$in", Value: kv.Values}}})
 		}
 	}
 	return flt
@@ -547,11 +592,11 @@ func splitFilter(field string, splits uint32, splitIDs []uint32) bson.E {
 	field = "$" + field
 	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, splits]}],  split]} }
 	return bson.E{
-		"$expr",
-		bson.D{
-			{"$in", bson.A{
+		Key: "$expr",
+		Value: bson.D{
+			{Key: "$in", Value: bson.A{
 				bson.D{
-					{"$mod", bson.A{field, splits}},
+					{Key: "$mod", Value: bson.A{field, splits}},
 				},
 				splitIDs,
 			}},
@@ -604,28 +649,28 @@ func toEventsourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		Metadata:         toMetadata(e.Metadata),
+		Discriminator:    toDiscriminator(e.Discriminator),
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
 	}, nil
 }
 
 func (r *EsRepository[K, PK]) GetEventsByRawIDs(ctx context.Context, ids []string) ([]*eventsourcing.Event[K], error) {
-	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	return r.queryEvents(ctx, bson.D{bson.E{"_id", bson.D{{"$in", ids}}}}, opts)
+	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}})
+	return r.queryEvents(ctx, bson.D{bson.E{Key: "_id", Value: bson.D{{Key: "$in", Value: ids}}}}, opts)
 }
 
-func fromMetadata(meta eventsourcing.Metadata) primitive.M {
+func fromDiscriminator(disc eventsourcing.Discriminator) primitive.M {
 	m := primitive.M{}
-	for k, v := range meta {
+	for k, v := range disc {
 		m[k] = v
 	}
 	return m
 }
 
-func toMetadata(meta primitive.M) eventsourcing.Metadata {
-	m := eventsourcing.Metadata{}
-	for k, v := range meta {
+func toDiscriminator(disc primitive.M) eventsourcing.Discriminator {
+	m := eventsourcing.Discriminator{}
+	for k, v := range disc {
 		m[k] = v.(string)
 	}
 	return m

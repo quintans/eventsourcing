@@ -42,32 +42,32 @@ type Message[K eventsourcing.ID] struct {
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
 	Body             encoding.Base64
-	Metadata         eventsourcing.Metadata
+	Discriminator    eventsourcing.Discriminator
 	CreatedAt        time.Time
 }
 
 func (m *Message[K]) String() string {
-	return fmt.Sprintf(`{ID: %s, AggregateID: %s, AggregateVersion: %d, AggregateKind: %s, Kind: %s, Body: %s, Metadata: %s, CreatedAt: %s}`,
+	return fmt.Sprintf(`{ID: %s, AggregateID: %s, AggregateVersion: %d, AggregateKind: %s, Kind: %s, Body: %s, Discriminator: %s, CreatedAt: %s}`,
 		m.ID,
 		m.AggregateID,
 		m.AggregateVersion,
 		m.AggregateKind,
 		m.Kind,
 		m.Body,
-		m.Metadata,
+		m.Discriminator,
 		m.CreatedAt,
 	)
 }
 
 type messageJSON struct {
-	ID               eventid.EventID        `json:"id,omitempty"`
-	AggregateID      string                 `json:"aggregate_id,omitempty"`
-	AggregateVersion uint32                 `json:"aggregate_version,omitempty"`
-	AggregateKind    eventsourcing.Kind     `json:"aggregate_kind,omitempty"`
-	Kind             eventsourcing.Kind     `json:"kind,omitempty"`
-	Body             encoding.Base64        `json:"body,omitempty"`
-	Metadata         eventsourcing.Metadata `json:"metadata,omitempty"`
-	CreatedAt        time.Time              `json:"created_at,omitempty"`
+	ID               eventid.EventID             `json:"id,omitempty"`
+	AggregateID      string                      `json:"aggregate_id,omitempty"`
+	AggregateVersion uint32                      `json:"aggregate_version,omitempty"`
+	AggregateKind    eventsourcing.Kind          `json:"aggregate_kind,omitempty"`
+	Kind             eventsourcing.Kind          `json:"kind,omitempty"`
+	Body             encoding.Base64             `json:"body,omitempty"`
+	Discriminator    eventsourcing.Discriminator `json:"discriminator,omitempty"`
+	CreatedAt        time.Time                   `json:"created_at,omitempty"`
 }
 
 type JSONCodec[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct{}
@@ -80,7 +80,7 @@ func (JSONCodec[K, PK]) Encode(e *eventsourcing.Event[K]) ([]byte, error) {
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		Metadata:         e.Metadata,
+		Discriminator:    e.Discriminator,
 		CreatedAt:        e.CreatedAt,
 	}
 	b, err := json.Marshal(msgJ)
@@ -108,7 +108,7 @@ func (JSONCodec[K, PK]) Decode(data []byte) (*Message[K], error) {
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		Metadata:         e.Metadata,
+		Discriminator:    e.Discriminator,
 		CreatedAt:        e.CreatedAt,
 	}
 
@@ -123,7 +123,7 @@ func ToMessage[K eventsourcing.ID](e *eventsourcing.Event[K]) *Message[K] {
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		Metadata:         e.Metadata,
+		Discriminator:    e.Discriminator,
 		CreatedAt:        e.CreatedAt,
 	}
 }

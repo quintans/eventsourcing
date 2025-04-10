@@ -42,7 +42,7 @@ func (s *GrpcServer[K]) GetEvents(ctx context.Context, r *pb.GetEventsRequest) (
 			AggregateKind:    v.AggregateKind.String(),
 			Kind:             v.Kind.String(),
 			Body:             v.Body,
-			Metadata:         v.Metadata,
+			Discriminators:   v.Discriminator,
 			CreatedAt:        createdAt,
 		}
 	}
@@ -54,16 +54,16 @@ func pbFilterToFilter(pbFilter *pb.Filter) store.Filter {
 	for k, v := range pbFilter.AggregateKinds {
 		types[k] = eventsourcing.Kind(v)
 	}
-	metadata := store.MetadataFilter{}
-	for _, kv := range pbFilter.Metadata {
-		metadata = append(metadata, &store.MetadataKVs{
+	filter := store.DiscriminatorFilter{}
+	for _, kv := range pbFilter.Discriminators {
+		filter = append(filter, &store.DiscriminatorKVs{
 			Key:    kv.Key,
 			Values: kv.Value,
 		})
 	}
 	return store.Filter{
 		AggregateKinds: types,
-		Metadata:       metadata,
+		Discriminator:  filter,
 		Splits:         pbFilter.Splits,
 		SplitIDs:       pbFilter.SplitIds,
 	}

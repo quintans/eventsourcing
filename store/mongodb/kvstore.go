@@ -49,7 +49,7 @@ func NewKVStore(client *mongo.Client, dbName, collection string) KVStore {
 func (m KVStore) Get(ctx context.Context, key string) (string, error) {
 	opts := options.FindOne()
 	row := kvStoreRow{}
-	if err := m.collection.FindOne(ctx, bson.D{{"_id", key}}, opts).Decode(&row); err != nil {
+	if err := m.collection.FindOne(ctx, bson.D{{Key: "_id", Value: key}}, opts).Decode(&row); err != nil {
 		if err == mongo.ErrNoDocuments {
 			return "", faults.Wrap(store.ErrResumeTokenNotFound)
 		}

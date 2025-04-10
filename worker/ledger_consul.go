@@ -70,7 +70,7 @@ func (c *ConsulLedger) Peers(ctx context.Context) ([]Peer, error) {
 			r := result{
 				MemberID: m,
 			}
-			retry.Do(
+			_ = retry.Do(
 				func() error {
 					r.KVPair, _, r.Err = c.client.KV().Get(m, options)
 					return r.Err

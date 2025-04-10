@@ -83,7 +83,8 @@ func TestMongoListenere(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			errs := feeding(ctx, dbConfig, tt.partitionSlots, data)
 
-			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), &eventsourcing.EsOptions{SnapshotThreshold: 3})
+			es, err := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), eventsourcing.EsSnapshotThreshold(3))
+			require.NoError(t, err)
 
 			acc, _ := test.NewAccount("Paulo", 100)
 			id := acc.GetID()

@@ -2,17 +2,13 @@ package wal
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"testing"
 	"time"
 
-	"github.com/avast/retry-go/v3"
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/lib/pq"
-	"github.com/quintans/faults"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
@@ -30,7 +26,7 @@ func setup(t *testing.T) tpg.DBConfig {
 		Password: "secret",
 	}
 
-	tcpPort := strconv.Itoa(5432)
+	tcpPort := strconv.Itoa(dbConfig.Port)
 	natPort := nat.Port(tcpPort)
 
 	req := testcontainers.ContainerRequest{
@@ -69,74 +65,5 @@ func setup(t *testing.T) tpg.DBConfig {
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()
 
-	err = retry.Do(
-		func() error {
-			return dbSchema(dbConfig)
-		},
-		retry.Attempts(3),
-		retry.Delay(time.Second),
-	)
-	require.NoError(t, err)
-
 	return dbConfig
-}
-
-func dbSchema(config tpg.DBConfig) error {
-	dburl := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?replication=database&sslmode=disable", config.Username, config.Password, config.Host, config.Port, config.Database)
-	conn, err := pgconn.Connect(context.Background(), dburl)
-	if err != nil {
-		return faults.Errorf("failed to connect %s: %w", dburl, err)
-	}
-	defer conn.Close(context.Background())
-
-	sqls := []string{
-		`CREATE TABLE IF NOT EXISTS events(
-			id VARCHAR (50) PRIMARY KEY,
-			aggregate_id VARCHAR (50) NOT NULL,
-			aggregate_id_hash INTEGER NOT NULL,
-			aggregate_version INTEGER NOT NULL,
-			aggregate_kind VARCHAR (50) NOT NULL,
-			kind VARCHAR (50) NOT NULL,
-			body bytea,
-			metadata JSONB,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			migration INTEGER NOT NULL DEFAULT 0,
-			migrated BOOLEAN NOT NULL DEFAULT false
-		);`,
-		`CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);`,
-		`CREATE INDEX evt_id_migrated_idx ON events (id, migration);`,
-		`CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);`,
-		`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);`,
-		`CREATE INDEX evt_metadata_idx ON events USING GIN (metadata jsonb_path_ops);`,
-
-		`CREATE TABLE IF NOT EXISTS snapshots(
-			id VARCHAR (50) PRIMARY KEY,
-			aggregate_id VARCHAR (50) NOT NULL,
-			aggregate_version INTEGER NOT NULL,
-			aggregate_kind VARCHAR (50) NOT NULL,
-			body bytea NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			FOREIGN KEY (id) REFERENCES events (id)
-		);`,
-		`CREATE INDEX snap_agg_id_idx ON snapshots (aggregate_id);`,
-		`CREATE PUBLICATION events_pub FOR TABLE events WITH (publish = 'insert');`,
-		`CREATE TABLE IF NOT EXISTS outbox(
-			id VARCHAR (50) PRIMARY KEY,
-			aggregate_id VARCHAR (50) NOT NULL,
-			aggregate_id_hash INTEGER NOT NULL,
-			aggregate_kind VARCHAR (50) NOT NULL,
-			kind VARCHAR (50) NOT NULL,
-			metadata JSONB
-		);`,
-	}
-
-	for _, s := range sqls {
-		result := conn.Exec(context.Background(), s)
-		_, err := result.ReadAll()
-		if err != nil {
-			return faults.Errorf("failed to execute %s: %w", s, err)
-		}
-	}
-
-	return nil
 }
