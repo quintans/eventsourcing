@@ -36,7 +36,7 @@ tasks:
       - clean-docker
     cmds:
       - echo "Running mongo integration tests..."
-      - go test -tags mongo -race -count=1 -v -p 1 ./...
+      - go test -tags mongo -race -count=1 -v ./...
 
   test-redis:
     desc: Run redis tests
@@ -57,7 +57,7 @@ tasks:
       - clean-docker
     desc: Run integration tests
     cmds:
-      - go test -tags integration -race -count=1 -v -p 1 ./...
+      - go test -tags integration -race -count=1 -v ./...
 
   lint:
     desc: Lint the code

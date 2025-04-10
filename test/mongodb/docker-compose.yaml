@@ -1,27 +1,41 @@
-version: "3.4"
-
 services:
   M1:
     hostname: mongodb
-    container_name: mongodb
-    image: mongo:4.2.15
+    image: mongo:6.0.19
     environment:
       MONGO_INITDB_DATABASE: eventsourcing
       MONGO_REPLICA_SET_NAME: rs0
+      MONGO_PORT: "${MONGO_PORT}"
     expose:
       - 27017
     ports:
-      - 27017:27017
+      - "${MONGO_PORT}:27017"
+    networks:
+      - mongo-network
     restart: always
     entrypoint: [ "/usr/bin/mongod", "--bind_ip_all", "--replSet", "rs0" ]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   mongosetup:
-    image: mongo:4.2.15
+    image: mongo:6.0.19
     links:
       - M1:M1
     depends_on:
       - M1
-    volumes:
-      - .:/scripts
+    networks:
+      - mongo-network
     restart: "no"
-    entrypoint: [ "bash", "/scripts/mongo_setup.sh" ]
+    command: >
+      bash -c "sleep 1 &&
+      echo hello &&
+      mongosh --host M1:27017 --eval
+      'config = {\"_id\": \"rs0\", \"version\": 1, \"members\": [{\"_id\" : 0,\"host\": \"M1:27017\"}]};
+      rs.initiate(config);' "
+
+networks:
+  mongo-network:

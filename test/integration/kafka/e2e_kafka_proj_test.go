@@ -5,7 +5,9 @@ package kafka
 import (
 	"context"
 	"log/slog"
+	"math/rand"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -166,13 +168,16 @@ type kafkaContainer struct {
 
 // runKafkaContainer creates an instance of the Kafka container type
 func runKafkaContainer(t *testing.T) []string {
-	test.DockerCompose(t, "./docker-compose.yaml", "kafka", time.Second)
-	return []string{"localhost:29092"}
+	port := strconv.Itoa(1024 + rand.Intn(65535-1024))
+	test.DockerCompose(t, "./docker-compose.yaml", "kafka", map[string]string{
+		"EXT_PORT": port,
+	})
+	return []string{"localhost:" + port}
 }
 
 func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID], kvStore *integration.MockKVStore) *integration.ProjectionMock[ids.AggID] {
 	// create projection
-	proj := integration.NewProjectionMock[ids.AggID]("balances", test.NewJSONCodec())
+	proj := integration.NewProjectionMock("balances", test.NewJSONCodec())
 
 	sub, err := pkafka.NewSubscriberWithBrokers[ids.AggID](ctx, logger, uri, "accounts", nil)
 	require.NoError(t, err)

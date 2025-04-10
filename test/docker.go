@@ -1,46 +1,18 @@
 package test
 
 import (
-	"log"
+	"context"
 	"testing"
-	"time"
 
-	"github.com/quintans/faults"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/compose"
 )
 
-func DockerCompose(t *testing.T, path, service string, wait time.Duration) {
-	compose := testcontainers.NewLocalDockerCompose([]string{path}, service+"-set")
+func DockerCompose(t *testing.T, path, service string, env map[string]string) {
+	dc, err := compose.NewDockerCompose(path)
+	require.NoError(t, err, "Error creating docker compose")
 
-	t.Cleanup(func() {
-		exErr := compose.Down()
-		if err := checkIfError(exErr); err != nil {
-			log.Printf("Error on compose shutdown: %v\n", err)
-		}
-	})
-
-	exErr := compose.Down()
-	require.NoError(t, checkIfError(exErr), "Error on compose shutdown")
-
-	exErr = compose.WithCommand([]string{"up", "-d"}).
-		Invoke()
-	require.NoError(t, checkIfError(exErr))
-
-	time.Sleep(wait)
-}
-
-func checkIfError(err testcontainers.ExecError) error {
-	if err.Error != nil {
-		return faults.Errorf("Failed when running %v: %v", err.Command, err.Error)
-	}
-
-	if err.Stdout != nil {
-		return faults.Errorf("An error in Stdout happened when running %v: %v", err.Command, err.Stdout)
-	}
-
-	if err.Stderr != nil {
-		return faults.Errorf("An error in Stderr happened when running %v: %v", err.Command, err.Stderr)
-	}
-	return nil
+	cs := dc.WithEnv(env)
+	err = cs.Up(context.Background(), compose.Wait(true))
+	require.NoError(t, err, "Error starting docker compose")
 }

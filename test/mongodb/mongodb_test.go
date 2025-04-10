@@ -4,7 +4,6 @@ package mongodb
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"sync"
@@ -38,7 +37,7 @@ const (
 
 // creates a independent connection
 func connect(dbConfig DBConfig) (*mongo.Database, error) {
-	connString := fmt.Sprintf("mongodb://%s:%d/%s?replicaSet=rs0", dbConfig.Host, dbConfig.Port, dbConfig.Database)
+	connString := dbConfig.URL()
 
 	opts := options.Client().ApplyURI(connString)
 	client, err := mongo.Connect(context.Background(), opts)
