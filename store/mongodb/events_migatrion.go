@@ -66,16 +66,16 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 
 	// find an aggregate ID to migrate
 	filter := bson.D{
-		{"aggregate_kind", bson.D{{"$eq", aggregateKind}}},
-		{"migration", bson.D{{"$eq", 0}}},
-		{"kind", bson.D{{"$in", eventTypeCriteria}}},
+		{Key: "aggregate_kind", Value: bson.D{{Key: "$eq", Value: aggregateKind}}},
+		{Key: "migration", Value: bson.D{{Key: "$eq", Value: 0}}},
+		{Key: "kind", Value: bson.D{{Key: "$in", Value: eventTypeCriteria}}},
 	}
 
 	oneOpts := options.FindOne().
-		SetSort(bson.D{{"_id", 1}}).
+		SetSort(bson.D{{Key: "_id", Value: 1}}).
 		SetProjection(bson.D{
-			{"aggregate_id", 1},
-			{"_id", 0},
+			{Key: "aggregate_id", Value: 1},
+			{Key: "_id", Value: 0},
 		})
 
 	event := Event{}
@@ -88,12 +88,12 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 
 	// get all events for the aggregate id returned by the subquery
 	filter = bson.D{
-		{"aggregate_id", bson.D{{"$eq", event.AggregateID}}},
-		{"migration", bson.D{{"$eq", 0}}},
+		{Key: "aggregate_id", Value: bson.D{{Key: "$eq", Value: event.AggregateID}}},
+		{Key: "migration", Value: bson.D{{Key: "$eq", Value: 0}}},
 	}
 
 	opts := options.Find().
-		SetSort(bson.D{{"aggregate_version", 1}})
+		SetSort(bson.D{{Key: "aggregate_version", Value: 1}})
 
 	events := []*Event{}
 	cursor, err := r.eventsCollection().Find(ctx, filter, opts)
@@ -159,8 +159,8 @@ func (r *EsRepository[K, PK]) saveMigration(
 
 		// invalidate all active events
 		filter := bson.D{
-			{"aggregate_id", last.AggregateID.String()},
-			{"migration", 0},
+			{Key: "aggregate_id", Value: last.AggregateID.String()},
+			{Key: "migration", Value: 0},
 		}
 		update := bson.M{
 			"$set": bson.M{"migration": revision},
@@ -173,7 +173,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 
 		// delete snapshots
 		_, err = r.snapshotCollection().DeleteMany(ctx, bson.D{
-			{"aggregate_id", last.AggregateID.String()},
+			{Key: "aggregate_id", Value: last.AggregateID.String()},
 		})
 		if err != nil {
 			return faults.Errorf("failed to delete stale snapshots: %w", err)
@@ -205,7 +205,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,
 				Body:             mig.Body,
-				Metadata:         fromMetadata(r.metadata),
+				Discriminator:    fromDiscriminator(r.discriminator),
 				CreatedAt:        now,
 				Migrated:         true,
 			}
@@ -225,7 +225,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			}
 		}
 
-		if aggregate != nil {
+		if aggregate != nil && r.IsSnapshotEnabled() {
 			body, err := codec.Encode(aggregate)
 			if err != nil {
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
@@ -238,7 +238,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,
 				CreatedAt:        time.Now().UTC(),
-				Metadata:         fromMetadata(r.metadata),
+				Discriminator:    fromDiscriminator(r.discriminator),
 			})
 			if err != nil {
 				return err

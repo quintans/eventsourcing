@@ -89,7 +89,7 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	}()
 
 	match := bson.D{
-		{"operationType", "insert"},
+		{Key: "operationType", Value: "insert"},
 	}
 	var splits uint32
 	splitIDs := []uint32{}
@@ -156,7 +156,7 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 				AggregateKind:    eventDoc.AggregateKind,
 				Kind:             eventDoc.Kind,
 				Body:             eventDoc.Body,
-				Metadata:         toMetadata(eventDoc.Metadata),
+				Discriminator:    toDiscriminator(eventDoc.Discriminator),
 				CreatedAt:        eventDoc.CreatedAt,
 				Migrated:         eventDoc.Migrated,
 			}
@@ -187,11 +187,11 @@ func (f *Feed[K, PK]) feedPartitionFilter(partitions uint32, partitionIDs []uint
 	field := "$fullDocument.aggregate_id_hash"
 	// aggregate: { $expr: {"$eq": [{"$mod" : [$field, m.partitions]}],  m.partitionsLow - 1]} }
 	return bson.E{
-		"$expr",
-		bson.D{
-			{"$in", bson.A{
+		Key: "$expr",
+		Value: bson.D{
+			{Key: "$in", Value: bson.A{
 				bson.D{
-					{"$mod", bson.A{field, partitions}},
+					{Key: "$mod", Value: bson.A{field, partitions}},
 				},
 				parts,
 			}},

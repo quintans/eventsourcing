@@ -72,7 +72,7 @@ func (c GrpcRepository[K, PK]) GetEvents(ctx context.Context, after, until event
 			AggregateKind:    eventsourcing.Kind(v.AggregateKind),
 			Kind:             eventsourcing.Kind(v.Kind),
 			Body:             v.Body,
-			Metadata:         v.Metadata,
+			Discriminator:    v.Discriminators,
 			CreatedAt:        *createdAt,
 		}
 	}
@@ -84,13 +84,13 @@ func filterToPbFilter(filter store.Filter) *pb.Filter {
 	for k, v := range filter.AggregateKinds {
 		types[k] = v.String()
 	}
-	metadata := []*pb.Metadata{}
-	for _, v := range filter.Metadata {
-		metadata = append(metadata, &pb.Metadata{Key: v.Key, Value: v.Values})
+	discriminator := []*pb.Discriminator{}
+	for _, v := range filter.Discriminator {
+		discriminator = append(discriminator, &pb.Discriminator{Key: v.Key, Value: v.Values})
 	}
 	return &pb.Filter{
 		AggregateKinds: types,
-		Metadata:       metadata,
+		Discriminators: discriminator,
 		Splits:         filter.Splits,
 		SplitIds:       filter.SplitIDs,
 	}

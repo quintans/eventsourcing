@@ -62,7 +62,7 @@ func Setup(t *testing.T, dockerComposePath string) DBConfig {
 func dbSchema(cli *mongo.Client) error {
 	cmds := []bson.D{
 		{
-			{"create", "keyvalue"},
+			{Key: "create", Value: "keyvalue"},
 		},
 	}
 

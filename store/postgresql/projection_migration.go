@@ -128,18 +128,18 @@ func (r *EsRepository[K, PK]) processAggregate(
 	aggregateID string,
 	getByID getByIDFunc[K],
 ) error {
-	agg, metadata, err := getByID(c, aggregateID)
+	agg, meta, err := getByID(c, aggregateID)
 	if err != nil {
 		return faults.Wrap(err)
 	}
 
 	return r.WithTx(c, func(c context.Context, tx store.Session) error {
 		// flush the event to the handler
-		err := migrater.Flush(c, metadata, agg)
+		err := migrater.Flush(c, meta, agg)
 		if err != nil {
 			return faults.Wrap(err)
 		}
-		err = r.addNoOp(c, metadata)
+		err = r.addNoOp(c, meta)
 		if err != nil {
 			return faults.Wrap(err)
 		}
@@ -219,17 +219,17 @@ func (r *EsRepository[K, PK]) distinctAggregates(
 	return nil
 }
 
-func (r *EsRepository[K, PK]) addNoOp(ctx context.Context, metadata store.AggregateMetadata[K]) error {
-	ver := metadata.Version + 1
-	aggID := metadata.ID.String()
-	id := eventid.NewAfterTime(metadata.UpdatedAt)
+func (r *EsRepository[K, PK]) addNoOp(ctx context.Context, am store.AggregateMetadata[K]) error {
+	ver := am.Version + 1
+	aggID := am.ID.String()
+	id := eventid.NewAfterTime(am.UpdatedAt)
 	tx := store.TxFromContext(ctx)
 	err := r.saveEvent(ctx, tx, &Event{
 		ID:               id,
 		AggregateID:      aggID,
 		AggregateIDHash:  util.HashToInt(aggID),
 		AggregateVersion: ver,
-		AggregateKind:    metadata.Type,
+		AggregateKind:    am.Type,
 		Kind:             eventsourcing.KindNoOpEvent,
 		CreatedAt:        time.Now(),
 	})

@@ -33,19 +33,19 @@ const (
 
 type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
 
-func WithPublication[K eventsourcing.ID, PK eventsourcing.IDPt[K]](publicationName string) FeedOption[K, PK] {
+func FeedEventsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsTable string) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
-		p.publicationName = publicationName
+		p.publicationName = fmt.Sprintf("%s_pub", eventsTable)
 	}
 }
 
-func WithBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedOption[K, PK] {
+func FeedBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
 		p.backoffMaxElapsedTime = duration
 	}
 }
 
-func WithFilter[K eventsourcing.ID, PK eventsourcing.IDPt[K]](filter *store.Filter) FeedOption[K, PK] {
+func FeedFilter[K eventsourcing.ID, PK eventsourcing.IDPt[K]](filter *store.Filter) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
 		p.filter = filter
 	}
@@ -254,7 +254,7 @@ func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
-		meta, err := extractMetadata(values)
+		disc, err := extractDiscriminator(values)
 		if err != nil {
 			return nil, faults.Wrap(err)
 		}
@@ -276,7 +276,7 @@ func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			AggregateKind:    eventsourcing.Kind(aggregateKind),
 			Kind:             eventsourcing.Kind(kind),
 			Body:             body,
-			Metadata:         meta,
+			Discriminator:    disc,
 			CreatedAt:        createdAt,
 			Migrated:         migrated,
 		}
@@ -305,10 +305,10 @@ func extract(values map[string]pgtype.Value, targets map[string]interface{}) err
 	return nil
 }
 
-func extractMetadata(values map[string]pgtype.Value) (eventsourcing.Metadata, error) {
-	meta := eventsourcing.Metadata{}
+func extractDiscriminator(values map[string]pgtype.Value) (eventsourcing.Discriminator, error) {
+	meta := eventsourcing.Discriminator{}
 	for k, v := range values {
-		if v.Get() == nil || !strings.HasPrefix(k, store.MetaColumnPrefix) {
+		if v.Get() == nil || !strings.HasPrefix(k, store.DiscriminatorColumnPrefix) {
 			continue
 		}
 
@@ -317,7 +317,7 @@ func extractMetadata(values map[string]pgtype.Value) (eventsourcing.Metadata, er
 		if err != nil {
 			return nil, faults.Errorf("failed to assign %s: %w", k, err)
 		}
-		meta[k[len(store.MetaColumnPrefix):]] = s
+		meta[k[len(store.DiscriminatorColumnPrefix):]] = s
 
 	}
 	return meta, nil
@@ -340,8 +340,8 @@ func (f *Feed[K, PK]) accepts(event *eventsourcing.Event[K]) bool {
 		return false
 	}
 
-	for _, v := range f.filter.Metadata {
-		val := event.Metadata[v.Key]
+	for _, v := range f.filter.Discriminator {
+		val := event.Discriminator[v.Key]
 		if val == "" || !slices.Contains(v.Values, val) {
 			return false
 		}

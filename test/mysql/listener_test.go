@@ -74,10 +74,11 @@ func TestListener(t *testing.T) {
 
 			dbConfig := Setup(t)
 
-			repository, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+			repository, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL(), snapOption)
 			require.NoError(t, err)
 
-			es := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), esOptions)
+			es, err := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), esOptions)
+			require.NoError(t, err)
 
 			cfg := mysql.DBConfig{
 				Host:     dbConfig.Host,

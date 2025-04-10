@@ -2,126 +2,87 @@ package mongodb
 
 import (
 	"context"
-	"errors"
 	"slices"
-	"time"
 
-	"github.com/avast/retry-go/v3"
-	"github.com/quintans/eventsourcing"
 	"github.com/quintans/faults"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
-type Schema struct {
-	CollectionNames []string
-}
-
-func WithPostSchemaCreation[K eventsourcing.ID, PK eventsourcing.IDPt[K]](post func(Schema) []bson.D) Option[K, PK] {
-	return func(r *EsRepository[K, PK]) {
-		r.postSchemaCreation = post
-	}
-}
-
 func (r *EsRepository[K, PK]) createSchema(ctx context.Context) error {
-	err := retry.Do(
-		func() error {
-			err := r.client.Ping(ctx, readpref.Primary())
-			if err != nil && errors.Is(err, ctx.Err()) {
-				return retry.Unrecoverable(err)
-			}
-			return faults.Wrapf(err, "pinging")
-		},
-		retry.Attempts(3),
-		retry.Delay(time.Second),
-	)
-	if err != nil {
-		return faults.Wrapf(err, "database did not respond to ping")
-	}
-
 	db := r.client.Database(r.dbName)
-	cNames, err := db.ListCollectionNames(ctx, bson.D{})
+	cNames, err := db.ListCollectionNames(ctx, bson.M{
+		"name": bson.M{"$in": bson.A{r.eventsCollectionName, r.snapshotsCollectionName}},
+	})
 	if err != nil {
 		return faults.Wrapf(err, "getting collections")
-	}
-
-	// Simply search in the names slice, e.g.
-	for _, name := range cNames {
-		if name == r.snapshotsCollectionName {
-			return nil
-		}
 	}
 
 	cmds := []bson.D{}
 	if !slices.Contains(cNames, r.eventsCollectionName) {
 		cmds = append(cmds,
 			bson.D{
-				{"create", r.eventsCollectionName},
+				{Key: "create", Value: r.eventsCollectionName},
 			},
 			bson.D{
-				{"createIndexes", r.eventsCollectionName},
-				{"indexes", []bson.D{
+				{Key: "createIndexes", Value: r.eventsCollectionName},
+				{Key: "indexes", Value: []bson.D{
 					{
-						{"key", bson.D{
-							{"aggregate_id", 1},
-							{"migration", 1},
+						{Key: "key", Value: bson.D{
+							{Key: "aggregate_id", Value: 1},
+							{Key: "migration", Value: 1},
 						}},
-						{"name", "evt_agg_id_migrated_idx"},
-						{"unique", false},
-						{"background", true},
+						{Key: "name", Value: "evt_agg_id_migrated_idx"},
+						{Key: "unique", Value: false},
+						{Key: "background", Value: true},
 					},
 					{
-						{"key", bson.D{
-							{"_id", 1},
-							{"migration", 1},
+						{Key: "key", Value: bson.D{
+							{Key: "_id", Value: 1},
+							{Key: "migration", Value: 1},
 						}},
-						{"name", "evt_migration_idx"},
-						{"unique", false},
-						{"background", true},
+						{Key: "name", Value: "evt_migration_idx"},
+						{Key: "unique", Value: false},
+						{Key: "background", Value: true},
 					},
 					{
-						{"key", bson.D{
-							{"aggregate_kind", 1},
-							{"migration", 1},
+						{Key: "key", Value: bson.D{
+							{Key: "aggregate_kind", Value: 1},
+							{Key: "migration", Value: 1},
 						}},
-						{"name", "evt_type_migrated_idx"},
-						{"unique", false},
-						{"background", true},
+						{Key: "name", Value: "evt_type_migrated_idx"},
+						{Key: "unique", Value: false},
+						{Key: "background", Value: true},
 					},
 					{
-						{"key", bson.D{
-							{"aggregate_id", 1},
-							{"aggregate_version", 1},
+						{Key: "key", Value: bson.D{
+							{Key: "aggregate_id", Value: 1},
+							{Key: "aggregate_version", Value: 1},
 						}},
-						{"name", "unique_aggregate_version"},
-						{"unique", true},
-						{"background", true},
+						{Key: "name", Value: "unique_aggregate_version"},
+						{Key: "unique", Value: true},
+						{Key: "background", Value: true},
 					},
 				}},
 			})
 	}
 
-	if !slices.Contains(cNames, r.snapshotsCollectionName) {
+	if r.snapshotsCollectionName != "" && !slices.Contains(cNames, r.snapshotsCollectionName) {
 		cmds = append(cmds,
 			bson.D{
-				{"create", r.snapshotsCollectionName},
+				{Key: "create", Value: r.snapshotsCollectionName},
 			},
 			bson.D{
-				{"createIndexes", r.snapshotsCollectionName},
-				{"indexes", []bson.D{
+				{Key: "createIndexes", Value: r.snapshotsCollectionName},
+				{Key: "indexes", Value: []bson.D{
 					{
-						{"key", bson.D{
-							{"aggregate_id", 1},
+						{Key: "key", Value: bson.D{
+							{Key: "aggregate_id", Value: 1},
 						}},
-						{"name", "idx_aggregate"},
-						{"background", true},
+						{Key: "name", Value: "idx_aggregate"},
+						{Key: "background", Value: true},
 					},
 				}},
 			})
-	}
-
-	if r.postSchemaCreation != nil {
-		cmds = append(cmds, r.postSchemaCreation(Schema{CollectionNames: cNames})...)
 	}
 
 	for _, c := range cmds {
@@ -130,6 +91,5 @@ func (r *EsRepository[K, PK]) createSchema(ctx context.Context) error {
 			return faults.Wrapf(err, "running command %+v", c)
 		}
 	}
-
 	return nil
 }

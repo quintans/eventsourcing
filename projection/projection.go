@@ -335,7 +335,7 @@ func catching[K eventsourcing.ID](
 	logger.Info("Replaying all events from the event store", "from", after, "until", until, "time", until.Time())
 	option := store.WithFilter(store.Filter{
 		AggregateKinds: options.AggregateKinds,
-		Metadata:       options.Metadata,
+		Discriminator:  options.Discriminator,
 		Splits:         partitions,
 		SplitIDs:       []uint32{partition - 1},
 	})

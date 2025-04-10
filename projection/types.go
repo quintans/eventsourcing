@@ -96,7 +96,7 @@ type Event[K eventsourcing.ID] struct {
 	AggregateKind    eventsourcing.Kind
 	Kind             eventsourcing.Kind
 	Body             encoding.Base64
-	Metadata         eventsourcing.Metadata
+	Discriminator    eventsourcing.Discriminator
 	CreatedAt        time.Time
 }
 
@@ -108,7 +108,7 @@ func FromEvent[K eventsourcing.ID](e *eventsourcing.Event[K]) *Event[K] {
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		Metadata:         e.Metadata,
+		Discriminator:    e.Discriminator,
 		CreatedAt:        e.CreatedAt,
 	}
 }
@@ -121,7 +121,7 @@ func FromMessage[K eventsourcing.ID](m *sink.Message[K]) *Event[K] {
 		AggregateKind:    m.AggregateKind,
 		Kind:             m.Kind,
 		Body:             m.Body,
-		Metadata:         m.Metadata,
+		Discriminator:    m.Discriminator,
 		CreatedAt:        m.CreatedAt,
 	}
 }
@@ -194,7 +194,7 @@ type CatchUpOptions struct {
 	UpdateResumeInterval time.Duration
 
 	AggregateKinds []eventsourcing.Kind
-	// Metadata filters on top of metadata. Every key of the map is ANDed with every OR of the values
+	// Discriminator filters on top of discriminator. Every key of the map is ANDed with every OR of the values
 	// eg: [{"geo": "EU"}, {"geo": "USA"}, {"membership": "prime"}] equals to:  geo IN ("EU", "USA") AND membership = "prime"
-	Metadata store.MetadataFilter
+	Discriminator store.DiscriminatorFilter
 }

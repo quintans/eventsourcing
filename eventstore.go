@@ -5,6 +5,7 @@ import (
 	goenc "encoding"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/quintans/eventsourcing/encoding"
@@ -65,7 +66,7 @@ type Event[K ID] struct {
 	AggregateKind    Kind
 	Kind             Kind
 	Body             encoding.Base64
-	Metadata         Metadata
+	Discriminator    Discriminator
 	CreatedAt        time.Time
 	Migrated         bool
 }
@@ -81,12 +82,13 @@ type Snapshot[K ID] struct {
 	AggregateKind    Kind
 	Body             []byte
 	CreatedAt        time.Time
-	Metadata         Metadata
+	Discriminator    Discriminator
 }
 
 type EsRepository[K ID] interface {
 	SaveEvent(ctx context.Context, eRec *EventRecord[K]) (id eventid.EventID, version uint32, err error)
 	GetSnapshot(ctx context.Context, aggregateID K) (Snapshot[K], error)
+	IsSnapshotEnabled() bool
 	SaveSnapshot(ctx context.Context, snapshot *Snapshot[K]) error
 	GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*Event[K], error)
 	Forget(ctx context.Context, request ForgetRequest[K], forget func(kind Kind, body []byte) ([]byte, error)) error
@@ -105,16 +107,16 @@ type EsRepository[K ID] interface {
 
 // Event is the event data stored in the database
 type EventMigration struct {
-	Kind     Kind
-	Body     []byte
-	Metadata Metadata
+	Kind          Kind
+	Body          []byte
+	Discriminator Discriminator
 }
 
 func DefaultEventMigration[K ID](e *Event[K]) *EventMigration {
 	return &EventMigration{
-		Kind:     e.Kind,
-		Body:     e.Body,
-		Metadata: e.Metadata,
+		Kind:          e.Kind,
+		Body:          e.Body,
+		Discriminator: e.Discriminator,
 	}
 }
 
@@ -146,7 +148,31 @@ type EventRecordDetail struct {
 	Body []byte
 }
 
-type Metadata map[string]string
+type Discriminator map[string]string
+
+type discriminatorKey struct{}
+
+func DiscriminatorFromCtx(ctx context.Context) Discriminator {
+	disc, ok := ctx.Value(discriminatorKey{}).(Discriminator)
+	if !ok {
+		return Discriminator{}
+	}
+	return disc
+}
+
+func SetCtxDiscriminator(ctx context.Context, disc Discriminator) context.Context {
+	return context.WithValue(ctx, discriminatorKey{}, maps.Clone(disc))
+}
+
+func MergeCtxDiscriminator(ctx context.Context, disc Discriminator) context.Context {
+	m := DiscriminatorFromCtx(ctx)
+
+	for k, v := range disc {
+		m[k] = v
+	}
+
+	return context.WithValue(ctx, discriminatorKey{}, m)
+}
 
 type EventStorer[T Aggregater[K], K ID] interface {
 	Create(ctx context.Context, aggregate T) error
@@ -157,7 +183,15 @@ type EventStorer[T Aggregater[K], K ID] interface {
 }
 
 type EsOptions struct {
-	SnapshotThreshold uint32
+	snapshotThreshold uint32
+}
+
+type EsOption func(*EsOptions)
+
+func EsSnapshotThreshold(threshold uint32) EsOption {
+	return func(opts *EsOptions) {
+		opts.snapshotThreshold = threshold
+	}
 }
 
 // EventStore represents the event store
@@ -168,22 +202,26 @@ type EventStore[T Aggregater[K], K ID, PK IDPt[K]] struct {
 }
 
 // NewEventStore creates a new instance of ESPostgreSQL
-func NewEventStore[T Aggregater[K], K ID, PK IDPt[K]](repo EsRepository[K], codec Codec[K], options *EsOptions) EventStore[T, K, PK] {
+func NewEventStore[T Aggregater[K], K ID, PK IDPt[K]](repo EsRepository[K], codec Codec[K], options ...EsOption) (EventStore[T, K, PK], error) {
 	es := EventStore[T, K, PK]{
-		store:             repo,
-		snapshotThreshold: 100,
-		codec:             codec,
+		store: repo,
+		codec: codec,
 	}
 
-	if options == nil {
-		return es
+	opt := &EsOptions{
+		snapshotThreshold: 0,
+	}
+	for _, f := range options {
+		f(opt)
 	}
 
-	if options.SnapshotThreshold != 0 {
-		es.snapshotThreshold = options.SnapshotThreshold
+	if opt.snapshotThreshold != 0 && !repo.IsSnapshotEnabled() {
+		return EventStore[T, K, PK]{}, faults.Errorf("snapshots are not enabled in the repository")
 	}
 
-	return es
+	es.snapshotThreshold = opt.snapshotThreshold
+
+	return es, nil
 }
 
 // Update loads the aggregate from the event store and handles it to the handler function, saving the returning Aggregater in the event store.
@@ -340,7 +378,7 @@ func (es EventStore[T, K, PK]) save(
 		return err
 	}
 
-	if (eventsCounter + uint32(eventsLen)) >= es.snapshotThreshold {
+	if es.store.IsSnapshotEnabled() && es.snapshotThreshold > 0 && (eventsCounter+uint32(eventsLen)) >= es.snapshotThreshold {
 		body, err := es.codec.Encode(aggregate)
 		if err != nil {
 			return faults.Errorf("Failed to create serialize snapshot: %w", err)

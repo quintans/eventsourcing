@@ -29,7 +29,7 @@ and
 * Event store database
 * Snapshots
 * Forget (GDPR)
-* Metadata associated to an event store (extra fields/columns)
+* Discriminator associated to an event store (extra fields/columns)
 * Reactive streaming from the database into an Event BUS
 * Polling from the database with the Outbox table into an Event BUS
 * Transaction hooks
@@ -557,10 +557,10 @@ When this happens we need to create more forwarding processes/services and sprea
 
 > To be honest, if we use a Forwarder service per write service I don't see how this would ever be a bottleneck, but again, we never know.
 
-#### Metadata
+#### Discriminators
 
-Spreading by filtering by metadata.
-What this metadata can be and how it is stored will depend in your business case.
+Spreading by filtering by discriminator.
+What this Discriminator can be, depend in your business case.
 A good example is to have a Forwarder service per set of aggregates types of per aggregate type.
 As an implementation example, for a very broad spectrum of problem, events can be stored with generic labels, that in turn can be used to filter the events. Each Forwarder service would then be sending events into its own event bus topic.
 

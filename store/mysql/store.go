@@ -3,11 +3,13 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/avast/retry-go/v3"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/oklog/ulid/v2"
@@ -26,7 +28,6 @@ const (
 )
 
 const (
-	defSnapTable = "snapshots"
 	coreSnapCols = "id, aggregate_id, aggregate_version, aggregate_kind, body, created_at"
 	coreSnapVars = "?, ?, ?, ?, ?, ?"
 
@@ -47,7 +48,7 @@ type Event struct {
 	CreatedAt        time.Time
 	Migration        int
 	Migrated         bool
-	Metadata         eventsourcing.Metadata
+	Discriminator    eventsourcing.Discriminator
 }
 
 type Snapshot struct {
@@ -57,7 +58,7 @@ type Snapshot struct {
 	AggregateKind    eventsourcing.Kind
 	Body             []byte
 	CreatedAt        time.Time
-	Metadata         eventsourcing.Metadata
+	Discriminator    eventsourcing.Discriminator
 }
 
 var (
@@ -73,22 +74,30 @@ func WithTxHandler[K eventsourcing.ID, PK eventsourcing.IDPt[K]](txHandler store
 	}
 }
 
-// WithMetadata defines the metadata to be save on every event. Data keys will be converted to lower case
-func WithMetadata[K eventsourcing.ID, PK eventsourcing.IDPt[K]](metadata eventsourcing.Metadata) Option[K, PK] {
+func WithDiscriminatorKeys[K eventsourcing.ID, PK eventsourcing.IDPt[K]](keys ...string) Option[K, PK] {
 	return func(r *EsRepository[K, PK]) {
-		m := eventsourcing.Metadata{}
-		for k, v := range metadata {
-			m[strings.ToLower(k)] = v
+		for _, v := range keys {
+			r.allowedKeys[v] = struct{}{}
 		}
-		r.metadata = m
 	}
 }
 
-// WithMetadataHook defines the hook that will return the metadata.
-// This metadata will override any metadata defined at the repository level
-func WithMetadataHook[K eventsourcing.ID, PK eventsourcing.IDPt[K]](fn store.MetadataHook[K]) Option[K, PK] {
+// WithDiscriminator defines the discriminator to be save on every event. Data keys will be converted to lower case
+func WithDiscriminator[K eventsourcing.ID, PK eventsourcing.IDPt[K]](discriminator eventsourcing.Discriminator) Option[K, PK] {
 	return func(r *EsRepository[K, PK]) {
-		r.metadataHook = fn
+		m := eventsourcing.Discriminator{}
+		for k, v := range discriminator {
+			m[strings.ToLower(k)] = v
+		}
+		r.discriminator = m
+	}
+}
+
+// WithDiscriminatorHook defines the hook that will return the discriminator.
+// This discriminator will override any discriminator defined at the repository level
+func WithDiscriminatorHook[K eventsourcing.ID, PK eventsourcing.IDPt[K]](fn store.DiscriminatorHook[K]) Option[K, PK] {
+	return func(r *EsRepository[K, PK]) {
+		r.discriminatorHook = fn
 	}
 }
 
@@ -106,11 +115,27 @@ func WithSnapshotsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](table stri
 
 type EsRepository[K eventsourcing.ID, PK eventsourcing.IDPt[K]] struct {
 	store.Repository
-	eventsTable    string
-	snapshotsTable string
-	txHandlers     []store.InTxHandler[K]
-	metadata       eventsourcing.Metadata
-	metadataHook   store.MetadataHook[K]
+	eventsTable       string
+	snapshotsTable    string
+	txHandlers        []store.InTxHandler[K]
+	discriminator     eventsourcing.Discriminator
+	discriminatorHook store.DiscriminatorHook[K]
+	allowedKeys       map[string]struct{}
+}
+
+func TryPing(ctx context.Context, db *sql.DB) error {
+	err := retry.Do(
+		func() error {
+			err := db.Ping()
+			if err != nil && errors.Is(err, ctx.Err()) {
+				return retry.Unrecoverable(err)
+			}
+			return faults.Wrapf(err, "pinging")
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+	)
+	return faults.Wrapf(err, "database did not respond to ping")
 }
 
 func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString string, options ...Option[K, PK]) (*EsRepository[K, PK], error) {
@@ -119,22 +144,36 @@ func NewStoreWithURL[K eventsourcing.ID, PK eventsourcing.IDPt[K]](connString st
 		return nil, faults.Wrap(err)
 	}
 
-	return NewStore[K](db, options...), nil
+	err = TryPing(context.Background(), db)
+	if err != nil {
+		return nil, faults.Wrap(err)
+	}
+
+	return NewStore[K](db, options...)
 }
 
-func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](db *sql.DB, options ...Option[K, PK]) *EsRepository[K, PK] {
+func NewStore[K eventsourcing.ID, PK eventsourcing.IDPt[K]](db *sql.DB, options ...Option[K, PK]) (*EsRepository[K, PK], error) {
 	dbx := sqlx.NewDb(db, driverName)
 	r := &EsRepository[K, PK]{
-		Repository:     store.NewRepository(dbx),
-		eventsTable:    defEventsTable,
-		snapshotsTable: defSnapTable,
+		Repository:  store.NewRepository(dbx),
+		eventsTable: defEventsTable,
+		allowedKeys: make(map[string]struct{}),
 	}
 
 	for _, opt := range options {
 		opt(r)
 	}
 
-	return r
+	if len(r.allowedKeys) == 0 {
+		r.discriminatorHook = nil
+	}
+
+	err := r.createSchema(dbx)
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
 }
 
 func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing.EventRecord[K]) (eventid.EventID, uint32, error) {
@@ -146,7 +185,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 			aggIDStr := eRec.AggregateID.String()
 			var err error
 			id = e.ID
-			metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
+			disc := r.discriminatorMerge(ctx, store.OnPersist)
 			err = r.saveEvent(c, tx, &Event{
 				ID:               id,
 				AggregateID:      aggIDStr,
@@ -156,7 +195,7 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 				Kind:             e.Kind,
 				Body:             e.Body,
 				CreatedAt:        eRec.CreatedAt,
-				Metadata:         metadata,
+				Discriminator:    disc,
 			})
 			if err != nil {
 				return faults.Wrap(err)
@@ -172,12 +211,14 @@ func (r *EsRepository[K, PK]) SaveEvent(ctx context.Context, eRec *eventsourcing
 	return id, version, nil
 }
 
-func (r *EsRepository[K, PK]) metadataMerge(ctx context.Context, metadata eventsourcing.Metadata, kind store.MetadataHookKind) eventsourcing.Metadata {
-	if r.metadataHook == nil {
-		return metadata
-	}
-	meta := r.metadataHook(store.NewMetadataHookContext(ctx, kind))
-	return util.MapMerge(metadata, meta)
+func (r *EsRepository[K, PK]) discriminatorMerge(ctx context.Context, kind store.DiscriminatorHookKind) eventsourcing.Discriminator {
+	return store.DiscriminatorMerge(
+		ctx,
+		r.allowedKeys,
+		r.discriminator,
+		r.discriminatorHook,
+		kind,
+	)
 }
 
 func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx store.Session, event *Event) error {
@@ -196,8 +237,8 @@ func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx store.Session, e
 	}
 
 	vars := []string{coreEventVars}
-	for k, v := range event.Metadata {
-		columns = append(columns, store.MetaColumnPrefix+k)
+	for k, v := range event.Discriminator {
+		columns = append(columns, store.DiscriminatorColumnPrefix+k)
 		vars = append(vars, "?")
 		values = append(values, v)
 	}
@@ -209,7 +250,7 @@ func (r *EsRepository[K, PK]) saveEvent(ctx context.Context, tx store.Session, e
 		if isDup(err) {
 			return faults.Wrap(eventsourcing.ErrConcurrentModification)
 		}
-		return faults.Errorf("unable to insert event, query: %s, args: %+v: %w", query, values, err)
+		return faults.Errorf("unable to insert event (SQL=%s), (args=%+v): %w", query, values, err)
 	}
 
 	return r.applyTxHandlers(ctx, event)
@@ -240,17 +281,21 @@ func isDup(err error) bool {
 }
 
 func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (eventsourcing.Snapshot[K], error) {
+	if r.snapshotsTable == "" {
+		return eventsourcing.Snapshot[K]{}, nil
+	}
+
 	query := strings.Builder{}
 	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ?", r.snapshotsTable))
 	args := []any{aggregateID.String()}
 
-	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
-	for k, v := range metadata {
+	disc := r.discriminatorMerge(ctx, store.OnRetrieve)
+	for k, v := range disc {
 		args = append(args, v)
-		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
+		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.DiscriminatorColumnPrefix, k))
 	}
 	query.WriteString(" ORDER BY id DESC LIMIT 1")
-	snaps, err := r.getSnapshots(ctx, metadata, query.String(), args...)
+	snaps, err := r.getSnapshots(ctx, disc, query.String(), args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return eventsourcing.Snapshot[K]{}, nil
@@ -264,10 +309,10 @@ func (r *EsRepository[K, PK]) GetSnapshot(ctx context.Context, aggregateID K) (e
 	return snaps[0], nil
 }
 
-func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, metadata eventsourcing.Metadata, query string, args ...any) ([]eventsourcing.Snapshot[K], error) {
+func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, discriminator eventsourcing.Discriminator, query string, args ...any) ([]eventsourcing.Snapshot[K], error) {
 	columns := []string{coreSnapCols}
-	for k := range metadata {
-		columns = append(columns, store.MetaColumnPrefix+k)
+	for k := range discriminator {
+		columns = append(columns, store.DiscriminatorColumnPrefix+k)
 	}
 	query = strings.Replace(query, "SELECT *", fmt.Sprintf("SELECT %s", strings.Join(columns, ", ")), 1)
 
@@ -276,7 +321,7 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, metadata eventso
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
-		return nil, faults.Errorf("querying snapshots with %s, args=%+v: %w", query, args, err)
+		return nil, faults.Errorf("querying snapshots (SQL=%s) (args=%+v): %w", query, args, err)
 	}
 	snaps := []eventsourcing.Snapshot[K]{}
 	for rows.Next() {
@@ -289,10 +334,10 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, metadata eventso
 			&snap.Body,
 			&snap.CreatedAt,
 		}
-		meta := []*store.Metadata{}
-		for k := range metadata {
-			m := &store.Metadata{Key: k}
-			meta = append(meta, m)
+		disc := []*store.Discriminator{}
+		for k := range discriminator {
+			m := &store.Discriminator{Key: k}
+			disc = append(disc, m)
 			dest = append(dest, &m.Value)
 		}
 
@@ -301,12 +346,12 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, metadata eventso
 			return nil, faults.Wrap(err)
 		}
 
-		m := eventsourcing.Metadata{}
-		for _, v := range meta {
+		m := eventsourcing.Discriminator{}
+		for _, v := range disc {
 			m[v.Key] = v.Key
 		}
 
-		snap.Metadata = m
+		snap.Discriminator = m
 
 		snaps = append(snaps, snap)
 	}
@@ -314,8 +359,12 @@ func (r *EsRepository[K, PK]) getSnapshots(ctx context.Context, metadata eventso
 	return snaps, nil
 }
 
+func (r *EsRepository[K, PK]) IsSnapshotEnabled() bool {
+	return r.snapshotsTable != ""
+}
+
 func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *eventsourcing.Snapshot[K]) error {
-	metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
+	disc := r.discriminatorMerge(ctx, store.OnPersist)
 	return r.saveSnapshot(ctx, r.Session(ctx), &Snapshot{
 		ID:               snapshot.ID,
 		AggregateID:      snapshot.AggregateID.String(),
@@ -323,7 +372,7 @@ func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *events
 		AggregateKind:    snapshot.AggregateKind,
 		Body:             snapshot.Body,
 		CreatedAt:        snapshot.CreatedAt.UTC(),
-		Metadata:         metadata,
+		Discriminator:    disc,
 	})
 }
 
@@ -332,6 +381,10 @@ type sqlExecuter interface {
 }
 
 func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
+	if r.snapshotsTable == "" {
+		return faults.New("snapshot table is undefined")
+	}
+
 	values := []any{
 		s.ID,
 		s.AggregateID,
@@ -342,8 +395,8 @@ func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, x sqlExecuter, s
 	}
 	columns := []string{coreSnapCols}
 	vars := []string{coreSnapVars}
-	for k, v := range s.Metadata {
-		columns = append(columns, store.MetaColumnPrefix+k)
+	for k, v := range s.Discriminator {
+		columns = append(columns, store.DiscriminatorColumnPrefix+k)
 		vars = append(vars, "?")
 		values = append(values, v)
 	}
@@ -364,14 +417,14 @@ func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateI
 		args = append(args, snapVersion)
 	}
 
-	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
-	for k, v := range metadata {
+	disc := r.discriminatorMerge(ctx, store.OnRetrieve)
+	for k, v := range disc {
 		args = append(args, v)
-		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
+		query.WriteString(fmt.Sprintf(" AND %s%s = ?", store.DiscriminatorColumnPrefix, k))
 	}
 	query.WriteString(" ORDER BY aggregate_version ASC")
 
-	events, err := r.queryEvents(ctx, metadata, query.String(), args...)
+	events, err := r.queryEvents(ctx, disc, query.String(), args...)
 	if err != nil {
 		return nil, faults.Errorf("Unable to get events for Aggregate '%s': %w", aggregateID, err)
 	}
@@ -430,15 +483,15 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	var query strings.Builder
 	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE id > ? AND id <= ? AND migration = 0", r.eventsTable))
 	args := []interface{}{after.String(), until.String()}
-	metadata := r.metadataMerge(ctx, r.metadata, store.OnRetrieve)
-	args = buildFilter(&query, " AND ", metadata, filter, args)
+	disc := r.discriminatorMerge(ctx, store.OnRetrieve)
+	args = buildFilter(&query, " AND ", disc, filter, args)
 	query.WriteString(" ORDER BY id ASC")
 	if batchSize > 0 {
 		query.WriteString(" LIMIT ")
 		query.WriteString(strconv.Itoa(batchSize))
 	}
 
-	rows, err := r.queryEvents(ctx, metadata, query.String(), args...)
+	rows, err := r.queryEvents(ctx, disc, query.String(), args...)
 	if err != nil {
 		return nil, faults.Errorf("getting events between ('%d', '%s'] for filter %+v: %w", after, until, filter, err)
 	}
@@ -449,7 +502,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(qry *strings.Builder, prefix string, metadata eventsourcing.Metadata, filter store.Filter, args []interface{}) []interface{} {
+func buildFilter(qry *strings.Builder, prefix string, disc eventsourcing.Discriminator, filter store.Filter, args []interface{}) []interface{} {
 	var conditions []string
 	if len(filter.AggregateKinds) > 0 {
 		var query strings.Builder
@@ -478,16 +531,16 @@ func buildFilter(qry *strings.Builder, prefix string, metadata eventsourcing.Met
 		conditions = append(conditions, fmt.Sprintf("MOD(aggregate_id_hash, ?) IN (%s)", s.String()))
 	}
 
-	for k, v := range metadata {
+	for k, v := range disc {
 		args = append(args, v)
-		qry.WriteString(fmt.Sprintf(" AND %s%s = ?", store.MetaColumnPrefix, k))
+		qry.WriteString(fmt.Sprintf(" AND %s%s = ?", store.DiscriminatorColumnPrefix, k))
 	}
 
-	if len(filter.Metadata) > 0 {
-		for _, kv := range filter.Metadata {
-			// ignore if already set by the metadata
-			if metadata != nil {
-				_, ok := metadata[kv.Key]
+	if len(filter.Discriminator) > 0 {
+		for _, kv := range filter.Discriminator {
+			// ignore if already set by the discriminator
+			if disc != nil {
+				_, ok := disc[kv.Key]
 				if ok {
 					continue
 				}
@@ -499,7 +552,7 @@ func buildFilter(qry *strings.Builder, prefix string, metadata eventsourcing.Met
 				if idx > 0 {
 					query.WriteString(" OR ")
 				}
-				query.WriteString(fmt.Sprintf("%s%s = ?", store.MetaColumnPrefix, kv.Key))
+				query.WriteString(fmt.Sprintf("%s%s = ?", store.DiscriminatorColumnPrefix, kv.Key))
 				args = append(args, v)
 				query.WriteString(")")
 			}
@@ -515,10 +568,10 @@ func buildFilter(qry *strings.Builder, prefix string, metadata eventsourcing.Met
 	return args
 }
 
-func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, metadata eventsourcing.Metadata, query string, args ...any) ([]*eventsourcing.Event[K], error) {
+func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, discriminator eventsourcing.Discriminator, query string, args ...any) ([]*eventsourcing.Event[K], error) {
 	columns := []string{coreEventCols}
-	for k := range metadata {
-		columns = append(columns, store.MetaColumnPrefix+k)
+	for k := range discriminator {
+		columns = append(columns, store.DiscriminatorColumnPrefix+k)
 	}
 	query = strings.Replace(query, "SELECT *", fmt.Sprintf("SELECT %s", strings.Join(columns, ", ")), 1)
 
@@ -545,10 +598,10 @@ func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, metadata eventsou
 			&event.Migrated,
 		}
 
-		meta := []*store.Metadata{}
-		for k := range metadata {
-			m := &store.Metadata{Key: k}
-			meta = append(meta, m)
+		disc := []*store.Discriminator{}
+		for k := range discriminator {
+			m := &store.Discriminator{Key: k}
+			disc = append(disc, m)
 			dest = append(dest, &m.Value)
 		}
 
@@ -557,12 +610,12 @@ func (r *EsRepository[K, PK]) queryEvents(ctx context.Context, metadata eventsou
 			return nil, faults.Errorf("unable to scan to struct: %w", err)
 		}
 
-		m := eventsourcing.Metadata{}
-		for _, v := range meta {
+		m := eventsourcing.Discriminator{}
+		for _, v := range disc {
 			m[v.Key] = v.Value
 		}
 
-		event.Metadata = m
+		event.Discriminator = m
 		evt, err := toEventSourcingEvent[K, PK](&event)
 		if err != nil {
 			return nil, err
@@ -588,7 +641,7 @@ func toEventSourcingEvent[K eventsourcing.ID, PK eventsourcing.IDPt[K]](e *Event
 		AggregateKind:    e.AggregateKind,
 		Kind:             e.Kind,
 		Body:             e.Body,
-		Metadata:         e.Metadata,
+		Discriminator:    e.Discriminator,
 		CreatedAt:        e.CreatedAt,
 		Migrated:         e.Migrated,
 	}, nil
@@ -602,4 +655,100 @@ func (r *EsRepository[K, PK]) GetEventsByRawIDs(ctx context.Context, ids []strin
 	qry = r.Session(ctx).Rebind(qry) // sqlx.In returns queries with the `?` bindvar, we can rebind it for our backend
 
 	return r.queryEvents(ctx, nil, qry, args...)
+}
+
+func (r *EsRepository[K, PK]) createSchema(dbx *sqlx.DB) error {
+	sqls := []string{}
+	var count int
+
+	err := dbx.Get(&count, "SELECT count(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name=?", r.eventsTable)
+	if err != nil {
+		return faults.Wrap(err)
+	}
+
+	if count == 0 {
+		sqls = append(sqls,
+			fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s(
+			id VARCHAR (50) PRIMARY KEY,
+			aggregate_id VARCHAR (50) NOT NULL,
+			aggregate_id_hash INTEGER NOT NULL,
+			aggregate_version INTEGER NOT NULL,
+			aggregate_kind VARCHAR (50) NOT NULL,
+			kind VARCHAR (50) NOT NULL,
+			body VARBINARY(60000),
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			migration INTEGER NOT NULL DEFAULT 0,
+			migrated BOOLEAN NOT NULL DEFAULT false
+		)ENGINE=innodb;`, r.eventsTable),
+			fmt.Sprintf(`CREATE INDEX evt_agg_id_migrated_idx ON %s (aggregate_id, migration);`, r.eventsTable),
+			fmt.Sprintf(`CREATE INDEX evt_id_migrated_idx ON %s (id, migration);`, r.eventsTable),
+			fmt.Sprintf(`CREATE INDEX evt_type_migrated_idx ON %s (aggregate_kind, migration);`, r.eventsTable),
+			fmt.Sprintf(`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON %s (aggregate_id, aggregate_version);`, r.eventsTable),
+		)
+	}
+
+	// check to see if there are new discriminator columns
+	for k := range r.allowedKeys {
+		count = 0
+		err := dbx.Get(&count, "SELECT count(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name=? AND column_name=?", r.eventsTable, k)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+
+		if count == 0 {
+			sqls = append(sqls,
+				fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s%s VARCHAR (255) NULL`, r.eventsTable, store.DiscriminatorColumnPrefix, k),
+				fmt.Sprintf(`CREATE INDEX %s%s_idx ON %s (%s%s)`, store.DiscriminatorColumnPrefix, k, r.eventsTable, store.DiscriminatorColumnPrefix, k),
+			)
+		}
+	}
+
+	if r.snapshotsTable != "" {
+		count = 0
+		err := dbx.Get(&count, "SELECT count(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name=?", r.snapshotsTable)
+		if err != nil {
+			return faults.Wrap(err)
+		}
+
+		if count == 0 {
+			sqls = append(sqls,
+				fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s(
+					id VARCHAR (50) PRIMARY KEY,
+					aggregate_id VARCHAR (50) NOT NULL,
+					aggregate_version INTEGER NOT NULL,
+					aggregate_kind VARCHAR (50) NOT NULL,
+					body VARBINARY(60000) NOT NULL,
+					created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					FOREIGN KEY (id) REFERENCES %s (id)
+		)ENGINE=innodb`, r.snapshotsTable, r.eventsTable),
+				fmt.Sprintf(`CREATE INDEX snap_agg_id_idx ON %s (aggregate_id)`, r.snapshotsTable),
+			)
+		}
+
+		// check to see if there are new discriminator columns
+		for k := range r.allowedKeys {
+			count = 0
+			err := dbx.Get(&count, "SELECT count(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name=? AND column_name=?", r.eventsTable, k)
+			if err != nil {
+				return faults.Wrap(err)
+			}
+
+			if count == 0 {
+				sqls = append(sqls,
+					fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s%s VARCHAR (255) NULL`, r.snapshotsTable, store.DiscriminatorColumnPrefix, k),
+				)
+			}
+		}
+	}
+
+	return r.WithTx(context.Background(), func(ctx context.Context, s store.Session) error {
+		for _, sql := range sqls {
+			_, err := s.ExecContext(ctx, sql)
+			if err != nil {
+				return faults.Errorf("failed to execute %s: %w", sql, err)
+			}
+		}
+
+		return nil
+	})
 }

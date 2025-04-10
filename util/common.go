@@ -25,6 +25,7 @@ func NormalizeKafkaPartitions(p []int32) []int32 {
 	return out
 }
 
+// MapMerge merges all entries into one map.
 func MapMerge[K comparable, V any](ms ...map[K]V) map[K]V {
 	out := map[K]V{}
 	for _, m := range ms {

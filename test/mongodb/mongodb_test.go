@@ -19,7 +19,6 @@ import (
 
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/sink/poller"
-	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/store/mongodb"
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/util/ids"
@@ -27,9 +26,7 @@ import (
 
 var (
 	logger    = slog.New(slog.NewTextHandler(os.Stdout, nil))
-	esOptions = &eventsourcing.EsOptions{
-		SnapshotThreshold: 3,
-	}
+	esOptions = eventsourcing.EsSnapshotThreshold(3)
 )
 
 const (
@@ -60,7 +57,8 @@ func TestSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := es.Retrieve(ctx, ids.New())
 	require.ErrorIs(t, err, eventsourcing.ErrUnknownAggregateID)
@@ -164,13 +162,15 @@ func TestPollListener(t *testing.T) {
 		dbConfig.URL(),
 		dbConfig.Database,
 		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
-		mongodb.WithPostSchemaCreation[ids.AggID](func(_ mongodb.Schema) []bson.D {
-			return []bson.D{{{"create", "outbox"}}}
-		}),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+
+	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
@@ -188,7 +188,6 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -230,13 +229,15 @@ func TestListenerWithAggregateKind(t *testing.T) {
 		dbConfig.URL(),
 		dbConfig.Database,
 		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
-		mongodb.WithPostSchemaCreation[ids.AggID](func(_ mongodb.Schema) []bson.D {
-			return []bson.D{{{"create", "outbox"}}}
-		}),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+
+	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
@@ -254,7 +255,6 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
 	p := poller.New(logger, obs, poller.WithAggregateKinds[ids.AggID](AggregateAccount))
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -287,7 +287,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func TestListenerWithMetadata(t *testing.T) {
+func TestListenerWithDiscriminator(t *testing.T) {
 	dbConfig := Setup(t, "./docker-compose.yaml")
 
 	key := "tenant"
@@ -296,27 +296,25 @@ func TestListenerWithMetadata(t *testing.T) {
 		dbConfig.URL(),
 		dbConfig.Database,
 		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
-		mongodb.WithPostSchemaCreation[ids.AggID](func(_ mongodb.Schema) []bson.D {
-			return []bson.D{{{"create", "outbox"}}}
-		}),
-		mongodb.WithMetadataHook[ids.AggID](func(c *store.MetadataHookContext) eventsourcing.Metadata {
-			ctx := c.Context()
-			val := ctx.Value(key).(string)
-			return eventsourcing.Metadata{key: val}
-		}),
+		mongodb.WithDiscriminatorKeys[ids.AggID](key),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 
-	ctx := context.WithValue(context.Background(), key, "abc")
+	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
+
+	ctx := eventsourcing.SetCtxDiscriminator(context.Background(), eventsourcing.Discriminator{key: "abc"})
 
 	acc, _ := test.NewAccount("Paulo", 50)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 
-	ctx = context.WithValue(context.Background(), key, "xyz")
+	ctx = eventsourcing.SetCtxDiscriminator(context.Background(), eventsourcing.Discriminator{key: "xyz"})
 
 	acc1, err := test.NewAccount("Paulo", 100)
 	id := acc1.GetID()
@@ -339,8 +337,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
 
-	obs := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
-	p := poller.New(logger, obs, poller.WithMetadataKV[ids.AggID]("tenant", "xyz"))
+	p := poller.New(logger, obs, poller.WithDiscriminatorKV[ids.AggID](key, "xyz"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
@@ -379,7 +376,8 @@ func TestForget(t *testing.T) {
 	r, err := mongodb.NewStoreWithURI[ids.AggID](ctx, dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
@@ -521,7 +519,8 @@ func TestMigration(t *testing.T) {
 	r, err := mongodb.NewStoreWithURI[ids.AggID](ctx, dbConfig.URL(), dbConfig.Database)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
-	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es1, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo Pereira", 100)
 	id := acc.GetID()
@@ -537,7 +536,9 @@ func TestMigration(t *testing.T) {
 
 	// switching the aggregator factory
 	codec := test.NewJSONCodecWithUpcaster()
-	es2 := eventsourcing.NewEventStore[*test.AccountV2](r, codec, esOptions)
+	es2, err := eventsourcing.NewEventStore[*test.AccountV2](r, codec, esOptions)
+	require.NoError(t, err)
+
 	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,

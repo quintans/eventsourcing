@@ -7,12 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/avast/retry-go/v3"
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-	"github.com/quintans/faults"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
@@ -77,89 +75,7 @@ func setup(t *testing.T) DBConfig {
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()
 
-	err = retry.Do(
-		func() error {
-			return dbSchema(dbConfig)
-		},
-		retry.Attempts(3),
-		retry.Delay(time.Second),
-	)
-	require.NoError(t, err)
-
 	return dbConfig
-}
-
-func dbSchema(dbConfig DBConfig) error {
-	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", dbConfig.Username, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.Database)
-	db, err := sqlx.Connect("postgres", dbURL)
-	if err != nil {
-		return faults.Wrap(err)
-	}
-	defer db.Close()
-
-	db.MustExec(`
-	CREATE TABLE IF NOT EXISTS events(
-		id VARCHAR (50) PRIMARY KEY,
-		aggregate_id VARCHAR (50) NOT NULL,
-		aggregate_id_hash INTEGER NOT NULL,
-		aggregate_version INTEGER NOT NULL,
-		aggregate_kind VARCHAR (50) NOT NULL,
-		kind VARCHAR (50) NOT NULL,
-		body bytea,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		migration INTEGER NOT NULL DEFAULT 0,
-		migrated BOOLEAN NOT NULL DEFAULT false,
-		meta_tenant VARCHAR (50) NULL
-	);
-	CREATE INDEX evt_agg_id_migrated_idx ON events (aggregate_id, migration);
-	CREATE INDEX evt_type_migrated_idx ON events (aggregate_kind, migration);
-	CREATE UNIQUE INDEX evt_agg_id_ver_uk ON events (aggregate_id, aggregate_version);
-	CREATE INDEX evt_tenant_idx ON events (meta_tenant);
-
-	CREATE TABLE IF NOT EXISTS snapshots(
-		id VARCHAR (50) PRIMARY KEY,
-		aggregate_id VARCHAR (50) NOT NULL,
-		aggregate_version INTEGER NOT NULL,
-		aggregate_kind VARCHAR (50) NOT NULL,
-		body bytea NOT NULL,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		meta_tenant VARCHAR (50) NULL,
-		FOREIGN KEY (id) REFERENCES events (id)
-	);
-	CREATE INDEX snap_agg_id_idx ON snapshots (aggregate_id);
-	
-	CREATE OR REPLACE FUNCTION notify_event() RETURNS TRIGGER AS $FN$
-		DECLARE 
-			notification json;
-		BEGIN
-			notification = row_to_json(NEW);
-			PERFORM pg_notify('events_channel', notification::text);
-			
-			-- Result is ignored since this is an AFTER trigger
-			RETURN NULL; 
-		END;
-	$FN$ LANGUAGE plpgsql;
-	
-	CREATE TRIGGER events_notify_event
-	AFTER INSERT ON events
-		FOR EACH ROW EXECUTE PROCEDURE notify_event();
-
-	CREATE TABLE IF NOT EXISTS outbox(
-		id VARCHAR (50) PRIMARY KEY,
-		aggregate_id VARCHAR (50) NOT NULL,
-		aggregate_id_hash INTEGER NOT NULL,
-		aggregate_kind VARCHAR (50) NOT NULL,
-		kind VARCHAR (50) NOT NULL,
-		meta_tenant VARCHAR (50) NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS keyvalue(
-		key VARCHAR PRIMARY KEY,
-		value VARCHAR NOT NULL
-	);
-	`)
-
-	return nil
 }
 
 func connect(t *testing.T, dbConfig DBConfig) *sqlx.DB {

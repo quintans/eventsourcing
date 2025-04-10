@@ -172,7 +172,7 @@ func doAsync[T any](r *RedisLedger, actFn func(*redis.Client) (T, error)) ([]T, 
 	for _, client := range r.pool {
 		go func(client *redis.Client) {
 			var r result[T]
-			retry.Do(
+			_ = retry.Do(
 				func() error {
 					r.Val, r.Err = actFn(client)
 					return r.Err

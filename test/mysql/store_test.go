@@ -24,10 +24,9 @@ import (
 )
 
 var (
-	logger    = slog.New(slog.NewTextHandler(os.Stdout, nil))
-	esOptions = &eventsourcing.EsOptions{
-		SnapshotThreshold: 3,
-	}
+	logger     = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	esOptions  = eventsourcing.EsSnapshotThreshold(3)
+	snapOption = mysql.WithSnapshotsTable[ids.AggID]("snapshots")
 )
 
 type Snapshot struct {
@@ -37,7 +36,7 @@ type Snapshot struct {
 	AggregateKind    eventsourcing.Kind `db:"aggregate_kind,omitempty"`
 	Body             []byte             `db:"body,omitempty"`
 	CreatedAt        time.Time          `db:"created_at,omitempty"`
-	MetaTenant       store.NilString    `db:"meta_tenant,omitempty"`
+	DiscTenant       store.NilString    `db:"disc_tenant,omitempty"`
 }
 
 type Event struct {
@@ -51,7 +50,7 @@ type Event struct {
 	CreatedAt        time.Time          `db:"created_at"`
 	Migration        int                `db:"migration"`
 	Migrated         bool               `db:"migrated"`
-	MetaTenant       store.NilString    `db:"meta_tenant,omitempty"`
+	DiscTenant       store.NilString    `db:"disc_tenant,omitempty"`
 }
 
 func connect(t *testing.T, dbConfig DBConfig) *sqlx.DB {
@@ -72,9 +71,10 @@ func TestSaveAndGet(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL(), snapOption)
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := es.Retrieve(ctx, ids.New())
 	require.ErrorIs(t, err, eventsourcing.ErrUnknownAggregateID)
@@ -142,11 +142,18 @@ func TestPollListener(t *testing.T) {
 
 	ctx := context.Background()
 	db := connect(t, dbConfig)
-	r := mysql.NewStore(
+	r, err := mysql.NewStore(
 		db.DB,
 		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
+		snapOption,
 	)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
+
+	outboxRepo, err := mysql.NewOutboxStore(db.DB, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
@@ -164,9 +171,6 @@ func TestPollListener(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	outboxRepo := mysql.NewOutboxStore(db.DB, "outbox", r)
-	require.NoError(t, err)
-
 	p := poller.New(logger, outboxRepo)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -207,11 +211,18 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	db := connect(t, dbConfig)
 
 	ctx := context.Background()
-	r := mysql.NewStore(
+	r, err := mysql.NewStore(
 		db.DB,
 		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
+		snapOption,
 	)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
+
+	outboxRepo, err := mysql.NewOutboxStore(db.DB, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
@@ -229,8 +240,6 @@ func TestListenerWithAggregateKind(t *testing.T) {
 
 	acc2 := test.DehydratedAccount(id)
 	counter := 0
-	outboxRepo := mysql.NewOutboxStore(db.DB, "outbox", r)
-	require.NoError(t, err)
 	p := poller.New(logger, outboxRepo, poller.WithAggregateKinds[ids.AggID](test.KindAccount))
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -263,7 +272,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func TestListenerWithMetadata(t *testing.T) {
+func TestListenerWithDiscriminator(t *testing.T) {
 	t.Parallel()
 
 	dbConfig := Setup(t)
@@ -271,16 +280,23 @@ func TestListenerWithMetadata(t *testing.T) {
 
 	key := "tenant"
 
-	r := mysql.NewStore(
+	r, err := mysql.NewStore(
 		db.DB,
 		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
-		mysql.WithMetadataHook[ids.AggID](func(c *store.MetadataHookContext) eventsourcing.Metadata {
+		mysql.WithDiscriminatorHook[ids.AggID](func(c *store.DiscriminatorHookContext) eventsourcing.Discriminator {
 			ctx := c.Context()
 			val := ctx.Value(key).(string)
-			return eventsourcing.Metadata{key: val}
+			return eventsourcing.Discriminator{key: val}
 		}),
+		snapOption,
 	)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
+
+	outboxRepo, err := mysql.NewOutboxStore(db.DB, "outbox", r)
+	require.NoError(t, err)
+
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	ctx := context.WithValue(context.Background(), key, "abc")
 	acc, err := test.NewAccount("Paulo", 50)
@@ -308,9 +324,7 @@ func TestListenerWithMetadata(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(time.Second)
 
-	outboxRepo := mysql.NewOutboxStore(db.DB, "outbox", r)
-	require.NoError(t, err)
-	p := poller.New(logger, outboxRepo, poller.WithMetadataKV[ids.AggID]("tenant", "xyz"))
+	p := poller.New(logger, outboxRepo, poller.WithDiscriminatorKV[ids.AggID]("tenant", "xyz"))
 
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
@@ -353,9 +367,10 @@ func TestForget(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL(), snapOption)
 	require.NoError(t, err)
-	es := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	id := acc.GetID()
@@ -457,9 +472,10 @@ func TestMigration(t *testing.T) {
 	dbConfig := Setup(t)
 
 	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL(), snapOption)
 	require.NoError(t, err)
-	es1 := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	es1, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
+	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo Pereira", 100)
 	id := acc.GetID()
@@ -475,7 +491,9 @@ func TestMigration(t *testing.T) {
 
 	codec := test.NewJSONCodecWithUpcaster()
 	// switching the aggregator factory
-	es2 := eventsourcing.NewEventStore[*test.AccountV2](r, codec, esOptions)
+	es2, err := eventsourcing.NewEventStore[*test.AccountV2](r, codec, esOptions)
+	require.NoError(t, err)
+
 	err = es2.MigrateInPlaceCopyReplace(ctx,
 		1,
 		3,

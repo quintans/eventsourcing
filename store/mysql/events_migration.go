@@ -104,7 +104,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 		// invalidate event, making sure that no other event was added in the meantime
 		version++
 		id := gen.NewID()
-		metadata := r.metadataMerge(ctx, r.metadata, store.OnPersist)
+		disc := r.discriminatorMerge(ctx, store.OnPersist)
 		err := r.saveEvent(c, tx, &Event{
 			ID:               id,
 			AggregateID:      last.AggregateID.String(),
@@ -113,7 +113,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			AggregateKind:    last.AggregateKind,
 			Kind:             eventsourcing.InvalidatedKind, // for this kind, the missing event fields do not need to be populated
 			CreatedAt:        now,
-			Metadata:         metadata,
+			Discriminator:    disc,
 		})
 		if err != nil {
 			return err
@@ -158,7 +158,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    last.AggregateKind,
 				Kind:             mig.Kind,
 				Body:             mig.Body,
-				Metadata:         metadata,
+				Discriminator:    disc,
 				CreatedAt:        now,
 				Migrated:         true,
 			}
@@ -179,7 +179,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 			}
 		}
 
-		if aggregate != nil {
+		if aggregate != nil && r.IsSnapshotEnabled() {
 			body, err := codec.Encode(aggregate)
 			if err != nil {
 				return faults.Errorf("failed to encode aggregate on migration: %w", err)
@@ -192,7 +192,7 @@ func (r *EsRepository[K, PK]) saveMigration(
 				AggregateKind:    aggregate.GetKind(),
 				Body:             body,
 				CreatedAt:        time.Now().UTC(),
-				Metadata:         metadata,
+				Discriminator:    disc,
 			})
 			if err != nil {
 				return err
