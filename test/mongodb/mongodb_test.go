@@ -35,6 +35,18 @@ const (
 	EventMoneyWithdrawn eventsourcing.Kind = "MoneyWithdrawn"
 )
 
+var dbConfig DBConfig
+
+func TestMain(m *testing.M) {
+	dbConfig = Setup("./docker-compose.yaml")
+
+	// run the tests
+	code := m.Run()
+
+	// exit with the code from the tests
+	os.Exit(code)
+}
+
 // creates a independent connection
 func connect(dbConfig DBConfig) (*mongo.Database, error) {
 	connString := dbConfig.URL()
@@ -49,10 +61,19 @@ func connect(dbConfig DBConfig) (*mongo.Database, error) {
 }
 
 func TestSaveAndGet(t *testing.T) {
-	dbConfig := Setup(t, "./docker-compose.yaml")
+	t.Parallel()
 
-	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI[ids.AggID](ctx, dbConfig.URL(), dbConfig.Database)
+	ctx := t.Context()
+
+	eventsCollection := test.RandStr(CollEvents)
+	snapshotsCollection := test.RandStr(CollSnapshots)
+	r, err := mongodb.NewStoreWithURI(
+		ctx,
+		dbConfig.URL(),
+		dbConfig.Database,
+		mongodb.WithEventsCollection[ids.AggID](eventsCollection),
+		mongodb.WithSnapshotsCollection[ids.AggID](snapshotsCollection),
+	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
@@ -83,7 +104,7 @@ func TestSaveAndGet(t *testing.T) {
 	// giving time for the snapshots to write
 	time.Sleep(time.Second)
 
-	evts, err := getEvents(ctx, dbConfig, id)
+	evts, err := getEvents(ctx, dbConfig, eventsCollection, id)
 	require.NoError(t, err)
 
 	for k, v := range evts {
@@ -104,68 +125,27 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, test.OPEN, acc2.Status())
 }
 
-func getEvents(ctx context.Context, dbConfig DBConfig, id ids.AggID) ([]mongodb.Event, error) {
-	db, err := connect(dbConfig)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Client().Disconnect(ctx)
-	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
-		"aggregate_id": bson.D{
-			{"$eq", id.String()},
-		},
-	}, opts)
-	if err != nil {
-		return nil, err
-	}
-	evts := []mongodb.Event{}
-	err = cursor.All(ctx, &evts)
-	if err != nil {
-		return nil, err
-	}
-
-	return evts, nil
-}
-
-func getSnapshots(ctx context.Context, dbConfig DBConfig, id ids.AggID) ([]mongodb.Snapshot, error) {
-	db, err := connect(dbConfig)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Client().Disconnect(ctx)
-	opts := options.Find().SetSort(bson.D{{"_id", 1}})
-	cursor, err := db.Collection(CollSnapshots).Find(ctx, bson.M{
-		"aggregate_id": bson.D{
-			{"$eq", id.String()},
-		},
-	}, opts)
-	if err != nil {
-		return nil, err
-	}
-	snaps := []mongodb.Snapshot{}
-	err = cursor.All(ctx, &snaps)
-	if err != nil {
-		return nil, err
-	}
-
-	return snaps, nil
-}
-
 func TestPollListener(t *testing.T) {
-	dbConfig := Setup(t, "./docker-compose.yaml")
+	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
+
+	eventsCollection := test.RandStr(CollEvents)
+	snapshotsCollection := test.RandStr(CollSnapshots)
+	outboxCollection := test.RandStr("outbox")
 	r, err := mongodb.NewStoreWithURI(
 		ctx,
 		dbConfig.URL(),
 		dbConfig.Database,
-		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
+		mongodb.WithEventsCollection[ids.AggID](eventsCollection),
+		mongodb.WithSnapshotsCollection[ids.AggID](snapshotsCollection),
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, outboxCollection)),
 	)
+
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
-	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
+	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, outboxCollection, r)
 	require.NoError(t, err)
 
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -220,19 +200,26 @@ func TestPollListener(t *testing.T) {
 }
 
 func TestListenerWithAggregateKind(t *testing.T) {
-	dbConfig := Setup(t, "./docker-compose.yaml")
+	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
+
+	eventsCollection := test.RandStr(CollEvents)
+	snapshotsCollection := test.RandStr(CollSnapshots)
+	outboxCollection := test.RandStr("outbox")
 	r, err := mongodb.NewStoreWithURI(
 		ctx,
 		dbConfig.URL(),
 		dbConfig.Database,
-		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
+		mongodb.WithEventsCollection[ids.AggID](eventsCollection),
+		mongodb.WithSnapshotsCollection[ids.AggID](snapshotsCollection),
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, outboxCollection)),
 	)
+
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
-	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
+	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, outboxCollection, r)
 	require.NoError(t, err)
 
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -287,20 +274,25 @@ func TestListenerWithAggregateKind(t *testing.T) {
 }
 
 func TestListenerWithDiscriminator(t *testing.T) {
-	dbConfig := Setup(t, "./docker-compose.yaml")
+	t.Parallel()
 
 	key := "tenant"
+	eventsCollection := test.RandStr(CollEvents)
+	snapshotsCollection := test.RandStr(CollSnapshots)
+	outboxCollection := test.RandStr("outbox")
 	r, err := mongodb.NewStoreWithURI(
-		context.Background(),
+		t.Context(),
 		dbConfig.URL(),
 		dbConfig.Database,
-		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, "outbox")),
+		mongodb.WithEventsCollection[ids.AggID](eventsCollection),
+		mongodb.WithSnapshotsCollection[ids.AggID](snapshotsCollection),
+		mongodb.WithTxHandler(mongodb.OutboxInsertHandler[ids.AggID](dbConfig.Database, outboxCollection)),
 		mongodb.WithDiscriminatorKeys[ids.AggID](key),
 	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 
-	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, "outbox", r)
+	obs, err := mongodb.NewOutboxStore(r.Client(), dbConfig.Database, outboxCollection, r)
 	require.NoError(t, err)
 
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -369,10 +361,19 @@ func TestListenerWithDiscriminator(t *testing.T) {
 }
 
 func TestForget(t *testing.T) {
-	dbConfig := Setup(t, "./docker-compose.yaml")
+	t.Parallel()
 
-	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI[ids.AggID](ctx, dbConfig.URL(), dbConfig.Database)
+	ctx := t.Context()
+
+	eventsCollection := test.RandStr(CollEvents)
+	snapshotsCollection := test.RandStr(CollSnapshots)
+	r, err := mongodb.NewStoreWithURI(
+		t.Context(),
+		dbConfig.URL(),
+		dbConfig.Database,
+		mongodb.WithEventsCollection[ids.AggID](eventsCollection),
+		mongodb.WithSnapshotsCollection[ids.AggID](snapshotsCollection),
+	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -399,7 +400,7 @@ func TestForget(t *testing.T) {
 
 	db, err := connect(dbConfig)
 	require.NoError(t, err)
-	cursor, err := db.Collection(CollEvents).Find(ctx, bson.M{
+	cursor, err := db.Collection(eventsCollection).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id.String()},
 		},
@@ -425,7 +426,7 @@ func TestForget(t *testing.T) {
 	}
 	assert.True(t, foundEvent)
 
-	cursor, err = db.Collection(CollSnapshots).Find(ctx, bson.M{
+	cursor, err = db.Collection(snapshotsCollection).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id.String()},
 		},
@@ -465,7 +466,7 @@ func TestForget(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	cursor, err = db.Collection(CollEvents).Find(ctx, bson.M{
+	cursor, err = db.Collection(eventsCollection).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id.String()},
 		},
@@ -490,7 +491,7 @@ func TestForget(t *testing.T) {
 	}
 	assert.True(t, foundEvent)
 
-	cursor, err = db.Collection(CollSnapshots).Find(ctx, bson.M{
+	cursor, err = db.Collection(snapshotsCollection).Find(ctx, bson.M{
 		"aggregate_id": bson.D{
 			{"$eq", id.String()},
 		},
@@ -512,10 +513,19 @@ func TestForget(t *testing.T) {
 }
 
 func TestMigration(t *testing.T) {
-	dbConfig := Setup(t, "./docker-compose.yaml")
+	t.Parallel()
 
-	ctx := context.Background()
-	r, err := mongodb.NewStoreWithURI[ids.AggID](ctx, dbConfig.URL(), dbConfig.Database)
+	ctx := t.Context()
+
+	eventsCollection := test.RandStr(CollEvents)
+	snapshotsCollection := test.RandStr(CollSnapshots)
+	r, err := mongodb.NewStoreWithURI(
+		t.Context(),
+		dbConfig.URL(),
+		dbConfig.Database,
+		mongodb.WithEventsCollection[ids.AggID](eventsCollection),
+		mongodb.WithSnapshotsCollection[ids.AggID](snapshotsCollection),
+	)
 	require.NoError(t, err)
 	defer r.Close(context.Background())
 	es1, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -568,7 +578,7 @@ func TestMigration(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	snaps, err := getSnapshots(ctx, dbConfig, id)
+	snaps, err := getSnapshots(ctx, dbConfig, snapshotsCollection, id)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(snaps))
 
@@ -578,7 +588,7 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, `{"status":"OPEN","balance":105,"owner":{"firstName":"Paulo","lastName":"Quintans Pereira"}}`, string(snap.Body))
 	assert.Equal(t, id.String(), snap.AggregateID)
 
-	evts, err := getEvents(ctx, dbConfig, id)
+	evts, err := getEvents(ctx, dbConfig, eventsCollection, id)
 	require.NoError(t, err)
 	require.Equal(t, 9, len(evts))
 
@@ -649,4 +659,52 @@ func TestMigration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Paulo", acc2.Owner().FirstName())
 	assert.Equal(t, "Quintans Pereira", acc2.Owner().LastName())
+}
+
+func getEvents(ctx context.Context, dbConfig DBConfig, coll string, id ids.AggID) ([]mongodb.Event, error) {
+	db, err := connect(dbConfig)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Client().Disconnect(ctx)
+	opts := options.Find().SetSort(bson.D{{"_id", 1}})
+	cursor, err := db.Collection(coll).Find(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id.String()},
+		},
+	}, opts)
+	if err != nil {
+		return nil, err
+	}
+	evts := []mongodb.Event{}
+	err = cursor.All(ctx, &evts)
+	if err != nil {
+		return nil, err
+	}
+
+	return evts, nil
+}
+
+func getSnapshots(ctx context.Context, dbConfig DBConfig, coll string, id ids.AggID) ([]mongodb.Snapshot, error) {
+	db, err := connect(dbConfig)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Client().Disconnect(ctx)
+	opts := options.Find().SetSort(bson.D{{"_id", 1}})
+	cursor, err := db.Collection(coll).Find(ctx, bson.M{
+		"aggregate_id": bson.D{
+			{"$eq", id.String()},
+		},
+	}, opts)
+	if err != nil {
+		return nil, err
+	}
+	snaps := []mongodb.Snapshot{}
+	err = cursor.All(ctx, &snaps)
+	if err != nil {
+		return nil, err
+	}
+
+	return snaps, nil
 }

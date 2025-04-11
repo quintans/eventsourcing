@@ -23,12 +23,26 @@ import (
 
 var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
+var dbConfig tmg.DBConfig
+
+func TestMain(m *testing.M) {
+	dbConfig = tmg.Setup("../docker-compose.yaml")
+
+	// run the tests
+	code := m.Run()
+
+	// exit with the code from the tests
+	os.Exit(code)
+}
+
 type slot struct {
 	low  uint32
 	high uint32
 }
 
 func TestMongoListenere(t *testing.T) {
+	t.Parallel()
+
 	testcases := []struct {
 		name           string
 		partitionSlots []slot
@@ -72,16 +86,24 @@ func TestMongoListenere(t *testing.T) {
 
 	for _, tt := range testcases {
 		t.Run(tt.name, func(t *testing.T) {
-			dbConfig := tmg.Setup(t, "../docker-compose.yaml")
+			t.Parallel()
 
-			repository, err := mongodb.NewStoreWithURI[ids.AggID](context.Background(), dbConfig.URL(), dbConfig.Database)
+			eventsCollection := test.RandStr(tmg.CollEvents)
+			snapshotsCollection := test.RandStr(tmg.CollSnapshots)
+			repository, err := mongodb.NewStoreWithURI(
+				context.Background(),
+				dbConfig.URL(),
+				dbConfig.Database,
+				mongodb.WithEventsCollection[ids.AggID](eventsCollection),
+				mongodb.WithSnapshotsCollection[ids.AggID](snapshotsCollection),
+			)
 			require.NoError(t, err)
 			defer repository.Close(context.Background())
 
 			data := test.NewMockSinkData[ids.AggID]()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			errs := feeding(ctx, dbConfig, tt.partitionSlots, data)
+			errs := feeding(ctx, dbConfig, tt.partitionSlots, data, eventsCollection)
 
 			es, err := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), eventsourcing.EsSnapshotThreshold(3))
 			require.NoError(t, err)
@@ -110,7 +132,7 @@ func TestMongoListenere(t *testing.T) {
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, tt.partitionSlots, data)
+			errs = feeding(ctx, dbConfig, tt.partitionSlots, data, eventsCollection)
 
 			time.Sleep(time.Second)
 			events = data.GetEvents()
@@ -140,7 +162,7 @@ func TestMongoListenere(t *testing.T) {
 
 			// connecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, tt.partitionSlots, data)
+			errs = feeding(ctx, dbConfig, tt.partitionSlots, data, eventsCollection)
 
 			time.Sleep(500 * time.Millisecond)
 			events = data.GetEvents()
@@ -159,7 +181,7 @@ func TestMongoListenere(t *testing.T) {
 
 			// reconnecting
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, dbConfig, tt.partitionSlots, data)
+			errs = feeding(ctx, dbConfig, tt.partitionSlots, data, eventsCollection)
 
 			time.Sleep(500 * time.Millisecond)
 			events = data.GetEvents()
@@ -185,14 +207,14 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tmg.DBConfig, slots []slot, data *test.MockSinkData[ids.AggID]) chan error {
+func feeding(ctx context.Context, dbConfig tmg.DBConfig, slots []slot, data *test.MockSinkData[ids.AggID], coll string) chan error {
 	partitions := partitionSize(slots)
 
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		mockSink := test.NewMockSink(data, partitions, v.low, v.high)
-		listener, err := mongodb.NewFeed[ids.AggID](logger, dbConfig.URL(), dbConfig.Database, mockSink)
+		listener, err := mongodb.NewFeed(logger, dbConfig.URL(), dbConfig.Database, mockSink, mongodb.WithFeedEventsCollection[ids.AggID](coll))
 		if err != nil {
 			panic(err)
 		}

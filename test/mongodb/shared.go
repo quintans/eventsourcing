@@ -3,14 +3,13 @@ package mongodb
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand"
 	"strconv"
-	"testing"
 	"time"
 
 	"github.com/avast/retry-go/v3"
 	"github.com/quintans/eventsourcing/test"
-	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -32,7 +31,7 @@ const (
 	CollEvents    = "events"
 )
 
-func Setup(t *testing.T, dockerComposePath string) DBConfig {
+func Setup(dockerComposePath string) DBConfig {
 	dbConfig := DBConfig{
 		Database: DBName,
 		Host:     "localhost",
@@ -40,13 +39,15 @@ func Setup(t *testing.T, dockerComposePath string) DBConfig {
 	}
 
 	ctx := context.Background()
-	test.DockerCompose(t, dockerComposePath, "mongo", map[string]string{
+	test.DockerCompose(dockerComposePath, "mongo", map[string]string{
 		"MONGO_PORT": strconv.Itoa(dbConfig.Port),
 	})
 
 	opts := options.Client().ApplyURI(dbConfig.URL())
 	client, err := mongo.Connect(ctx, opts)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("Failed to connect to MongoDB: %s", err)
+	}
 	defer client.Disconnect(context.Background())
 
 	err = retry.Do(
@@ -56,7 +57,9 @@ func Setup(t *testing.T, dockerComposePath string) DBConfig {
 		retry.Attempts(3),
 		retry.Delay(time.Second),
 	)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("Failed to create MongoDB schema: %s", err)
+	}
 
 	return dbConfig
 }

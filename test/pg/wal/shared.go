@@ -2,22 +2,20 @@ package wal
 
 import (
 	"context"
+	"log"
 	"strconv"
-	"testing"
 	"time"
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/lib/pq"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	tpg "github.com/quintans/eventsourcing/test/pg"
 )
 
-func setup(t *testing.T) tpg.DBConfig {
+func setup() tpg.DBConfig {
 	dbConfig := tpg.DBConfig{
 		Database: "pglogrepl",
 		Host:     "localhost",
@@ -50,17 +48,19 @@ func setup(t *testing.T) tpg.DBConfig {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		assert.NoError(t, container.Terminate(ctx))
-	})
+	if err != nil {
+		log.Fatalf("failed to start container: %v", err)
+	}
 
 	ip, err := container.Host(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("failed to get container host: %v", err)
+	}
 
 	port, err := container.MappedPort(ctx, natPort)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("failed to get container port: %v", err)
+	}
 
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()

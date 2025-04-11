@@ -5,6 +5,7 @@ package nats
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"testing"
@@ -17,7 +18,7 @@ import (
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/test/integration"
-	shared "github.com/quintans/eventsourcing/test/mysql"
+	tMysql "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util/ids"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,17 +30,34 @@ var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 const (
 	database = "eventsourcing"
-	topic    = "accounts"
 )
 
+var (
+	natsUri  string
+	dbConfig tMysql.DBConfig
+)
+
+func TestMain(m *testing.M) {
+	natsUri = runNatsContainer()
+	dbConfig = tMysql.Setup()
+
+	// run the tests
+	code := m.Run()
+
+	// exit with the code from the tests
+	os.Exit(code)
+}
+
 func TestNATSProjectionBeforeData(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
-	dbConfig := shared.Setup(t)
-
-	uri := runNatsContainer(t)
-
-	esRepo, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	eventsTable := test.RandStr("events")
+	esRepo, err := mysql.NewStoreWithURL[ids.AggID](
+		dbConfig.URL(),
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+	)
 	require.NoError(t, err)
 	es, err := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec())
 	require.NoError(t, err)
@@ -47,14 +65,15 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
+	topic := test.RandStr("accounts")
 	kvStoreSink := &integration.MockKVStore{}
-	sinker, err := nats.NewSink[ids.AggID](kvStoreSink, logger, topic, 1, uri)
+	sinker, err := nats.NewSink[ids.AggID](kvStoreSink, logger, topic, 1, natsUri)
 	require.NoError(t, err)
-	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, dbConfig.DBConfig, sinker, mysql.WithFeedEventsTable[ids.AggID](eventsTable))
 
 	// before data
 	kvStoreProj := &integration.MockKVStore{}
-	proj := projectionFromNATS(t, ctx, uri, esRepo, kvStoreProj)
+	proj := projectionFromNATS(t, ctx, natsUri, topic, esRepo, kvStoreProj)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	require.NoError(t, err)
@@ -91,13 +110,15 @@ func TestNATSProjectionBeforeData(t *testing.T) {
 }
 
 func TestNATSProjectionAfterData(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
-	dbConfig := shared.Setup(t)
-
-	uri := runNatsContainer(t)
-
-	esRepo, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	eventsTable := test.RandStr("events")
+	esRepo, err := mysql.NewStoreWithURL[ids.AggID](
+		dbConfig.URL(),
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+	)
 	require.NoError(t, err)
 	es, err := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec())
 	require.NoError(t, err)
@@ -105,10 +126,11 @@ func TestNATSProjectionAfterData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
+	topic := test.RandStr("accounts")
 	kvStoreSink := &integration.MockKVStore{}
-	sinker, err := nats.NewSink[ids.AggID](kvStoreSink, logger, topic, 1, uri)
+	sinker, err := nats.NewSink[ids.AggID](kvStoreSink, logger, topic, 1, natsUri)
 	require.NoError(t, err)
-	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, dbConfig.DBConfig, sinker, mysql.WithFeedEventsTable[ids.AggID](eventsTable))
 
 	acc, err := test.NewAccount("Paulo", 100)
 	require.NoError(t, err)
@@ -123,7 +145,7 @@ func TestNATSProjectionAfterData(t *testing.T) {
 
 	// after data (replay): start projection after we have some data on the event bus
 	kvStoreProj := &integration.MockKVStore{}
-	proj := projectionFromNATS(t, ctx, uri, esRepo, kvStoreProj)
+	proj := projectionFromNATS(t, ctx, natsUri, topic, esRepo, kvStoreProj)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -171,7 +193,7 @@ type natsContainer struct {
 }
 
 // runContainer creates an instance of the nats container type
-func runNatsContainer(t *testing.T) string {
+func runNatsContainer() string {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
 		Image:        "nats:2.9",
@@ -185,31 +207,33 @@ func runNatsContainer(t *testing.T) string {
 		Started:          true,
 	}
 	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		assert.NoError(t, container.Terminate(context.Background()), "failed to terminate container")
-	})
+	if err != nil {
+		log.Fatalf("Failed to start container: %s", err)
+	}
 
 	mappedPort, err := container.MappedPort(ctx, "4222/tcp")
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("Failed to get container port: %s", err)
+	}
 
 	hostIP, err := container.Host(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("Failed to get container host: %s", err)
+	}
 
 	return fmt.Sprintf("nats://%s:%s", hostIP, mappedPort.Port())
 }
 
-func projectionFromNATS(t *testing.T, ctx context.Context, uri string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID], kvStore *integration.MockKVStore) *integration.ProjectionMock[ids.AggID] {
+func projectionFromNATS(t *testing.T, ctx context.Context, uri, topic string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID], kvStore *integration.MockKVStore) *integration.ProjectionMock[ids.AggID] {
 	// create projection
-	proj := integration.NewProjectionMock[ids.AggID]("balances", test.NewJSONCodec())
+	proj := integration.NewProjectionMock[ids.AggID](test.RandStr("balances"), test.NewJSONCodec())
 
-	topic := projection.ConsumerTopic{
-		Topic:      "accounts",
+	part := projection.ConsumerTopic{
+		Topic:      topic,
 		Partitions: []uint32{1},
 	}
 
-	sub, err := pnats.NewSubscriberWithURL[ids.AggID](ctx, logger, uri, topic)
+	sub, err := pnats.NewSubscriberWithURL[ids.AggID](ctx, logger, uri, part)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository

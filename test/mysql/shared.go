@@ -3,37 +3,34 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
-	"testing"
 	"time"
 
 	"github.com/docker/go-connections/nat"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/quintans/eventsourcing/store/mysql"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 type DBConfig struct {
-	Database string
-	Host     string
-	Port     int
-	Username string
-	Password string
+	mysql.DBConfig
 }
 
 func (c DBConfig) URL() string {
 	return fmt.Sprintf("%s:%s@(%s:%d)/%s?parseTime=true", c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 
-func Setup(t *testing.T) DBConfig {
+func Setup() DBConfig {
 	dbConfig := DBConfig{
-		Database: "eventsourcing",
-		Host:     "localhost",
-		Port:     3306,
-		Username: "root",
-		Password: "example",
+		mysql.DBConfig{
+			Database: "eventsourcing",
+			Host:     "localhost",
+			Port:     3306,
+			Username: "root",
+			Password: "example",
+		},
 	}
 
 	tcpPort := strconv.Itoa(dbConfig.Port)
@@ -55,17 +52,19 @@ func Setup(t *testing.T) DBConfig {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		assert.NoError(t, container.Terminate(ctx))
-	})
+	if err != nil {
+		log.Fatalf("Failed to start container: %s", err)
+	}
 
 	ip, err := container.Host(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("Failed to get container host: %s", err)
+	}
 
 	port, err := container.MappedPort(ctx, natPort)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("Failed to get container port: %s", err)
+	}
 
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()

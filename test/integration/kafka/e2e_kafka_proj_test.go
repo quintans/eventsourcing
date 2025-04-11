@@ -18,7 +18,7 @@ import (
 	"github.com/quintans/eventsourcing/store/mysql"
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/test/integration"
-	shared "github.com/quintans/eventsourcing/test/mysql"
+	tMysql "github.com/quintans/eventsourcing/test/mysql"
 	"github.com/quintans/eventsourcing/util/ids"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,15 +29,32 @@ var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 const (
 	database = "eventsourcing"
-	topic    = "accounts"
 )
 
+var (
+	kafkaUris []string
+	dbConfig  tMysql.DBConfig
+)
+
+func TestMain(m *testing.M) {
+	kafkaUris = runKafkaContainer()
+	dbConfig = tMysql.Setup()
+
+	// run the tests
+	code := m.Run()
+
+	// exit with the code from the tests
+	os.Exit(code)
+}
+
 func TestKafkaProjectionBeforeData(t *testing.T) {
-	uris := runKafkaContainer(t)
+	t.Parallel()
 
-	dbConfig := shared.Setup(t)
-
-	esRepo, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	eventsTable := test.RandStr("events")
+	esRepo, err := mysql.NewStoreWithURL(
+		dbConfig.URL(),
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+	)
 	require.NoError(t, err)
 	es, err := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec())
 	require.NoError(t, err)
@@ -45,14 +62,15 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// sinker provider
+	topic := test.RandStr("accounts")
 	kvStoreSink := &integration.MockKVStore{}
-	sinker, err := kafka.NewSink[ids.AggID](logger, kvStoreSink, topic, uris, nil)
+	sinker, err := kafka.NewSink[ids.AggID](logger, kvStoreSink, topic, kafkaUris, nil)
 	require.NoError(t, err)
-	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, dbConfig.DBConfig, sinker, mysql.WithFeedEventsTable[ids.AggID](eventsTable))
 
 	// before data
 	kvStoreProj := &integration.MockKVStore{}
-	proj := projectionFromKafka(t, ctx, uris, esRepo, kvStoreProj)
+	proj := projectionFromKafka(t, ctx, kafkaUris, topic, esRepo, kvStoreProj)
 
 	acc, err := test.NewAccount("Paulo", 100)
 	require.NoError(t, err)
@@ -89,22 +107,25 @@ func TestKafkaProjectionBeforeData(t *testing.T) {
 }
 
 func TestKafkaProjectionAfterData(t *testing.T) {
-	uris := runKafkaContainer(t)
+	t.Parallel()
 
-	dbConfig := shared.Setup(t)
-
-	esRepo, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL())
+	eventsTable := test.RandStr("events")
+	esRepo, err := mysql.NewStoreWithURL(
+		dbConfig.URL(),
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+	)
 	require.NoError(t, err)
 	es, err := eventsourcing.NewEventStore[*test.Account](esRepo, test.NewJSONCodec())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	topic := test.RandStr("accounts")
 	// sinker provider
 	kvStoreSink := &integration.MockKVStore{}
-	sinker, err := kafka.NewSink[ids.AggID](logger, kvStoreSink, topic, uris, nil)
+	sinker, err := kafka.NewSink[ids.AggID](logger, kvStoreSink, topic, kafkaUris, nil)
 	require.NoError(t, err)
-	integration.EventForwarderWorker(t, ctx, logger, dbConfig, sinker)
+	integration.EventForwarderWorker(t, ctx, logger, dbConfig.DBConfig, sinker, mysql.WithFeedEventsTable[ids.AggID](eventsTable))
 
 	acc, err := test.NewAccount("Paulo", 100)
 	require.NoError(t, err)
@@ -119,7 +140,7 @@ func TestKafkaProjectionAfterData(t *testing.T) {
 
 	// after data (replay): start projection after we have some data on the event bus
 	kvStoreProj := &integration.MockKVStore{}
-	proj := projectionFromKafka(t, ctx, uris, esRepo, kvStoreProj)
+	proj := projectionFromKafka(t, ctx, kafkaUris, topic, esRepo, kvStoreProj)
 
 	balance, ok := proj.BalanceByID(acc.GetID())
 	require.True(t, ok)
@@ -167,19 +188,19 @@ type kafkaContainer struct {
 }
 
 // runKafkaContainer creates an instance of the Kafka container type
-func runKafkaContainer(t *testing.T) []string {
+func runKafkaContainer() []string {
 	port := strconv.Itoa(1024 + rand.Intn(65535-1024))
-	test.DockerCompose(t, "./docker-compose.yaml", "kafka", map[string]string{
+	test.DockerCompose("./docker-compose.yaml", "kafka", map[string]string{
 		"EXT_PORT": port,
 	})
 	return []string{"localhost:" + port}
 }
 
-func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID], kvStore *integration.MockKVStore) *integration.ProjectionMock[ids.AggID] {
+func projectionFromKafka(t *testing.T, ctx context.Context, uri []string, topic string, esRepo *mysql.EsRepository[ids.AggID, *ids.AggID], kvStore *integration.MockKVStore) *integration.ProjectionMock[ids.AggID] {
 	// create projection
-	proj := integration.NewProjectionMock("balances", test.NewJSONCodec())
+	proj := integration.NewProjectionMock(test.RandStr("balances"), test.NewJSONCodec())
 
-	sub, err := pkafka.NewSubscriberWithBrokers[ids.AggID](ctx, logger, uri, "accounts", nil)
+	sub, err := pkafka.NewSubscriberWithBrokers[ids.AggID](ctx, logger, uri, topic, nil)
 	require.NoError(t, err)
 
 	// repository here could be remote, like GrpcRepository

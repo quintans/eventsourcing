@@ -16,47 +16,38 @@ tasks:
 
   test-pg:
     desc: Run postgresql tests
-    deps:
-      - clean-docker
     cmds:
       - echo "Running postgresql integration tests..."
       - go test -tags pg -race -count=1 -v ./...
 
   test-mysql:
     desc: Run mysql tests
-    deps:
-      - clean-docker
     cmds:
       - echo "Running mysql integration tests..."
       - go test -tags mysql -race -count=1 -v ./...
 
   test-mongo:
     desc: Run mongo tests
-    deps:
-      - clean-docker
     cmds:
       - echo "Running mongo integration tests..."
       - go test -tags mongo -race -count=1 -v ./...
 
   test-redis:
     desc: Run redis tests
-    deps:
-      - clean-docker
     cmds:
+      - echo "Running redis integration tests..."
       - go test -tags redis -race -count=1 -v ./...
 
   test-consul:
-    deps:
-      - clean-docker
     desc: Run consul tests
     cmds:
+      - echo "Running consul integration tests..."
       - go test -tags consul -race -count=1 -v ./...
 
   test-integration:
-    deps:
-      - clean-docker
     desc: Run integration tests
     cmds:
+      - echo "Running integration tests..."
       - go test -tags integration -race -count=1 -v ./...
 
   lint:
@@ -68,13 +59,15 @@ tasks:
   test-all:
     desc: Run all test tasks
     deps:
-      - lint
-      - test-pg
-      - test-mysql
-      - test-mongo
-      - test-redis
-      - test-consul
-      - test-integration
+      - clean-docker
+    cmds:
+      - task clean-docker
+      - task test-redis
+      - task test-consul
+      - task test-pg
+      - task test-mysql
+      - task test-mongo
+      - task test-integration
 
   generate:
     desc: Generate code

@@ -7,15 +7,16 @@ import (
 	"testing"
 
 	"github.com/quintans/eventsourcing/store/mysql"
+	"github.com/quintans/eventsourcing/test"
 	"github.com/stretchr/testify/require"
 )
 
 func TestKVPutAndGet(t *testing.T) {
-	dbConfig := Setup(t)
+	t.Parallel()
 
 	key := "one"
 
-	kvStore, err := mysql.NewKVStoreWithURL(dbConfig.URL(), "keyvalue")
+	kvStore, err := mysql.NewKVStoreWithURL(dbConfig.URL(), test.RandStr("keyvalue"))
 	require.NoError(t, err)
 	err = kvStore.Put(context.Background(), key, "xyz") // insert
 	require.NoError(t, err)

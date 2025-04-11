@@ -695,15 +695,15 @@ func (r *EsRepository[K, PK]) createSchema(dbx *sqlx.DB) error {
 			migration INTEGER NOT NULL DEFAULT 0,
 			migrated BOOLEAN NOT NULL DEFAULT false
 		);`, r.eventsTable),
-			fmt.Sprintf(`CREATE INDEX evt_agg_id_migrated_idx ON %s (aggregate_id, migration);`, r.eventsTable),
-			fmt.Sprintf(`CREATE INDEX evt_id_migrated_idx ON %s (id, migration);`, r.eventsTable),
-			fmt.Sprintf(`CREATE INDEX evt_type_migrated_idx ON %s (aggregate_kind, migration);`, r.eventsTable),
-			fmt.Sprintf(`CREATE UNIQUE INDEX evt_agg_id_ver_uk ON %s (aggregate_id, aggregate_version);`, r.eventsTable),
+			fmt.Sprintf(`CREATE INDEX %[1]s_agg_id_migrated_idx ON %[1]s (aggregate_id, migration);`, r.eventsTable),
+			fmt.Sprintf(`CREATE INDEX %[1]s_id_migrated_idx ON %[1]s (id, migration);`, r.eventsTable),
+			fmt.Sprintf(`CREATE INDEX %[1]s_type_migrated_idx ON %[1]s (aggregate_kind, migration);`, r.eventsTable),
+			fmt.Sprintf(`CREATE UNIQUE INDEX %[1]s_agg_id_ver_uk ON %[1]s (aggregate_id, aggregate_version);`, r.eventsTable),
 		)
 
 		if r.publish {
 			sqls = append(sqls,
-				fmt.Sprintf(`CREATE PUBLICATION %s_pub FOR TABLE %s WITH (publish = 'insert');`, r.eventsTable, r.eventsTable),
+				fmt.Sprintf(`CREATE PUBLICATION %[1]s_pub FOR TABLE %[1]s WITH (publish = 'insert');`, r.eventsTable),
 			)
 		}
 	}
@@ -719,7 +719,7 @@ func (r *EsRepository[K, PK]) createSchema(dbx *sqlx.DB) error {
 		if count == 0 {
 			sqls = append(sqls,
 				fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s%s VARCHAR (255) NULL`, r.eventsTable, store.DiscriminatorColumnPrefix, k),
-				fmt.Sprintf(`CREATE INDEX %s%s_idx ON %s (%s%s)`, store.DiscriminatorColumnPrefix, k, r.eventsTable, store.DiscriminatorColumnPrefix, k),
+				fmt.Sprintf(`CREATE INDEX %s_%s%s_idx ON %s (%s%s)`, r.eventsTable, store.DiscriminatorColumnPrefix, k, r.eventsTable, store.DiscriminatorColumnPrefix, k),
 			)
 		}
 	}
@@ -742,7 +742,7 @@ func (r *EsRepository[K, PK]) createSchema(dbx *sqlx.DB) error {
 					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 					FOREIGN KEY (id) REFERENCES %s (id)
 		);`, r.snapshotsTable, r.eventsTable),
-				fmt.Sprintf(`CREATE INDEX snap_agg_id_idx ON %s (aggregate_id);`, r.snapshotsTable),
+				fmt.Sprintf(`CREATE INDEX %[1]s_agg_id_idx ON %[1]s (aggregate_id);`, r.snapshotsTable),
 			)
 		}
 

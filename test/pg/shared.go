@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"testing"
 	"time"
@@ -11,7 +12,6 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -33,7 +33,7 @@ func (c DBConfig) URL() string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 
-func setup(t *testing.T) DBConfig {
+func setup() DBConfig {
 	dbConfig := DBConfig{
 		Database: "eventsourcing",
 		Host:     "localhost",
@@ -60,17 +60,19 @@ func setup(t *testing.T) DBConfig {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		assert.NoError(t, container.Terminate(ctx))
-	})
+	if err != nil {
+		log.Fatalf("Failed to start container: %v", err)
+	}
 
 	ip, err := container.Host(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("Failed to get container host: %v", err)
+	}
 
 	port, err := container.MappedPort(ctx, natPort)
-	require.NoError(t, err)
+	if err != nil {
+		log.Fatalf("Failed to get container mapped port: %v", err)
+	}
 
 	dbConfig.Host = ip
 	dbConfig.Port = port.Int()

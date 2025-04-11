@@ -68,13 +68,16 @@ func TestListener(t *testing.T) {
 	}
 
 	for _, tt := range testcases {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			dbConfig := Setup(t)
-
-			repository, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL(), snapOption)
+			eventsTable := test.RandStr("events")
+			snapshotsTable := test.RandStr("snapshots")
+			repository, err := mysql.NewStoreWithURL[ids.AggID](
+				dbConfig.URL(),
+				mysql.WithEventsTable[ids.AggID](eventsTable),
+				mysql.WithSnapshotsTable[ids.AggID](snapshotsTable),
+			)
 			require.NoError(t, err)
 
 			es, err := eventsourcing.NewEventStore[*test.Account](repository, test.NewJSONCodec(), esOptions)
@@ -90,7 +93,7 @@ func TestListener(t *testing.T) {
 
 			data := test.NewMockSinkData[ids.AggID]()
 			ctx, cancel := context.WithCancel(context.Background())
-			errs := feeding(ctx, cfg, tt.partitionSlots, data)
+			errs := feeding(ctx, cfg, tt.partitionSlots, data, eventsTable)
 
 			acc, err := test.NewAccount("Paulo", 100)
 			require.NoError(t, err)
@@ -120,7 +123,7 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			errs = feeding(ctx, cfg, tt.partitionSlots, data)
+			errs = feeding(ctx, cfg, tt.partitionSlots, data, eventsTable)
 
 			time.Sleep(5 * time.Second)
 			events = data.GetEvents()
@@ -134,7 +137,7 @@ func TestListener(t *testing.T) {
 			// resume from the beginning
 			data = test.NewMockSinkData[ids.AggID]()
 			ctx, cancel = context.WithCancel(context.Background())
-			errs = feeding(ctx, cfg, tt.partitionSlots, data)
+			errs = feeding(ctx, cfg, tt.partitionSlots, data, eventsTable)
 
 			time.Sleep(5 * time.Second)
 			events = data.GetEvents()
@@ -158,14 +161,14 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig mysql.DBConfig, slots []slot, data *test.MockSinkData[ids.AggID]) chan error {
+func feeding(ctx context.Context, dbConfig mysql.DBConfig, slots []slot, data *test.MockSinkData[ids.AggID], coll string) chan error {
 	partitions := partitionSize(slots)
 
 	errCh := make(chan error, len(slots))
 	var wg sync.WaitGroup
 	for _, v := range slots {
 		mockSink := test.NewMockSink(data, partitions, v.low, v.high)
-		listener, err := mysql.NewFeed(logger, dbConfig, mockSink)
+		listener, err := mysql.NewFeed(logger, dbConfig, mockSink, mysql.WithFeedEventsTable[ids.AggID](coll))
 		if err != nil {
 			panic(err)
 		}

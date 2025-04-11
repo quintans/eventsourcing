@@ -33,19 +33,19 @@ const (
 
 type FeedOption[K eventsourcing.ID, PK eventsourcing.IDPt[K]] func(*Feed[K, PK])
 
-func FeedEventsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsTable string) FeedOption[K, PK] {
+func WithFeedEventsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](eventsTable string) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
 		p.publicationName = fmt.Sprintf("%s_pub", eventsTable)
 	}
 }
 
-func FeedBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedOption[K, PK] {
+func WithFeedBackoffMaxElapsedTime[K eventsourcing.ID, PK eventsourcing.IDPt[K]](duration time.Duration) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
 		p.backoffMaxElapsedTime = duration
 	}
 }
 
-func FeedFilter[K eventsourcing.ID, PK eventsourcing.IDPt[K]](filter *store.Filter) FeedOption[K, PK] {
+func WithFeedFilter[K eventsourcing.ID, PK eventsourcing.IDPt[K]](filter *store.Filter) FeedOption[K, PK] {
 	return func(p *Feed[K, PK]) {
 		p.filter = filter
 	}

@@ -4,6 +4,7 @@ package mysql
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"sync"
@@ -24,9 +25,8 @@ import (
 )
 
 var (
-	logger     = slog.New(slog.NewTextHandler(os.Stdout, nil))
-	esOptions  = eventsourcing.EsSnapshotThreshold(3)
-	snapOption = mysql.WithSnapshotsTable[ids.AggID]("snapshots")
+	logger    = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	esOptions = eventsourcing.EsSnapshotThreshold(3)
 )
 
 type Snapshot struct {
@@ -65,13 +65,30 @@ func connect(t *testing.T, dbConfig DBConfig) *sqlx.DB {
 	return db
 }
 
+var dbConfig DBConfig
+
+func TestMain(m *testing.M) {
+	dbConfig = Setup()
+
+	// run the tests
+	code := m.Run()
+
+	// exit with the code from the tests
+	os.Exit(code)
+}
+
 func TestSaveAndGet(t *testing.T) {
 	t.Parallel()
 
-	dbConfig := Setup(t)
+	ctx := t.Context()
 
-	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL(), snapOption)
+	eventsTable := test.RandStr("events")
+	snapshotsTable := test.RandStr("snapshots")
+	r, err := mysql.NewStoreWithURL[ids.AggID](
+		dbConfig.URL(),
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+		mysql.WithSnapshotsTable[ids.AggID](snapshotsTable),
+	)
 	require.NoError(t, err)
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 	require.NoError(t, err)
@@ -104,7 +121,7 @@ func TestSaveAndGet(t *testing.T) {
 	db := connect(t, dbConfig)
 
 	snaps := []Snapshot{}
-	err = db.Select(&snaps, "SELECT * FROM snapshots WHERE aggregate_id = ? ORDER by id ASC", id.String())
+	err = db.Select(&snaps, fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ? ORDER by id ASC", snapshotsTable), id.String())
 	require.NoError(t, err)
 	require.Equal(t, 1, len(snaps))
 
@@ -115,7 +132,7 @@ func TestSaveAndGet(t *testing.T) {
 	assert.Equal(t, id.String(), snap.AggregateID)
 
 	evts := []Event{}
-	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id.String())
+	err = db.Select(&evts, fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ? ORDER by id ASC", eventsTable), id.String())
 	require.NoError(t, err)
 	require.Equal(t, 5, len(evts))
 	assert.Equal(t, "AccountCreated", evts[0].Kind.String())
@@ -138,18 +155,21 @@ func TestSaveAndGet(t *testing.T) {
 func TestPollListener(t *testing.T) {
 	t.Parallel()
 
-	dbConfig := Setup(t)
+	ctx := t.Context()
 
-	ctx := context.Background()
 	db := connect(t, dbConfig)
+	eventsTable := test.RandStr("events")
+	snapshotsTable := test.RandStr("snapshots")
+	outboxTable := test.RandStr("outbox")
 	r, err := mysql.NewStore(
 		db.DB,
-		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
-		snapOption,
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+		mysql.WithSnapshotsTable[ids.AggID](snapshotsTable),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID](outboxTable)),
 	)
 	require.NoError(t, err)
 
-	outboxRepo, err := mysql.NewOutboxStore(db.DB, "outbox", r)
+	outboxRepo, err := mysql.NewOutboxStore(db.DB, outboxTable, r)
 	require.NoError(t, err)
 
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -206,19 +226,21 @@ func TestPollListener(t *testing.T) {
 func TestListenerWithAggregateKind(t *testing.T) {
 	t.Parallel()
 
-	dbConfig := Setup(t)
+	ctx := t.Context()
 
 	db := connect(t, dbConfig)
-
-	ctx := context.Background()
+	eventsTable := test.RandStr("events")
+	snapshotsTable := test.RandStr("snapshots")
+	outboxTable := test.RandStr("outbox")
 	r, err := mysql.NewStore(
 		db.DB,
-		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
-		snapOption,
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+		mysql.WithSnapshotsTable[ids.AggID](snapshotsTable),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID](outboxTable)),
 	)
 	require.NoError(t, err)
 
-	outboxRepo, err := mysql.NewOutboxStore(db.DB, "outbox", r)
+	outboxRepo, err := mysql.NewOutboxStore(db.DB, outboxTable, r)
 	require.NoError(t, err)
 
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -275,24 +297,26 @@ func TestListenerWithAggregateKind(t *testing.T) {
 func TestListenerWithDiscriminator(t *testing.T) {
 	t.Parallel()
 
-	dbConfig := Setup(t)
-	db := connect(t, dbConfig)
-
 	key := "tenant"
 
+	db := connect(t, dbConfig)
+	eventsTable := test.RandStr("events")
+	snapshotsTable := test.RandStr("snapshots")
+	outboxTable := test.RandStr("outbox")
 	r, err := mysql.NewStore(
 		db.DB,
-		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID]("outbox")),
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+		mysql.WithSnapshotsTable[ids.AggID](snapshotsTable),
+		mysql.WithTxHandler(mysql.OutboxInsertHandler[ids.AggID](outboxTable)),
 		mysql.WithDiscriminatorHook[ids.AggID](func(c *store.DiscriminatorHookContext) eventsourcing.Discriminator {
 			ctx := c.Context()
 			val := ctx.Value(key).(string)
 			return eventsourcing.Discriminator{key: val}
 		}),
-		snapOption,
 	)
 	require.NoError(t, err)
 
-	outboxRepo, err := mysql.NewOutboxStore(db.DB, "outbox", r)
+	outboxRepo, err := mysql.NewOutboxStore(db.DB, outboxTable, r)
 	require.NoError(t, err)
 
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
@@ -364,10 +388,15 @@ func TestListenerWithDiscriminator(t *testing.T) {
 func TestForget(t *testing.T) {
 	t.Parallel()
 
-	dbConfig := Setup(t)
+	ctx := t.Context()
 
-	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL(), snapOption)
+	eventsTable := test.RandStr("events")
+	snapshotsTable := test.RandStr("snapshots")
+	r, err := mysql.NewStoreWithURL[ids.AggID](
+		dbConfig.URL(),
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+		mysql.WithSnapshotsTable[ids.AggID](snapshotsTable),
+	)
 	require.NoError(t, err)
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 	require.NoError(t, err)
@@ -396,7 +425,7 @@ func TestForget(t *testing.T) {
 	db := connect(t, dbConfig)
 	require.NoError(t, err)
 	evts := [][]byte{}
-	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
+	err = db.Select(&evts, fmt.Sprintf("SELECT body FROM %s WHERE aggregate_id = ? and kind = 'OwnerUpdated'", eventsTable), id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -407,7 +436,7 @@ func TestForget(t *testing.T) {
 	}
 
 	bodies := [][]byte{}
-	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id.String())
+	err = db.Select(&bodies, fmt.Sprintf("SELECT body FROM %s WHERE aggregate_id = ?", snapshotsTable), id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
@@ -440,7 +469,7 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 
 	evts = [][]byte{}
-	err = db.Select(&evts, "SELECT body FROM events WHERE aggregate_id = ? and kind = 'OwnerUpdated'", id.String())
+	err = db.Select(&evts, fmt.Sprintf("SELECT body FROM %s WHERE aggregate_id = ? and kind = 'OwnerUpdated'", eventsTable), id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(evts))
 	for _, v := range evts {
@@ -451,7 +480,7 @@ func TestForget(t *testing.T) {
 	}
 
 	bodies = [][]byte{}
-	err = db.Select(&bodies, "SELECT body FROM snapshots WHERE aggregate_id = ?", id.String())
+	err = db.Select(&bodies, fmt.Sprintf("SELECT body FROM %s WHERE aggregate_id = ?", snapshotsTable), id.String())
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(bodies))
 	for _, v := range bodies {
@@ -469,10 +498,15 @@ func TestForget(t *testing.T) {
 func TestMigration(t *testing.T) {
 	t.Parallel()
 
-	dbConfig := Setup(t)
+	ctx := t.Context()
 
-	ctx := context.Background()
-	r, err := mysql.NewStoreWithURL[ids.AggID](dbConfig.URL(), snapOption)
+	eventsTable := test.RandStr("events")
+	snapshotsTable := test.RandStr("snapshots")
+	r, err := mysql.NewStoreWithURL(
+		dbConfig.URL(),
+		mysql.WithEventsTable[ids.AggID](eventsTable),
+		mysql.WithSnapshotsTable[ids.AggID](snapshotsTable),
+	)
 	require.NoError(t, err)
 	es1, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 	require.NoError(t, err)
@@ -528,7 +562,7 @@ func TestMigration(t *testing.T) {
 	require.NoError(t, err)
 
 	snaps := []Snapshot{}
-	err = db.Select(&snaps, "SELECT * FROM snapshots WHERE aggregate_id = ? ORDER by id ASC", id.String())
+	err = db.Select(&snaps, fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ? ORDER by id ASC", snapshotsTable), id.String())
 	require.NoError(t, err)
 	require.Equal(t, 1, len(snaps))
 
@@ -539,7 +573,7 @@ func TestMigration(t *testing.T) {
 	assert.Equal(t, id.String(), snap.AggregateID)
 
 	evts := []Event{}
-	err = db.Select(&evts, "SELECT * FROM events WHERE aggregate_id = ? ORDER by id ASC", id.String())
+	err = db.Select(&evts, fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ? ORDER by id ASC", eventsTable), id.String())
 	require.NoError(t, err)
 	require.Equal(t, 9, len(evts))
 

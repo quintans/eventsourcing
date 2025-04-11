@@ -23,6 +23,18 @@ import (
 	"github.com/quintans/faults"
 )
 
+var dbConfig tpg.DBConfig
+
+func TestMain(m *testing.M) {
+	dbConfig = setup()
+
+	// run the tests
+	code := m.Run()
+
+	// exit with the code from the tests
+	os.Exit(code)
+}
+
 type slot struct {
 	low  uint32
 	high uint32
@@ -77,9 +89,13 @@ func TestListener(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			dbConfig := setup(t)
-
-			repository, err := postgresql.NewStoreWithURL(dbConfig.URL(), postgresql.WithSnapshotsTable[ids.AggID]("snapshots"))
+			eventsTable := test.RandStr("events")
+			snapshotsTable := test.RandStr("snapshots")
+			repository, err := postgresql.NewStoreWithURL(
+				dbConfig.URL(),
+				postgresql.WithEventsTable[ids.AggID](eventsTable),
+				postgresql.WithSnapshotsTable[ids.AggID](snapshotsTable),
+			)
 			require.NoError(t, err)
 
 			quit := make(chan os.Signal, 1)
@@ -90,7 +106,7 @@ func TestListener(t *testing.T) {
 
 			data := test.NewMockSinkData[ids.AggID]()
 			ctx, cancel := context.WithCancel(context.Background())
-			err = feeding(ctx, dbConfig, tt.splitSlots, data)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data, eventsTable)
 			require.NoError(t, err)
 
 			acc, err := test.NewAccount("Paulo", 100)
@@ -124,7 +140,7 @@ func TestListener(t *testing.T) {
 			require.NoError(t, err)
 
 			// resume from the last position, by using the same sinker and a new connection
-			err = feeding(ctx, dbConfig, tt.splitSlots, data)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data, eventsTable)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
@@ -136,7 +152,7 @@ func TestListener(t *testing.T) {
 			// resume from the begginning
 			data = test.NewMockSinkData[ids.AggID]()
 			ctx, cancel = context.WithCancel(context.Background())
-			err = feeding(ctx, dbConfig, tt.splitSlots, data)
+			err = feeding(ctx, dbConfig, tt.splitSlots, data, eventsTable)
 			require.NoError(t, err)
 
 			time.Sleep(2 * time.Second)
@@ -158,13 +174,13 @@ func partitionSize(slots []slot) uint32 {
 	return partitions
 }
 
-func feeding(ctx context.Context, dbConfig tpg.DBConfig, slots []slot, data *test.MockSinkData[ids.AggID]) error {
+func feeding(ctx context.Context, dbConfig tpg.DBConfig, slots []slot, data *test.MockSinkData[ids.AggID], coll string) error {
 	partitions := partitionSize(slots)
 
 	var wg sync.WaitGroup
 	for k, v := range slots {
 		mockSink := test.NewMockSink(data, partitions, v.low, v.high)
-		listener, err := postgresql.NewFeed[ids.AggID](dbConfig.ReplicationURL(), k+1, len(slots), mockSink)
+		listener, err := postgresql.NewFeed[ids.AggID](dbConfig.ReplicationURL(), k+1, len(slots), mockSink, postgresql.WithFeedEventsTable[ids.AggID](coll))
 		if err != nil {
 			return faults.Wrap(err)
 		}
