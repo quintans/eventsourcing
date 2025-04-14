@@ -12,10 +12,9 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pglogrepl"
-	"github.com/jackc/pgx/pgtype"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
-	"github.com/kyleconroy/pgoutput"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/quintans/faults"
 
 	"github.com/quintans/eventsourcing"
@@ -136,12 +135,14 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	standbyMessageTimeout := time.Second * 10
 	nextStandbyMessageDeadline := time.Now().Add(standbyMessageTimeout)
 
-	set := pgoutput.NewRelationSet()
-
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = f.backoffMaxElapsedTime
 
 	return backoff.Retry(func() error {
+		relationsV2 := map[uint32]*pglogrepl.RelationMessageV2{}
+		typeMap := pgtype.NewMap()
+		inStream := false
+
 		for {
 			if time.Now().After(nextStandbyMessageDeadline) {
 				err = pglogrepl.SendStandbyStatusUpdate(ctx, conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
@@ -183,10 +184,11 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 						return faults.Errorf("ParseXLogData failed: %w", backoff.Permanent(err))
 					}
 
-					event, err := f.parse(set, xld.WALData, xld.WALStart < lastResumeToken)
+					event, is, err := f.parse(xld.WALData, relationsV2, typeMap, inStream, xld.WALStart < lastResumeToken)
 					if err != nil {
 						return faults.Wrap(backoff.Permanent(err))
 					}
+					inStream = is
 
 					clientXLogPos = xld.WALStart + pglogrepl.LSN(len(xld.WALData))
 
@@ -207,30 +209,46 @@ func (f *Feed[K, PK]) Run(ctx context.Context) error {
 	}, b)
 }
 
-func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool) (*eventsourcing.Event[K], error) {
-	m, err := pgoutput.Parse(WALData)
+func (f Feed[K, PK]) parse(walData []byte, relations map[uint32]*pglogrepl.RelationMessageV2, typeMap *pgtype.Map, inStream, skip bool) (*eventsourcing.Event[K], bool, error) {
+	logicalMsg, err := pglogrepl.ParseV2(walData, inStream)
 	if err != nil {
-		return nil, faults.Errorf("error parsing %s: %w", string(WALData), err)
+		return nil, false, faults.Errorf("error parsing %s: %w", string(walData), err)
 	}
 
-	switch v := m.(type) {
-	case pgoutput.Relation:
-		set.Add(v)
-	case pgoutput.Insert:
+	switch v := logicalMsg.(type) {
+	case *pglogrepl.RelationMessageV2:
+		relations[v.RelationID] = v
+	case *pglogrepl.InsertMessageV2:
 		if skip {
-			return nil, nil
+			return nil, inStream, nil
 		}
-		values, err := set.Values(v.RelationID, v.Row)
-		if err != nil {
-			return nil, faults.Errorf("failed to get relation set values: %w", err)
+		rel, ok := relations[v.RelationID]
+		if !ok {
+			return nil, false, faults.Errorf("unknown relation ID %d", v.RelationID)
+		}
+		values := map[string]any{}
+		for idx, col := range v.Tuple.Columns {
+			colName := rel.Columns[idx].Name
+			switch col.DataType {
+			case 'n': // null
+				values[colName] = nil
+			case 'u': // unchanged toast
+				// This TOAST value was not changed. TOAST values are not stored in the tuple, and logical replication doesn't want to spend a disk read to fetch its value for you.
+			case 't': // text
+				val, err := decodeTextColumnData(typeMap, col.Data, rel.Columns[idx].DataType)
+				if err != nil {
+					return nil, false, faults.Errorf("error decoding column data: %w", err)
+				}
+				values[colName] = val
+			}
 		}
 
 		var aggregateIDHash int32
-		err = extract(values, map[string]interface{}{
+		err = extract(values, map[string]any{
 			"aggregate_id_hash": &aggregateIDHash,
 		})
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return nil, false, faults.Wrap(err)
 		}
 
 		var id string
@@ -252,21 +270,21 @@ func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 			"migrated":          &migrated,
 		})
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return nil, false, faults.Wrap(err)
 		}
 		disc, err := extractDiscriminator(values)
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return nil, false, faults.Wrap(err)
 		}
 
 		eid, err := eventid.Parse(id)
 		if err != nil {
-			return nil, faults.Wrap(err)
+			return nil, false, faults.Wrap(err)
 		}
 		aggID := PK(new(K))
 		err = aggID.UnmarshalText([]byte(aggregateID))
 		if err != nil {
-			return nil, faults.Errorf("unmarshaling id '%s': %w", aggregateID, err)
+			return nil, false, faults.Errorf("unmarshaling id '%s': %w", aggregateID, err)
 		}
 		e := &eventsourcing.Event[K]{
 			ID:               eid,
@@ -283,21 +301,36 @@ func (f Feed[K, PK]) parse(set *pgoutput.RelationSet, WALData []byte, skip bool)
 
 		// check if the event is to be forwarded to the sinker
 		if !f.accepts(e) {
-			return nil, nil
+			return nil, inStream, nil
 		}
 
-		return e, nil
+		return e, inStream, nil
+	case *pglogrepl.StreamStartMessageV2:
+		inStream = true
+	case *pglogrepl.StreamStopMessageV2:
+		inStream = false
 	}
-	return nil, nil
+	return nil, inStream, nil
 }
 
-func extract(values map[string]pgtype.Value, targets map[string]interface{}) error {
+func decodeTextColumnData(mi *pgtype.Map, data []byte, dataType uint32) (any, error) {
+	if dt, ok := mi.TypeForOID(dataType); ok {
+		v, err := dt.Codec.DecodeValue(mi, dataType, pgtype.TextFormatCode, data)
+		if err != nil {
+			return nil, faults.Errorf("error decoding column data: %w", err)
+		}
+		return v, nil
+	}
+	return string(data), nil
+}
+
+func extract(values map[string]any, targets map[string]any) error {
 	for k, v := range targets {
 		val := values[k]
-		if val.Get() == nil {
+		if val == nil {
 			continue
 		}
-		err := val.AssignTo(v)
+		err := assignTo(val, v)
 		if err != nil {
 			return faults.Errorf("failed to assign %s: %w", k, err)
 		}
@@ -305,15 +338,41 @@ func extract(values map[string]pgtype.Value, targets map[string]interface{}) err
 	return nil
 }
 
-func extractDiscriminator(values map[string]pgtype.Value) (eventsourcing.Discriminator, error) {
+func assignTo(a, b any) error {
+	var ok bool
+	switch b := b.(type) {
+	case *int32:
+		*b, ok = a.(int32)
+	case *int:
+		*b, ok = a.(int)
+	case *string:
+		*b, ok = a.(string)
+	case *time.Time:
+		*b, ok = a.(time.Time)
+	case *[]byte:
+		*b, ok = a.([]byte)
+	case *bool:
+		*b, ok = a.(bool)
+	default:
+		return faults.Errorf("unsupported type %T", b)
+	}
+
+	if !ok {
+		return faults.Errorf("failed to assign %T to %T", a, b)
+	}
+
+	return nil
+}
+
+func extractDiscriminator(values map[string]any) (eventsourcing.Discriminator, error) {
 	meta := eventsourcing.Discriminator{}
 	for k, v := range values {
-		if v.Get() == nil || !strings.HasPrefix(k, store.DiscriminatorColumnPrefix) {
+		if v == nil || !strings.HasPrefix(k, store.DiscriminatorColumnPrefix) {
 			continue
 		}
 
 		var s string
-		err := v.AssignTo(&s)
+		err := assignTo(v, &s)
 		if err != nil {
 			return nil, faults.Errorf("failed to assign %s: %w", k, err)
 		}

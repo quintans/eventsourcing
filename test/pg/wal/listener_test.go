@@ -126,7 +126,7 @@ func TestListener(t *testing.T) {
 			cancel()
 
 			events := data.GetEvents()
-			require.Equal(t, 3, len(events), "event size")
+			require.Len(t, events, 3, "event size")
 			assert.Equal(t, "AccountCreated", events[0].Kind.String())
 			assert.Equal(t, "MoneyDeposited", events[1].Kind.String())
 			assert.Equal(t, "MoneyWithdrawn", events[2].Kind.String())
