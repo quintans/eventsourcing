@@ -57,17 +57,15 @@ tasks:
       - golangci-lint run -v --fix
 
   test-all:
-    desc: Run all test tasks
+    desc: Run all test in parallel
     deps:
       - clean-docker
-    cmds:
-      - task clean-docker
-      - task test-redis
-      - task test-consul
-      - task test-pg
-      - task test-mysql
-      - task test-mongo
-      - task test-integration
+      - test-redis
+      - test-consul
+      - test-pg
+      - test-mysql
+      - test-mongo
+      - test-integration
 
   generate:
     desc: Generate code
