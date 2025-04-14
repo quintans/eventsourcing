@@ -102,7 +102,7 @@ func (m InMemMemberList) Name() string {
 
 func (m InMemMemberList) Peers(context.Context) ([]worker.Peer, error) {
 	members := []worker.Peer{}
-	m.db.Range(func(key, value interface{}) bool {
+	m.db.Range(func(key, value any) bool {
 		members = append(members, worker.Peer{
 			Name:    key.(string),
 			Workers: value.([]string),

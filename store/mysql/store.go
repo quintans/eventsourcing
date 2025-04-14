@@ -377,7 +377,7 @@ func (r *EsRepository[K, PK]) SaveSnapshot(ctx context.Context, snapshot *events
 }
 
 type sqlExecuter interface {
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, x sqlExecuter, s *Snapshot) error {
@@ -411,7 +411,7 @@ func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, x sqlExecuter, s
 func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
 	var query strings.Builder
 	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE aggregate_id = ? AND migration = 0", r.eventsTable))
-	args := []interface{}{aggregateID.String()}
+	args := []any{aggregateID.String()}
 	if snapVersion > -1 {
 		query.WriteString(" AND aggregate_version > ?")
 		args = append(args, snapVersion)
@@ -482,7 +482,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, req eventsourcing.Forg
 func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	var query strings.Builder
 	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE id > ? AND id <= ? AND migration = 0", r.eventsTable))
-	args := []interface{}{after.String(), until.String()}
+	args := []any{after.String(), until.String()}
 	disc := r.discriminatorMerge(ctx, store.OnRetrieve)
 	args = buildFilter(&query, " AND ", disc, filter, args)
 	query.WriteString(" ORDER BY id ASC")
@@ -502,7 +502,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(qry *strings.Builder, prefix string, disc eventsourcing.Discriminator, filter store.Filter, args []interface{}) []interface{} {
+func buildFilter(qry *strings.Builder, prefix string, disc eventsourcing.Discriminator, filter store.Filter, args []any) []any {
 	var conditions []string
 	if len(filter.AggregateKinds) > 0 {
 		var query strings.Builder

@@ -66,7 +66,7 @@ func (r *EsRepository[K, PK]) eventsForMigration(ctx context.Context, aggregateK
 		return nil, faults.New("event type criteria needs to be specified")
 	}
 
-	args := []interface{}{aggregateKind}
+	args := []any{aggregateKind}
 	var subquery strings.Builder
 	// get the id of the aggregate
 	subquery.WriteString(fmt.Sprintf("SELECT aggregate_id FROM %s WHERE aggregate_kind = ? AND migration = 0 AND (", r.eventsTable))

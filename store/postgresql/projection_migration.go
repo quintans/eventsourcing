@@ -186,7 +186,7 @@ func (r *EsRepository[K, PK]) distinctAggregates(
 ) error {
 	aggregateID := ""
 	for {
-		args := []interface{}{aggregateKind}
+		args := []any{aggregateKind}
 		var query strings.Builder
 		// get the id of the aggregate
 		query.WriteString("SELECT distinct aggregate_id FROM events WHERE aggregate_kind = $1")

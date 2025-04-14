@@ -170,7 +170,7 @@ type Discriminator struct {
 // NilString converts nil to empty string
 type NilString string
 
-func (ns *NilString) Scan(value interface{}) error {
+func (ns *NilString) Scan(value any) error {
 	if value == nil {
 		*ns = ""
 		return nil

@@ -163,7 +163,7 @@ func (r Repository) wrapWithTx(ctx context.Context, callback func(context.Contex
 	}
 	defer session.EndSession(ctx)
 
-	fn := func(sessCtx mongo.SessionContext) (interface{}, error) {
+	fn := func(sessCtx mongo.SessionContext) (any, error) {
 		er := callback(sessCtx)
 		return nil, er
 	}

@@ -422,7 +422,7 @@ func (r *EsRepository[K, PK]) saveSnapshot(ctx context.Context, x store.Session,
 func (r *EsRepository[K, PK]) GetAggregateEvents(ctx context.Context, aggregateID K, snapVersion int) ([]*eventsourcing.Event[K], error) {
 	var query strings.Builder
 	query.WriteString(fmt.Sprintf("SELECT * FROM %s e WHERE e.aggregate_id = $1 AND migration = 0", r.eventsTable))
-	args := []interface{}{aggregateID.String()}
+	args := []any{aggregateID.String()}
 	if snapVersion > -1 {
 		query.WriteString(" AND e.aggregate_version > $2")
 		args = append(args, snapVersion)
@@ -496,7 +496,7 @@ func (r *EsRepository[K, PK]) Forget(ctx context.Context, request eventsourcing.
 func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventid.EventID, batchSize int, filter store.Filter) ([]*eventsourcing.Event[K], error) {
 	var query strings.Builder
 	query.WriteString(fmt.Sprintf("SELECT * FROM %s WHERE id > $1 AND id <= $2 AND migration = 0", r.eventsTable))
-	args := []interface{}{after.String(), until.String()}
+	args := []any{after.String(), until.String()}
 	disc := r.discriminatorMerge(ctx, store.OnRetrieve)
 	args = buildFilter(&query, " AND ", disc, filter, args)
 	query.WriteString(" ORDER BY id ASC")
@@ -516,7 +516,7 @@ func (r *EsRepository[K, PK]) GetEvents(ctx context.Context, after, until eventi
 	return rows, nil
 }
 
-func buildFilter(qry *strings.Builder, prefix string, disc eventsourcing.Discriminator, filter store.Filter, args []interface{}) []interface{} {
+func buildFilter(qry *strings.Builder, prefix string, disc eventsourcing.Discriminator, filter store.Filter, args []any) []any {
 	var conditions []string
 	if len(filter.AggregateKinds) > 0 {
 		var query strings.Builder

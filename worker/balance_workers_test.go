@@ -169,7 +169,7 @@ var runningTasks = sync.Map{}
 
 func dumpRunningTasks() {
 	var tasks []string
-	runningTasks.Range(func(key, value interface{}) bool {
+	runningTasks.Range(func(key, value any) bool {
 		tasks = append(tasks, key.(string))
 		return true
 	})

@@ -323,7 +323,7 @@ func (h *binlogHandler[K, PK]) accepts(event *eventsourcing.Event[K]) bool {
 }
 
 type rec struct {
-	row  []interface{}
+	row  []any
 	cols []schema.TableColumn
 }
 
@@ -365,7 +365,7 @@ func (r *rec) getAsBool(colName string) bool {
 	return false
 }
 
-func (r *rec) find(colName string) interface{} {
+func (r *rec) find(colName string) any {
 	for k := range r.cols {
 		v := r.cols[k]
 		if v.Name == colName {

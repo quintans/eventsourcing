@@ -123,7 +123,7 @@ func (e *EventID) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (e *EventID) Scan(value interface{}) error {
+func (e *EventID) Scan(value any) error {
 	if value == nil {
 		*e = Zero
 		return nil

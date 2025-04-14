@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-type Row map[string]interface{}
+type Row map[string]any
 
 func (r Row) AsBytes(colName string) []byte {
 	if o := r[colName]; o != nil {

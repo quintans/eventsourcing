@@ -259,7 +259,7 @@ func (f Feed[K, PK]) parse(walData []byte, relations map[uint32]*pglogrepl.Relat
 		body := []byte{}
 		var createdAt time.Time
 		var migrated bool
-		err = extract(values, map[string]interface{}{
+		err = extract(values, map[string]any{
 			"id":                &id,
 			"aggregate_id":      &aggregateID,
 			"aggregate_version": &aggregateVersion,

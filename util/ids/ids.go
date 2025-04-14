@@ -44,7 +44,7 @@ func (id AggID) Value() (driver.Value, error) {
 	return ulid.ULID(id).String(), nil
 }
 
-func (id *AggID) Scan(src interface{}) error {
+func (id *AggID) Scan(src any) error {
 	switch x := src.(type) {
 	case nil:
 		return nil
