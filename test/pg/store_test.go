@@ -156,8 +156,7 @@ func TestPollListener(t *testing.T) {
 		db.DB,
 		postgresql.WithEventsTable[ids.AggID](eventsTable),
 		postgresql.WithSnapshotsTable[ids.AggID](snapshotsTable),
-		postgresql.WithNoPublication[ids.AggID](), // disables publication
-		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID](outboxTable)),
+		postgresql.WithOutbox[ids.AggID](outboxTable),
 	)
 	require.NoError(t, err)
 
@@ -228,8 +227,7 @@ func TestListenerWithAggregateKind(t *testing.T) {
 		db.DB,
 		postgresql.WithEventsTable[ids.AggID](eventsTable),
 		postgresql.WithSnapshotsTable[ids.AggID](snapshotsTable),
-		postgresql.WithNoPublication[ids.AggID](), // disables publication
-		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID](outboxTable)),
+		postgresql.WithOutbox[ids.AggID](outboxTable),
 	)
 	require.NoError(t, err)
 
@@ -298,8 +296,7 @@ func TestListenerWithDiscriminator(t *testing.T) {
 		db.DB,
 		postgresql.WithEventsTable[ids.AggID](eventsTable),
 		postgresql.WithSnapshotsTable[ids.AggID](snapshotsTable),
-		postgresql.WithNoPublication[ids.AggID](), // disables publication
-		postgresql.WithTxHandler(postgresql.OutboxInsertHandler[ids.AggID](outboxTable)),
+		postgresql.WithOutbox[ids.AggID](outboxTable),
 		postgresql.WithDiscriminatorKeys[ids.AggID](key),
 	)
 	require.NoError(t, err)

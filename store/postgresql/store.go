@@ -111,9 +111,10 @@ func WithSnapshotsTable[K eventsourcing.ID, PK eventsourcing.IDPt[K]](table stri
 	}
 }
 
-func WithNoPublication[K eventsourcing.ID, PK eventsourcing.IDPt[K]]() Option[K, PK] {
+func WithOutbox[K eventsourcing.ID, PK eventsourcing.IDPt[K]](table string) Option[K, PK] {
 	return func(r *EsRepository[K, PK]) {
-		r.publish = false
+		r.publish = false // disables publication
+		WithTxHandler[K, PK](OutboxInsertHandler[K](table))(r)
 	}
 }
 
