@@ -97,8 +97,8 @@ func TestSaveAndGet(t *testing.T) {
 	require.ErrorIs(t, err, eventsourcing.ErrUnknownAggregateID)
 
 	acc, err = test.NewAccount("Paulo", 100)
-	id := acc.GetID()
 	require.NoError(t, err)
+	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -176,8 +176,8 @@ func TestPollListener(t *testing.T) {
 	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
-	id := acc.GetID()
 	require.NoError(t, err)
+	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -247,8 +247,8 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
-	id := acc.GetID()
 	require.NoError(t, err)
+	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -331,8 +331,8 @@ func TestListenerWithDiscriminator(t *testing.T) {
 
 	ctx = context.WithValue(context.Background(), key, "xyz")
 	acc1, err := test.NewAccount("Pereira", 100)
-	id := acc1.GetID()
 	require.NoError(t, err)
+	id := acc1.GetID()
 	acc1.Deposit(10)
 	acc1.Deposit(20)
 	err = es.Create(ctx, acc1)
@@ -402,8 +402,8 @@ func TestForget(t *testing.T) {
 	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo", 100)
-	id := acc.GetID()
 	require.NoError(t, err)
+	id := acc.GetID()
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -512,8 +512,8 @@ func TestMigration(t *testing.T) {
 	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo Pereira", 100)
-	id := acc.GetID()
 	require.NoError(t, err)
+	id := acc.GetID()
 	acc.Deposit(20)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")

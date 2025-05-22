@@ -18,7 +18,6 @@ import (
 	"github.com/quintans/eventsourcing"
 	"github.com/quintans/eventsourcing/eventid"
 	"github.com/quintans/eventsourcing/sink/poller"
-	"github.com/quintans/eventsourcing/store"
 	"github.com/quintans/eventsourcing/store/postgresql"
 	"github.com/quintans/eventsourcing/test"
 	"github.com/quintans/eventsourcing/util/ids"
@@ -39,7 +38,6 @@ type Snapshot struct {
 	AggregateKind    eventsourcing.Kind `db:"aggregate_kind,omitempty"`
 	Body             []byte             `db:"body,omitempty"`
 	CreatedAt        time.Time          `db:"created_at,omitempty"`
-	DiscTenant       store.NilString    `db:"disc_tenant,omitempty"`
 }
 
 type Event struct {
@@ -53,7 +51,6 @@ type Event struct {
 	CreatedAt        time.Time          `db:"created_at"`
 	Migration        int                `db:"migration"`
 	Migrated         bool               `db:"migrated"`
-	DiscTenant       store.NilString    `db:"disc_tenant,omitempty"`
 }
 
 var dbConfig DBConfig
@@ -88,8 +85,8 @@ func TestSaveAndGet(t *testing.T) {
 	require.ErrorIs(t, err, eventsourcing.ErrUnknownAggregateID)
 
 	acc, err = test.NewAccount("Paulo", 100)
-	id := acc.GetID()
 	require.NoError(t, err)
+	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
@@ -166,7 +163,8 @@ func TestPollListener(t *testing.T) {
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 	require.NoError(t, err)
 
-	acc, _ := test.NewAccount("Paulo", 100)
+	acc, err := test.NewAccount("Paulo", 100)
+	require.NoError(t, err)
 	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -237,7 +235,8 @@ func TestListenerWithAggregateKind(t *testing.T) {
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 	require.NoError(t, err)
 
-	acc, _ := test.NewAccount("Paulo", 100)
+	acc, err := test.NewAccount("Paulo", 100)
+	require.NoError(t, err)
 	id := acc.GetID()
 	acc.Deposit(10)
 	acc.Deposit(20)
@@ -309,14 +308,16 @@ func TestListenerWithDiscriminator(t *testing.T) {
 
 	ctx := eventsourcing.SetCtxDiscriminator(context.Background(), eventsourcing.Discriminator{key: "abc"})
 
-	acc, _ := test.NewAccount("Paulo", 50)
+	acc, err := test.NewAccount("Paulo", 50)
+	require.NoError(t, err)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
 
 	ctx = eventsourcing.SetCtxDiscriminator(context.Background(), eventsourcing.Discriminator{key: "xyz"})
 
-	acc1, _ := test.NewAccount("Pereira", 100)
+	acc1, err := test.NewAccount("Pereira", 100)
+	require.NoError(t, err)
 	id := acc1.GetID()
 	acc1.Deposit(10)
 	acc1.Deposit(20)
@@ -384,7 +385,8 @@ func TestForget(t *testing.T) {
 	es, err := eventsourcing.NewEventStore[*test.Account](r, test.NewJSONCodec(), esOptions)
 	require.NoError(t, err)
 
-	acc, _ := test.NewAccount("Paulo", 100)
+	acc, err := test.NewAccount("Paulo", 100)
+	require.NoError(t, err)
 	id := acc.GetID()
 	acc.UpdateOwner("Paulo Quintans")
 	acc.Deposit(10)
@@ -497,8 +499,8 @@ func TestMigration(t *testing.T) {
 	require.NoError(t, err)
 
 	acc, err := test.NewAccount("Paulo Pereira", 100)
-	id := acc.GetID()
 	require.NoError(t, err)
+	id := acc.GetID()
 	acc.Deposit(20)
 	acc.Withdraw(15)
 	acc.UpdateOwner("Paulo Quintans Pereira")

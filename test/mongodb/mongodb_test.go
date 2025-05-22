@@ -300,7 +300,8 @@ func TestListenerWithDiscriminator(t *testing.T) {
 
 	ctx := eventsourcing.SetCtxDiscriminator(context.Background(), eventsourcing.Discriminator{key: "abc"})
 
-	acc, _ := test.NewAccount("Paulo", 50)
+	acc, err := test.NewAccount("Paulo", 50)
+	require.NoError(t, err)
 	acc.Deposit(20)
 	err = es.Create(ctx, acc)
 	require.NoError(t, err)
